@@ -58,11 +58,23 @@ class _MessageSubscribeMixin:
         startup_grace: Optional[float] = None,
         auto_reconnect: bool = True,
         dedupe: Optional[bool] = None,
+        on_remove: 'Optional[Callable[[ZenohMeta], None]]' = None,
     ) -> "'Subscriber[_M]'":
         """Subscribe to this message's topic(s) — all declared templates.
 
         ``cb`` may be ``cb(msg)`` or ``cb(msg, meta)``; arity is inspected once
         at subscribe time. ``meta`` is a ``ZenohMeta`` seared dataclass.
+
+        ``on_remove`` (optional) is the tombstone feed: it fires on DELETE
+        samples — a peer's ``unretain()`` or any ``session.delete`` on a
+        matching key — which ``cb`` never sees. It receives a ``ZenohMeta``
+        whose ``captures`` hold the removed key's template slots (raw
+        strings; coerce with :meth:`coerce_captures`). A tombstone carries
+        no payload, so there is no typed instance to hand back — identity is
+        all a removal conveys. Use it to drive removal-side reconcile;
+        pair it with periodic :meth:`fetch_retained` for a durable set,
+        since a subscriber offline during the DELETE never sees it.
+        ``async def`` on_remove is supported (scheduled like an async ``cb``).
 
         ``expected_interval`` (seconds, optional) opts into a per-subscription
         watchdog. ``on_quiet`` fires the first time no message arrives within
@@ -95,4 +107,63 @@ class _MessageSubscribeMixin:
             startup_grace=startup_grace,
             auto_reconnect=auto_reconnect,
             dedupe=dedupe,
+            on_remove=on_remove,
         )
+
+    @classmethod
+    def coerce_captures(cls, captures: dict) -> dict:
+        """Coerce raw string template captures through their declared fields.
+
+        ``on_remove`` (and ``meta.captures`` generally) hands back template
+        slots as raw strings. This runs each slot that maps to a declared
+        seared field through that field's ``deserialize`` — so a
+        ``{reader_id}`` slot bound to ``z.Int`` comes back as ``int`` — and
+        passes capture-only slots (no matching field) through unchanged.
+        Handy for keying removal-reconcile on typed identity.
+        """
+        spec_by_attr = {attr: f for attr, _, f in cls.__seared_fields__}
+        out: dict = {}
+        for name, raw_val in captures.items():
+            f = spec_by_attr.get(name)
+            out[name] = (
+                f.deserialize(raw_val, validate=True) if f is not None
+                else raw_val
+            )
+        return out
+
+    @classmethod
+    def fetch_retained(
+        cls: 'Type[_M]',
+        *,
+        session: Optional['zenoh.Session'] = None,
+        on_error: Optional[Callable[[Exception, bytes], None]] = None,
+    ) -> 'list[_M]':
+        """One-shot typed snapshot of this class's current retained set.
+
+        Issues ``session.get`` across every declared template wildcard,
+        decodes each OK reply through the class's own decode path, and
+        returns the typed instances. This is the reliable reconcile path:
+        ``on_remove`` gives low-latency incremental removals but a
+        subscriber offline during a DELETE misses it permanently (the
+        retained value is already gone, no tombstone is replayed), so a
+        periodic ``fetch_retained`` → reconcile-against-set closes that
+        hole. Requires ``RETAINED = True`` (only retained classes serve a
+        queryable to fetch from).
+
+        Decode failures and error replies route to ``on_error`` when
+        supplied, else log; the returned list holds only decoded results.
+        Duplicate keys (multiple publishers retaining the same concrete
+        topic) are returned as-is — dedupe by identity at the call site.
+        """
+        from ..errors import TopicError
+
+        if not getattr(cls, 'RETAINED', False):
+            raise TopicError(
+                f'{cls.__name__}.fetch_retained requires RETAINED = True'
+            )
+        import zeared as z
+
+        from ..subscriber._subscriber_retained_fetch import _collect_retained
+
+        sess = z.session.resolve(session)
+        return _collect_retained(sess, cls._templates().all, cls, on_error)
