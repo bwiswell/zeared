@@ -125,55 +125,19 @@ def _build_dispatch(
     seen_ts: 'dict[str, str]',
     watchdog,
     schema_mismatch_cache_max: int,
-    on_remove: Optional[Callable[..., None]] = None,
 ) -> Callable[['zenoh.Sample'], None]:
     """Build the per-subscriber sample-dispatch closure.
 
     Returned closure handles the full sample pipeline: dedupe, schema
     check, decode, callback invocation, watchdog ping, and routing of
     every failure mode through ``on_error`` / ``_log``.
-
-    ``on_remove`` (optional) receives DELETE samples (tombstones — e.g. a
-    peer's ``unretain()``). It's invoked with a ``ZenohMeta`` whose
-    ``captures`` carry the removed key's template slots; a tombstone has no
-    payload, so no typed instance is reconstructed. When ``on_remove`` is
-    ``None``, DELETE samples are dropped silently (historical behaviour).
     """
     import zenoh as _zenoh
     import zeared as z
 
-    tpls = msg_cls._templates()
-
-    def _dispatch_remove(sample: 'zenoh.Sample') -> None:
-        key_expr = str(sample.key_expr)
-        try:
-            meta = from_sample(sample)
-            match = tpls.match(key_expr)
-            if match is not None:
-                _tpl, captures = match
-                if captures:
-                    meta.captures = dict(captures)
-            on_remove(meta)
-        except Exception as exc:  # noqa: BLE001
-            wrapped = CallbackError(
-                f'{msg_cls.__name__} on_remove raised on key_expr='
-                f'{key_expr!r}: {exc}'
-            )
-            wrapped.__cause__ = exc
-            # A tombstone carries no payload — hand on_error empty bytes.
-            if on_error is not None:
-                on_error(wrapped, b'')
-            else:
-                _log.exception(
-                    '%s on_remove callback raised', msg_cls.__name__,
-                )
-
     def dispatch(sample: 'zenoh.Sample') -> None:
-        # DELETE samples (tombstones): route to on_remove if the subscriber
-        # registered one, else drop silently (no typed instance to build).
+        # DELETE samples (tombstones) silently ignore — no callback fire.
         if sample.kind == _zenoh.SampleKind.DELETE:
-            if on_remove is not None:
-                _dispatch_remove(sample)
             return
         raw = bytes(sample.payload)
         key_expr = str(sample.key_expr)

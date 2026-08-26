@@ -327,58 +327,6 @@ class TestSubscriberRedeclared:
             except Exception:
                 pass
 
-    def test_on_remove_survives_reconnect(self, session):
-        """The tombstone feed (on_remove) is baked into the dispatch closure,
-        which redeclare reuses — so it keeps firing after reconnect."""
-        @z.zeared
-        class Reader(z.Message):
-            TOPIC = 'reco/rm/{reader_id}'
-            reader_id: int = z.Int(required=True)
-
-        new_raw = _peer_session()
-        try:
-            m = ManagedSession(
-                session, lambda: new_raw,
-                endpoint_label='rm-reco',
-                probe_interval=0,
-                initial_backoff=0.001,
-                max_backoff=0.005,
-                max_attempts=None,
-            )
-            removed: list[dict] = []
-            sub = Reader.on_message(
-                lambda r: None,
-                on_remove=lambda meta: removed.append(meta.captures),
-                session=m,
-            )
-            # Same dispatch closure carries on_remove across redeclare.
-            dispatch_before = sub._dispatch
-
-            done = threading.Event()
-            m._on_reconnect = lambda mgr: done.set()
-            start_probe(m)
-            _trigger_reconnect(m)
-            assert done.wait(timeout=3.0)
-            wait(0.2)
-
-            assert sub._dispatch is dispatch_before   # reused, on_remove intact
-
-            # A DELETE on the reconnected raw must reach on_remove.
-            new_raw.delete('reco/rm/7')
-            wait(0.3)
-            sub.close()
-
-            assert removed == [{'reader_id': '7'}]
-        finally:
-            try:
-                m._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
-                new_raw.close()
-            except Exception:
-                pass
-
     def test_auto_reconnect_false_subscriber_skipped(self, session):
         """A subscriber opted out of auto_reconnect is NOT redeclared."""
         @z.zeared

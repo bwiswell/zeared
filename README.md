@@ -18,7 +18,7 @@ once, get publish, subscribe, and topic routing for free.
 - **Capture-only slots.** Template slots that aren't declared as seared fields become routing-only captures — always surfaced via `meta.captures: dict[str, str]`, never on the payload schema.
 - **Tagged-union payloads.** `s.Union` encodes `{action, args}`-style envelopes and decodes to a typed variant instance — pattern-match on `msg.action` at the dispatch site.
 - **Long-lived publishers by default.** Every message class transparently caches `zenoh.Publisher` instances per concrete topic (soft-capped, user-overridable). No `Publisher` ceremony — `msg.send()` is the one path.
-- **Retained messages (MQTT-style).** Opt in with `RETAINED = True`: publishers cache the last payload per concrete topic and answer peer `session.get()` queries; late subscribers automatically fetch cached values at subscribe time. Tombstones via `msg.unretain()` / `Cls.unretain(**fields)`; consume removals with `on_message(cb, on_remove=...)` or reconcile against `Cls.fetch_retained()`.
+- **Retained messages (MQTT-style).** Opt in with `RETAINED = True`: publishers cache the last payload per concrete topic and answer peer `session.get()` queries; late subscribers automatically fetch cached values at subscribe time. Tombstones via `msg.unretain()` / `Cls.unretain(**fields)`.
 - **Presence / Last-Will-Testament.** Opt in with `LIVELINESS = True` + `msg.register_will()`: the session declares a Zenoh liveliness token, subscribers synthesise the will as a regular sample when the producer's session disappears (graceful close OR crash). The graceful-vs-crashed-shutdown distinction stops being your problem.
 - **Queries / queryables (request/response).** `Cls.on_query(handler)` serves computed replies to peer `session.get()`; `Cls.query(...)` / `Cls.query_one(...)` return typed instances. The compute-serving generalization of `RETAINED`. Typed request payloads via `REQUEST`; async via `z.aon_query` / `z.aquery`.
 - **Subscriber watchdog.** Optional per-subscription freshness detector — `Cls.on_message(cb, expected_interval=N, on_quiet=, on_active=)` fires callbacks when a subscription goes silent and again when it resumes. Optimistic by default (waits for first message); `startup_grace=N` opts into "tell me if I haven't heard within N seconds of subscribing."
@@ -211,39 +211,10 @@ Rules:
 
 - `send(retain=True)` on a `RETAINED = False` class raises `TopicError` — opt-in is explicit.
 - `send(retain=False)` on a `RETAINED = True` class publishes live without touching the cache.
-- `unretain()` requires `RETAINED = True`; the wire signal is a native Zenoh `DELETE` sample. `on_message`'s `cb` never sees DELETEs — register `on_message(cb, on_remove=...)` for the tombstone feed (below).
+- `unretain()` requires `RETAINED = True`; the wire signal is a native Zenoh `DELETE` sample (subscribers skip DELETE samples silently, no callback fires).
 - Queryables are declared lazily on the first retained publish — a class that declares `RETAINED = True` but never sends wastes nothing.
 - Retained fetches are deduplicated against the live stream by default — a retained reply whose wire payload matches the most recent live sample for the same concrete topic is suppressed. Set `DEDUPE = False` on the subscriber class to opt out.
 - TTL via `RETENTION_TTL = N` (seconds) on the class, or `peer(retention_ttl=N)` for a session-wide fallback (`auto_reconnect=True` only). Class-level always wins; session-level fills in for unconfigured classes. Lazy expiration — entries are checked + pruned on the next subscriber retained-fetch.
-
-### Removals: the tombstone feed and full-set reconcile
-
-`cb` is an add/update feed — a DELETE tombstone (a peer's `unretain()`)
-carries no payload to decode, so `cb` never fires for it. Two surfaces
-close the removal gap:
-
-```python
-# 1. on_remove: low-latency incremental removals. Fires on each DELETE with
-#    a ZenohMeta whose captures identify the removed key (raw strings).
-def gone(meta: z.ZenohMeta) -> None:
-    reader_id = Telemetry.coerce_captures(meta.captures)['id']   # typed
-    desired.discard(reader_id)
-
-Telemetry.on_message(add_or_update, on_remove=gone)
-
-# 2. fetch_retained: a one-shot typed snapshot of the whole retained set —
-#    the *reliable* reconcile path. A subscriber offline during a DELETE
-#    misses the tombstone forever (the retained value is already gone, no
-#    tombstone is replayed), so poll this periodically and reconcile against
-#    the returned set.
-current = Telemetry.fetch_retained()          # list[Telemetry]
-reconcile(desired={m.id for m in current})
-```
-
-- `on_remove` is optional and off by default — DELETEs stay silently dropped unless you register one. `async def` on_remove is supported (scheduled like an async `cb`). It survives reconnect. A raised `on_remove` routes through `on_error` as `CallbackError`.
-- `coerce_captures` runs raw string captures through the declared fields' deserializers (`{id}` bound to `z.Int` → `int`); capture-only slots pass through unchanged.
-- `fetch_retained()` requires `RETAINED = True` and returns only successfully decoded results; dedupe duplicate keys by identity at the call site. Async: `await z.afetch_retained(Cls)`.
-- **Why both:** `on_remove` is fast but not durable (a missed DELETE is missed forever); `fetch_retained` is durable but polled. Use the incremental feed for latency and the periodic snapshot for correctness — the same honesty boundary as presence (removals are subscriber-observed, never a broker guarantee).
 
 ## Queries and queryables
 
@@ -1005,10 +976,8 @@ audit_sub = Telemetry.on_message(audit_cb, dedupe=False)  # see every replay
 prod_sub  = Telemetry.on_message(prod_cb)                 # class default (dedupe on)
 ```
 
-## Limits (v0.3.0)
+## Limits (v0.2.0)
 
-- **Tombstone removals are not durably delivered.** `on_remove` fires on a *live* DELETE only; a subscriber offline during the `unretain()` never sees it (the retained value is already gone, no tombstone is replayed). For a durable removal guarantee, poll `Cls.fetch_retained()` and reconcile against the returned set — `on_remove` is the latency path, `fetch_retained` the correctness path.
-- **`on_remove` delivers identity, not the removed value.** A tombstone has no payload, so `on_remove` gets a `ZenohMeta` (captures identify the key) — never a typed instance. Reconcile keyed on identity; if you need the departed entity's last data, capture it from the add/update `cb`.
 - **Queryables are compute-serving, not cache-serving.** `Cls.on_query` computes each reply on demand; it does not persist state. A `RETAINED` class already serves a cache-backed queryable over the same topic, so the two are mutually exclusive on one class (`on_query` raises `TopicError` on a `RETAINED` class).
 - **`query()` blocks up to `timeout`.** It is a synchronous fan-out `session.get`; there is no streaming iterator surface (use the async `aquery` off-loop, or drop to raw Zenoh, if you need one).
 - **Async `on_query` holds the query until the coroutine resolves.** A slow async handler pins the underlying `zenoh.Query` for its lifetime. Correct, but a long-running handler ties up the query.
