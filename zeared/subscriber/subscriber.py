@@ -99,15 +99,10 @@ class Subscriber(Generic[M]):
         startup_grace: Optional[float] = None,
         auto_reconnect: bool = True,
         dedupe: Optional[bool] = None,
-        on_remove: Optional[Callable] = None,
     ) -> 'Subscriber':
         tpls = msg_cls._templates()
         cb = _adapt_async_callback(cb)
         wants_meta = _wants_meta(cb)
-        # DELETE-sample (tombstone) callback — async-adapted like ``cb`` so
-        # an ``async def`` on_remove is scheduled on the subscribe-time loop.
-        if on_remove is not None:
-            on_remove = _adapt_async_callback(on_remove)
 
         # Optional per-subscription watchdog.
         watchdog = None
@@ -146,7 +141,6 @@ class Subscriber(Generic[M]):
             seen_ts=seen_ts,
             watchdog=watchdog,
             schema_mismatch_cache_max=_SCHEMA_MISMATCH_CACHE_MAX,
-            on_remove=on_remove,
         )
 
         # Internal declaration — route through the underlying raw to
