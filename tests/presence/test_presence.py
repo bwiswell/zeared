@@ -200,7 +200,7 @@ class TestMultipleWillsPerSession:
             TOPIC = 'pres/multi/registry/{name}'
             LIVELINESS = True
             name: str = z.Str(required=True)
-            detail: str = z.Str(missing='')
+            detail: str = z.Str(default='')
 
         PeerStatus(name='alice', state='offline').register_will(session=session_a)
         Registry(name='alice', detail='gone').register_will(session=session_a)

@@ -34,6 +34,7 @@ def release(*, session: 'Union[zenoh.Session, ManagedSession]') -> None:
     """
     from .presence import clear_observer, clear_presence_state
     from .publisher import clear_publisher_cache
+    from .queryable import _close_queryables_for
     from .retention import clear_retention_cache
     from .subscriber import _close_subscribers_for
 
@@ -45,6 +46,11 @@ def release(*, session: 'Union[zenoh.Session, ManagedSession]') -> None:
     # 1. Close zeared subscribers on this session (cancels watchdogs,
     #    undeclares Zenoh subs, deregisters presence dispatchers).
     _close_subscribers_for(session)
+
+    # 1b. Close user queryables on this session — undeclare each
+    #     zenoh.Queryable. Independent of subscribers; order between them
+    #     doesn't matter, but both must precede session.close().
+    _close_queryables_for(session)
 
     # 2. Cached publishers — undeclare each declared zenoh.Publisher.
     clear_publisher_cache(session=session)
@@ -89,6 +95,7 @@ def release_all() -> None:
         _registry as _presence_registry,
     )
     from .publisher import _registry as _publisher_registry
+    from .queryable import _queryables, _queryables_lock
     from .retention import _registry as _retention_registry
     from .subscriber import _subscribers, _subscribers_lock
 
@@ -113,6 +120,13 @@ def release_all() -> None:
         for bucket in _subscribers.values():
             for sub in bucket:
                 _add(getattr(sub, '_session', None))
+
+    # Queryable registry: same shape as subscribers (id(session) → set of
+    # Queryables, each carrying a ``_session`` ref).
+    with _queryables_lock:
+        for bucket in _queryables.values():
+            for qbl in bucket:
+                _add(getattr(qbl, '_session', None))
 
     # Publisher / retention caches are keyed (cls, id(session)); values
     # carry ``_session``.

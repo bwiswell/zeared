@@ -28,6 +28,7 @@ import seared as s
 
 from .. import _codec as codec
 from ._message_async import _MessageAsyncMixin
+from ._message_query import _MessageQueryMixin
 from ._message_send import _MessageSendMixin
 from ._message_subscribe import _MessageSubscribeMixin
 from ._message_topic import _MessageTopicMixin
@@ -44,6 +45,7 @@ class Message(
     _MessageAsyncMixin,
     _MessageWillMixin,
     _MessageSubscribeMixin,
+    _MessageQueryMixin,
     s.Seared,
 ):
     """Base class for zeared messages.
@@ -85,6 +87,13 @@ class Message(
     # that never get queried may keep stale entries in the cache;
     # acceptable for typical use, documented as a limit.
     RETENTION_TTL: ClassVar[Optional[float]] = None
+    # Optional request-payload class for ``on_query`` / ``query``. ``None``
+    # (default) means query requests carry no typed body — the getter may
+    # still pass ``params=`` (selector parameters) and the handler sees the
+    # raw payload bytes on ``ctx.request``. Set to a ``@z.zeared`` class to
+    # send a typed request: ``Cls.query(request=Req(...))`` packs it as the
+    # query payload and the handler's ``ctx.request`` is a decoded ``Req``.
+    REQUEST: ClassVar[Optional[type]] = None
     # Optional schema-version marker. ``None`` (default) opts the class
     # out of attachment-based schema stamping; any string value enables
     # it — the value rides as a Zenoh sample attachment (msgpack-encoded

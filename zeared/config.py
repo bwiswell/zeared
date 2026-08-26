@@ -62,11 +62,11 @@ class SessionConfig(s.Seared):
     """
     mode:            Mode          = s.Enum(enum=Mode, required=True)
     router:          Optional[str] = s.Str()                  # client shortcut
-    connect:         list          = s.Str(many=True, missing=[])
-    listen:          list          = s.Str(many=True, missing=[])
-    retry:           bool          = s.Bool(missing=False)
-    initial_backoff: float         = s.Float(missing=0.1)
-    max_backoff:     float         = s.Float(missing=30.0)
+    connect:         list          = s.Str(many=True, default_factory=list)
+    listen:          list          = s.Str(many=True, default_factory=list)
+    retry:           bool          = s.Bool(default=False)
+    initial_backoff: float         = s.Float(default=0.1)
+    max_backoff:     float         = s.Float(default=30.0)
     max_attempts:    Optional[int] = s.Int()
 
     # -- builders -----------------------------------------------------

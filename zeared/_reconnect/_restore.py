@@ -107,6 +107,35 @@ def _restore_subscribers(managed: ManagedSession) -> None:
                 pass
 
 
+def _restore_queryables(managed: ManagedSession) -> None:
+    """Walk the queryable registry keyed on this ManagedSession and
+    re-declare each ``Queryable`` against the new raw session.
+
+    Queryables hold no replayed state — just the handler closure — so a
+    failed redeclare closes the handle rather than retrying (mirrors the
+    subscriber policy)."""
+    from ..queryable import _queryables, _queryables_lock
+
+    sid = id(managed)
+    with _queryables_lock:
+        bucket = list(_queryables.get(sid, ()))
+
+    for qbl in bucket:
+        if not getattr(qbl, '_auto_reconnect', True):
+            continue
+        try:
+            qbl._redeclare(managed.raw(), managed)
+        except Exception:  # noqa: BLE001
+            _log.exception(
+                'queryable redeclare failed for %s — closing it',
+                getattr(qbl, '_msg_cls', None),
+            )
+            try:
+                qbl.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _restore_wills(managed: ManagedSession) -> None:
     """Re-register every presence will against the new raw session.
 

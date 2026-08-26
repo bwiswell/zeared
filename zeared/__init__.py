@@ -54,23 +54,27 @@ from ._mode import Mode
 from ._module_class import _ZearedModule
 from ._release import release, release_all
 from ._session import _SessionHandle
-from .async_ import abatch, aclient, alisten, aopen, apeer, asend, asend_batch, aunretain
+from .async_ import (
+    abatch, aclient, alisten, aon_query, aopen, apeer, aquery, aquery_one,
+    asend, asend_batch, aunretain,
+)
 from .batch import batch
 from .config import SessionConfig
 from .errors import (
-    CallbackError, DecodeError, NoSessionError, RetainedFetchError,
-    SchemaMismatchError, SessionDeadError, SubscriberError,
+    CallbackError, DecodeError, NoSessionError, QueryableError, QueryError,
+    RetainedFetchError, SchemaMismatchError, SessionDeadError, SubscriberError,
     SubscriptionError, TopicError, ZearedError,
 )
 from .message import Message
 from .meta import ZenohMeta
 from .presence import clear_observer, clear_presence_state
 from .publisher import clear_publisher_cache, published_topics
+from .queryable import Queryable, QueryContext, clear_queryable_cache
 from .retention import clear_retention_cache
 from .subscriber import Subscriber
 
 
-__version__ = '0.1.1'
+__version__ = '0.2.0'
 
 # Module-level defaults.
 # ``session`` is a dual-role handle (see ``_SessionHandle`` docstring) — the
@@ -119,6 +123,10 @@ __all__ = [
     'Mode',
     'NoSessionError',
     'OnReconnectHandle',
+    'QueryContext',
+    'QueryError',
+    'Queryable',
+    'QueryableError',
     'RetainedFetchError',
     'SchemaMismatchError',
     'SessionDeadError',
@@ -131,8 +139,11 @@ __all__ = [
     'abatch',
     'aclient',
     'alisten',
+    'aon_query',
     'aopen',
     'apeer',
+    'aquery',
+    'aquery_one',
     'asend',
     'asend_batch',
     'aunretain',
@@ -141,6 +152,7 @@ __all__ = [
     'clear_observer',
     'clear_presence_state',
     'clear_publisher_cache',
+    'clear_queryable_cache',
     'clear_retention_cache',
     'client',
     'codec',
