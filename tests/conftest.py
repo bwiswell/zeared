@@ -82,6 +82,7 @@ def _reset_zeared_state():
     z.debug = False
     z.clear_publisher_cache()
     z.clear_retention_cache()
+    z.clear_queryable_cache()
     z.clear_observer()
     z.clear_presence_state()
     yield
@@ -89,6 +90,7 @@ def _reset_zeared_state():
     z.debug = False
     z.clear_publisher_cache()
     z.clear_retention_cache()
+    z.clear_queryable_cache()
     z.clear_observer()
     z.clear_presence_state()
 

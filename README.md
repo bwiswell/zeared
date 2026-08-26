@@ -20,8 +20,9 @@ once, get publish, subscribe, and topic routing for free.
 - **Long-lived publishers by default.** Every message class transparently caches `zenoh.Publisher` instances per concrete topic (soft-capped, user-overridable). No `Publisher` ceremony — `msg.send()` is the one path.
 - **Retained messages (MQTT-style).** Opt in with `RETAINED = True`: publishers cache the last payload per concrete topic and answer peer `session.get()` queries; late subscribers automatically fetch cached values at subscribe time. Tombstones via `msg.unretain()` / `Cls.unretain(**fields)`.
 - **Presence / Last-Will-Testament.** Opt in with `LIVELINESS = True` + `msg.register_will()`: the session declares a Zenoh liveliness token, subscribers synthesise the will as a regular sample when the producer's session disappears (graceful close OR crash). The graceful-vs-crashed-shutdown distinction stops being your problem.
+- **Queries / queryables (request/response).** `Cls.on_query(handler)` serves computed replies to peer `session.get()`; `Cls.query(...)` / `Cls.query_one(...)` return typed instances. The compute-serving generalization of `RETAINED`. Typed request payloads via `REQUEST`; async via `z.aon_query` / `z.aquery`.
 - **Subscriber watchdog.** Optional per-subscription freshness detector — `Cls.on_message(cb, expected_interval=N, on_quiet=, on_active=)` fires callbacks when a subscription goes silent and again when it resumes. Optimistic by default (waits for first message); `startup_grace=N` opts into "tell me if I haven't heard within N seconds of subscribing."
-- **Unified shutdown.** `z.release(session=sess)` walks every zeared-owned resource for the session in the right order — subscribers, publisher cache, retention queryable, presence observer, presence state, then `session.close()`. The graceful-shutdown path that used to take six separate calls is one.
+- **Unified shutdown.** `z.release(session=sess)` walks every zeared-owned resource for the session in the right order — subscribers, queryables, publisher cache, retention queryable, presence observer, presence state, then `session.close()`. The graceful-shutdown path that used to take six separate calls is one.
 - **Retention dedupe by default.** `RETAINED` classes auto-deduplicate retention-fetch replies against live publishes via `(key_expr, timestamp)`. Opt out per class with `DEDUPE = False`.
 - **Sync + async.** Every send/subscribe has an `a`-prefixed sibling: `await msg.asend()`, `async for msg in Cls.alisten(): ...`, `async with z.abatch(): ...`. `on_message(cb)` detects `async def` callbacks and schedules them on the running loop.
 - **Batching primitives.** `with z.batch(): ...` collects sends for atomic flush-or-discard on exception; `Cls.send_batch(items)` is the homogeneous-bulk shortcut. `asyncio` tasks get per-task isolation via `contextvars`.
@@ -214,6 +215,51 @@ Rules:
 - Queryables are declared lazily on the first retained publish — a class that declares `RETAINED = True` but never sends wastes nothing.
 - Retained fetches are deduplicated against the live stream by default — a retained reply whose wire payload matches the most recent live sample for the same concrete topic is suppressed. Set `DEDUPE = False` on the subscriber class to opt out.
 - TTL via `RETENTION_TTL = N` (seconds) on the class, or `peer(retention_ttl=N)` for a session-wide fallback (`auto_reconnect=True` only). Class-level always wins; session-level fills in for unconfigured classes. Lazy expiration — entries are checked + pruned on the next subscriber retained-fetch.
+
+## Queries and queryables
+
+Request/response (Zenoh query/reply) for `@z.zeared` classes. If retention
+is *"a queryable that serves a cached value"*, this is *"a queryable that
+serves a **computed** value"*: the message class's `TOPIC` template is the
+queryable key, its fields are the reply body, and a handler computes the
+answer on demand.
+
+```python
+@z.zeared
+class TagState(z.Message):
+    TOPIC = 'rio/state/tag/{epc}'
+    epc: str   = z.Str(required=True)   # key capture
+    x: float   = z.Float(required=True) # ─┐ reply body
+    y: float   = z.Float(required=True)  #─┘
+
+# --- serving side ---
+def handler(ctx: z.QueryContext) -> TagState | list[TagState] | None:
+    epc = ctx.captures['epc']          # ctx.params / ctx.request also available
+    x, y = lookup(epc)
+    return TagState(epc=epc, x=x, y=y)  # or ctx.reply(...) explicitly
+
+qbl = TagState.on_query(handler)        # z.Queryable — .close() / context manager
+
+# --- getting side ---
+one  = TagState.query_one(epc='E280 1234', timeout=2.0)  # first reply or None
+many = TagState.query(epc='E280*', timeout=2.0)          # wildcard fan-out
+all_ = TagState.query(timeout=2.0)                        # omitted slots → '*'
+```
+
+The handler either **returns** an instance / iterable / `None`, or replies
+explicitly with `ctx.reply(...)` / `ctx.reply_err(...)` / `ctx.reply_del(...)`
+for multi-reply, streaming, or error cases. `QueryContext` exposes the
+request: `key_expr`, parsed selector `params`, template `captures`, and a
+decoded `request` payload.
+
+Rules:
+
+- `query()` blocks up to `timeout` and returns only successfully decoded OK replies. Error replies (`reply_err`) and decode failures route to `on_error=` (else log), each surfaced as a `z.QueryError`.
+- `query()` defaults to **no consolidation** — a query is a fan-out and each queryable may reply more than once; Zenoh's default consolidation would collapse same-key replies. Pass `consolidation=` to opt into dedup.
+- Omitted key slots widen to `*` (whole-template wildcard); embed `*` in a value for a partial wildcard. `params=` appends `?k=v`; `REQUEST = SomeClass` + `request=` sends a typed request payload.
+- `async def` handlers: register via `z.aon_query(Cls, handler)`; the query stays live until the coroutine resolves. Async getters: `z.aquery` / `z.aquery_one`.
+- `on_query` on a `RETAINED = True` class raises `TopicError` — retention already serves a queryable over the same topic; pick one.
+- Queryables survive reconnect (managed sessions, `auto_reconnect=True`), are closed by `z.release()`, and can be dropped with `z.clear_queryable_cache()`.
 
 ## Wildcards and capture-only slots
 
@@ -820,6 +866,8 @@ ZearedError
 | `z.SchemaMismatchError` | Wire-attached `schema` ≠ class's `SCHEMA`. Subclass of `DecodeError` |
 | `z.CallbackError`       | User's `cb(msg)` itself raised. Subclass of `SubscriberError` |
 | `z.RetainedFetchError`  | A retained-fetch reply failed to dispatch. Subclass of `SubscriberError` |
+| `z.QueryableError`      | `on_query` declare failed, or on a `RETAINED` class (fatal to that queryable) |
+| `z.QueryError`          | A `query()` reply was an error or failed to decode. Routed to `on_error=`; the query keeps collecting. Subclass of `SubscriberError` |
 
 All extend `z.ZearedError` (which extends `Exception`). Dispatch-time
 exceptions are routed to the `on_error=cb(exc, raw_bytes)` callback if
@@ -928,9 +976,12 @@ audit_sub = Telemetry.on_message(audit_cb, dedupe=False)  # see every replay
 prod_sub  = Telemetry.on_message(prod_cb)                 # class default (dedupe on)
 ```
 
-## Limits (v0.1.0)
+## Limits (v0.2.0)
 
-- **No queries / queryables for user-defined RPC.** Retention and presence use Zenoh queryables internally, but first-class zeared RPC (`get` / `queryable` for user-defined message classes) is still on the roadmap.
+- **Queryables are compute-serving, not cache-serving.** `Cls.on_query` computes each reply on demand; it does not persist state. A `RETAINED` class already serves a cache-backed queryable over the same topic, so the two are mutually exclusive on one class (`on_query` raises `TopicError` on a `RETAINED` class).
+- **`query()` blocks up to `timeout`.** It is a synchronous fan-out `session.get`; there is no streaming iterator surface (use the async `aquery` off-loop, or drop to raw Zenoh, if you need one).
+- **Async `on_query` holds the query until the coroutine resolves.** A slow async handler pins the underlying `zenoh.Query` for its lifetime. Correct, but a long-running handler ties up the query.
+- **Query parameters are a `str → str` dict.** `params=` maps to the Zenoh selector (`?k=v`); typed parameters are deferred. For a rich, typed request use `REQUEST = SomeClass` + `request=` (sent as the query payload) instead.
 - **Async is a wrapper, not native.** Zenoh's Python bindings are sync-only; `asend` / `alisten` / `aunretain` wrap via `asyncio.to_thread` and a callback-to-queue bridge. Correct, but not zero-overhead — see Benchmarks.
 - **Retention dedupe is timestamp-dependent.** Dedupe needs HLC timestamps on samples; without them it's a no-op pass-through. Zeared's factory injects `timestamping/enabled=true` into the built `zenoh.Config` by default (0.0.13), so most callers don't need to think about this — opt out via `z.peer(timestamping=False)` or by managing your own `zenoh_config=`. If you supply `zenoh_config=`, you're in charge: enable timestamping yourself or set `DEDUPE = False` on the subscriber class. Synthesised wills (timestamp=`None`) always pass through dedupe.
 - **Retention TTL is lazy.** `RETENTION_TTL = N` opts into time-based expiration of cached entries, but expiration is only checked when a subscriber issues a retained-fetch (`_handle_query`) — topics that nobody ever queries may keep stale entries in memory. Acceptable for typical use; no background sweeper.

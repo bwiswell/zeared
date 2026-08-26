@@ -33,6 +33,7 @@ from .._managed_session import ManagedSession, _is_dead
 from ._restore import (
     _ReconnectAborted,
     _open_with_backoff,
+    _restore_queryables,
     _restore_retention,
     _restore_subscribers,
     _restore_wills,
@@ -170,10 +171,13 @@ def _reconnect(managed: ManagedSession) -> None:
     #      pair finds a live queryable on the retained-fetch round.
     #   2. Subscribers — re-declare zenoh subs, re-fire retained fetch
     #      (dedupe-safe), re-register presence dispatcher.
-    #   3. Wills — re-register every previously-registered envelope
+    #   3. Queryables — re-declare each user queryable (compute-serving,
+    #      no replayed state) against the new raw so peer gets resolve.
+    #   4. Wills — re-register every previously-registered envelope
     #      under the new zid; peers see legitimate offline → online.
     _restore_retention(managed)
     _restore_subscribers(managed)
+    _restore_queryables(managed)
     _restore_wills(managed)
 
     # Quietly close the old raw — best effort.

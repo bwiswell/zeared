@@ -91,6 +91,7 @@ zeared/
 ├── meta.py         # ZenohMeta seared dataclass + from_sample helper
 ├── presence.py     # _SessionPresence + _PresenceObserver + liveliness / LWT
 ├── publisher.py    # _PublisherCache + module-level registry
+├── queryable/      # on_query serving + query/query_one getting (request/response)
 ├── retention.py    # _RetentionCache + Queryable + module-level registry
 └── subscriber.py   # Subscriber handle with arity + coroutine + presence dispatch
 ```
@@ -100,3 +101,14 @@ class by default (`PUBLISHER = True`) — long-lived `zenoh.Publisher`
 instances are cached per concrete topic. Opt out with `PUBLISHER = False`
 to use `session.put()` directly; pass an integer for a custom cache cap.
 See [`publisher.md`](../publisher.md) and [`batch.md`](../batch.md).
+
+## Query / queryable (request/response)
+
+`Cls.on_query(handler)` declares a `zenoh.Queryable` per template that
+answers peer `session.get()` requests with computed message instances;
+`Cls.query(...)` / `Cls.query_one(...)` issue the get and decode replies
+through the class's own `_decode`. This is the compute-serving
+generalization of `RETAINED` (which serves a *cached* value via its own
+internal queryable) — the two are mutually exclusive on one class. Reply
+decode reuses the same template-capture + payload path as live samples.
+See [`queryable/queryable.md`](../queryable/queryable.md).

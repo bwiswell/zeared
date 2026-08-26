@@ -184,7 +184,7 @@ class TestFieldBindingValidation:
         @z.zeared
         class Bad(z.Message):
             TOPIC = 'log/{tail**}'
-            tail: list = z.Str(many=True, missing=[])
+            tail: list = z.Str(many=True, default_factory=list)
 
         with pytest.raises(TopicError, match='multi-segment field'):
             Bad._templates()
@@ -193,7 +193,7 @@ class TestFieldBindingValidation:
         @z.zeared
         class Bad(z.Message):
             TOPIC = 'log/{tail**}'
-            tail: dict = z.Str(keyed=True, missing={})
+            tail: dict = z.Str(keyed=True, default_factory=dict)
 
         with pytest.raises(TopicError, match='multi-segment field'):
             Bad._templates()
@@ -222,7 +222,7 @@ class TestFieldBindingValidation:
         class Ok(z.Message):
             TOPIC = 'log/{tail**}'
             # No declared `tail` field; capture-only is fine.
-            something_else: str = z.Str(required=True, missing='x')
+            something_else: str = z.Str(required=True)
 
         # Should not raise.
         tpls = Ok._templates()

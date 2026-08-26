@@ -228,6 +228,55 @@ async def alisten(
         sub.close()
 
 
+async def aquery(
+    cls,
+    *,
+    session: Optional['zenoh.Session'] = None,
+    params: Optional[dict] = None,
+    request=None,
+    timeout: Optional[float] = None,
+    target=None,
+    consolidation=None,
+    on_error=None,
+    **key_fields,
+) -> list:
+    """Async variant of ``Cls.query(...)``. Runs the blocking get on a
+    thread and returns the decoded reply list."""
+    return await asyncio.to_thread(
+        lambda: cls.query(
+            session=session, params=params, request=request,
+            timeout=timeout, target=target, consolidation=consolidation,
+            on_error=on_error, **key_fields,
+        ),
+    )
+
+
+async def aquery_one(cls, **kwargs):
+    """Async variant of ``Cls.query_one(...)``."""
+    return await asyncio.to_thread(lambda: cls.query_one(**kwargs))
+
+
+async def aon_query(
+    cls,
+    handler,
+    *,
+    session: Optional['zenoh.Session'] = None,
+    on_error=None,
+    auto_reconnect: bool = True,
+):
+    """Async entry point for ``Cls.on_query(...)`` — the natural way to
+    register an ``async def`` handler.
+
+    Declared inline on the calling event-loop thread (not offloaded) so an
+    ``async def`` handler captures *this* loop for its replies. The declare
+    itself is a fast Zenoh call. Returns the :class:`Queryable` handle.
+    """
+    return cls.on_query(
+        handler, session=session, on_error=on_error,
+        auto_reconnect=auto_reconnect,
+    )
+
+
 @asynccontextmanager
 async def abatch():
     """Async version of :func:`zeared.batch`.
@@ -244,8 +293,11 @@ __all__ = [
     'abatch',
     'aclient',
     'alisten',
+    'aon_query',
     'aopen',
     'apeer',
+    'aquery',
+    'aquery_one',
     'asend',
     'asend_batch',
     'aunretain',

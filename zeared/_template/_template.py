@@ -269,6 +269,39 @@ class Template:
                 f'TOPIC {self.raw!r}: missing field {e.args[0]!r} when rendering'
             ) from e
 
+    def render_selector(self, partial: dict[str, Any]) -> str:
+        """Render a query selector key from a partial slot mapping.
+
+        Provided slots are substituted; slots that are missing (absent or
+        ``None``) become ``*`` (single-segment) or ``**`` (a trailing
+        ``{name**}`` slot), so ``Cls.query()`` with no key fields queries
+        the whole template wildcard and ``Cls.query(epc='E280*')`` narrows
+        to matching keys. Unlike :meth:`render`, wildcard values (a ``*``
+        the caller embeds) pass through verbatim — that is the point.
+
+        Subscribe-only templates (anonymous ``**``) can't be rendered from
+        slots; they fall back to the plain subscribe :attr:`wildcard`.
+        """
+        if not self.publishable:
+            return self.wildcard
+        fmt = self.raw
+        values: dict[str, str] = {}
+        for name in self.field_names:
+            v = partial.get(name)
+            if name == self._named_multi:
+                # Rewrite ``{name**}`` → ``{name}`` for the format call (as
+                # in ``render``); a missing multi slot widens to ``**``.
+                fmt = fmt.replace(f'{{{name}**}}', f'{{{name}}}')
+                values[name] = '**' if v is None else str(v)
+            else:
+                values[name] = '*' if v is None else str(v)
+        try:
+            return fmt.format(**values)
+        except KeyError as e:
+            raise TopicError(
+                f'TOPIC {self.raw!r}: unknown field {e.args[0]!r} in selector'
+            ) from e
+
     def match(self, key_expr: str) -> Optional[dict[str, str]]:
         """Match an incoming key expression; return ``{field: str}`` or None."""
         m = self._regex.match(key_expr)

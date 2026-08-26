@@ -69,7 +69,7 @@ class TestMultiSegmentFieldValidation:
         @z.zeared
         class M(z.Message):
             TOPIC = 'log/{tail**}'
-            x: int = z.Int(missing=0)
+            x: int = z.Int(default=0)
 
         # No raise — the {tail**} slot is capture-only.
         M._templates()

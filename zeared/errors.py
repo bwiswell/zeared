@@ -49,6 +49,29 @@ class RetainedFetchError(SubscriberError):
     """
 
 
+class QueryableError(ZearedError):
+    """Raised when a queryable cannot be declared or maintained.
+
+    Fatal at declare-time (mirrors :class:`SubscriptionError` on the
+    subscribe side) — e.g. ``Cls.on_query`` on a ``RETAINED = True`` class,
+    or a failed ``declare_queryable``. Distinct from :class:`QueryError`,
+    which is per-reply and non-fatal.
+    """
+
+
+class QueryError(SubscriberError):
+    """Parent for per-reply errors on the get side of ``Cls.query``.
+
+    Covers two modes: a remote queryable answered with an *error* reply
+    (``query.reply_err``), and a reply sample that failed to decode. Both
+    are per-reply and routed to ``on_error=`` when the caller supplied one;
+    the ``query()`` call keeps collecting the remaining replies. Subclass
+    of :class:`SubscriberError` so generic ``except SubscriberError``
+    handlers catch it for free. Original exception (for decode failures)
+    available via ``__cause__``.
+    """
+
+
 class SessionDeadError(ZearedError):
     """Raised when a publish targets a session that is mid-reconnect or
     has terminally failed reconnect (auto-reconnect exhausted ``max_attempts``).

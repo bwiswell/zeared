@@ -43,7 +43,7 @@ class ZenohMeta(s.Seared):
     source_info: Optional[str]                = s.Str()
     attachment:  Optional[bytes]              = s.Bytes()
     schema:      Optional[str]                = s.Str()
-    captures:    dict                         = s.Dict(missing={})
+    captures:    dict                         = s.Dict(default_factory=dict)
 
 
 # Zenoh HLC sample timestamp shape: ``<8-hex-seconds><8-hex-frac>/<id>``.
