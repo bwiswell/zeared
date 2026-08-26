@@ -55,8 +55,8 @@ from ._module_class import _ZearedModule
 from ._release import release, release_all
 from ._session import _SessionHandle
 from .async_ import (
-    abatch, aclient, alisten, aon_query, aopen, apeer, aquery, aquery_one,
-    asend, asend_batch, aunretain,
+    abatch, aclient, afetch_retained, alisten, aon_query, aopen, apeer,
+    aquery, aquery_one, asend, asend_batch, aunretain,
 )
 from .batch import batch
 from .config import SessionConfig
@@ -74,7 +74,7 @@ from .retention import clear_retention_cache
 from .subscriber import Subscriber
 
 
-__version__ = '0.2.0'
+__version__ = '0.3.0'
 
 # Module-level defaults.
 # ``session`` is a dual-role handle (see ``_SessionHandle`` docstring) — the
@@ -138,6 +138,7 @@ __all__ = [
     'ZenohMeta',
     'abatch',
     'aclient',
+    'afetch_retained',
     'alisten',
     'aon_query',
     'aopen',

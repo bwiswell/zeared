@@ -198,6 +198,19 @@ async def aunretain(
         )
 
 
+async def afetch_retained(
+    cls,
+    *,
+    session: Optional['zenoh.Session'] = None,
+    on_error=None,
+) -> list:
+    """Async variant of ``Cls.fetch_retained(...)``. Runs the sync fetch on
+    a thread (Zenoh's ``get`` is blocking)."""
+    return await asyncio.to_thread(
+        cls.fetch_retained, session=session, on_error=on_error,
+    )
+
+
 async def alisten(
     cls,
     *,
@@ -292,6 +305,7 @@ async def abatch():
 __all__ = [
     'abatch',
     'aclient',
+    'afetch_retained',
     'alisten',
     'aon_query',
     'aopen',

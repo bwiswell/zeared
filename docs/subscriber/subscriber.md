@@ -77,11 +77,31 @@ samples — cached payloads from peer `_RetentionCache` queryables — flow
 through the same dispatch function used for live samples. Decode failures
 route through the unified `on_error` hook. See [`retention.md`](retention.md).
 
+`Cls.fetch_retained()` exposes the same `session.get()` sweep as a
+standalone, one-shot call that **returns** the decoded instances instead of
+dispatching them (backed by `_collect_retained`). It's the reliable
+reconcile path — poll it periodically and reconcile against the returned
+set, since `on_remove` (below) can miss a DELETE that lands while a
+subscriber is offline. Requires `RETAINED = True`; async via
+`z.afetch_retained(Cls)`.
+
 ## DELETE samples (tombstones)
 
-Subscribers detect `sample.kind == zenoh.SampleKind.DELETE` and skip the
-dispatch — no callback fires. This is how `unretain()` propagates the
-"forget this key" signal without surfacing a nil message to user code.
+The dispatch closure detects `sample.kind == zenoh.SampleKind.DELETE` before
+the decode path. Behaviour depends on whether the subscriber registered an
+`on_remove` callback:
+
+- **No `on_remove` (default):** the DELETE is dropped silently — no callback
+  fires. This is how `unretain()` propagates "forget this key" without
+  surfacing a nil message to `cb`.
+- **`on_remove=` registered:** the removal is delivered as a `ZenohMeta`
+  (via `_dispatch_remove`). `meta.captures` carries the removed key's
+  template slots (raw strings — `Cls.coerce_captures(meta.captures)` runs
+  them through declared fields). A tombstone has no payload, so no typed
+  instance is built. `on_remove` is baked into the same dispatch closure as
+  `cb`, so it survives reconnect (redeclare reuses `self._dispatch`), is
+  async-adapted like `cb`, and a raised `on_remove` routes through
+  `on_error` as `CallbackError` (with empty payload bytes).
 
 ## Presence / LWT dispatch (LIVELINESS classes)
 
