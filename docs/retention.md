@@ -42,10 +42,17 @@ One per `(Message subclass, zenoh.Session)` pair. Holds:
   `_handle_query`. See [`_prefix_index.md`](_prefix_index.md).
 - `_queryables: list[zenoh.Queryable]` — one per declared template wildcard, declared lazily on first `store()`.
 
-`store(topic, raw, encoding)` updates the cache + index under a per-cache
-lock and ensures queryables are declared. `delete(topic)` drops the entry
-from both. `_handle_query(query)` walks the trie to enumerate matching
-concrete topics in O(depth × matches), then `query.reply()`s each.
+`store(topic, raw, encoding, attachment=None)` updates the cache + index
+under a per-cache lock and ensures queryables are declared. The cached value
+is `(raw, encoding, attachment, inserted_monotonic)` — the `attachment` is
+the publish's schema-attachment payload (or `None` for classes with no
+`SCHEMA`). `delete(topic)` drops the entry from both. `_handle_query(query)`
+walks the trie to enumerate matching concrete topics in O(depth × matches),
+then `query.reply()`s each — **re-stamping the cached attachment** so a late
+subscriber's retained-fetch passes the schema-mismatch check and decodes the
+snapshot. (Before this was captured, a `SCHEMA`-stamped retained class
+produced snapshots that decoded as `schema=None` → mismatch → silently
+dropped on the subscriber side, even though live delivery was fine.)
 
 Rolls back partial queryable declarations on failure. Registry keyed on
 `(cls, id(session))` since `zenoh.Session` doesn't support weakrefs.

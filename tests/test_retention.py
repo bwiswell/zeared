@@ -709,3 +709,114 @@ class TestBatchWithRetention:
 
         # No queryable should have been declared either.
         assert (Tele, id(session)) not in _registry
+
+
+class TestSchemaAttachmentSurvivesRetention:
+    """Regression: the schema attachment must ride back out on the retention
+    queryable reply. Without it, a SCHEMA-stamped RETAINED class produces a
+    snapshot that late subscribers decode as ``schema=None`` → mismatch →
+    dropped (live flow is fine; only the retained-snapshot path breaks)."""
+
+    def test_attachment_captured_in_cache(self, session):
+        @z.zeared
+        class Alert(z.Message):
+            TOPIC = 'ret/schema/{id}'
+            RETAINED = True
+            SCHEMA = '1'
+            id: int = z.Int(required=True)
+            v: int = z.Int(required=True)
+
+        z.session = session
+        Alert(id=1, v=10).send()
+
+        cache = get_retention_cache(Alert, session)
+        _raw, _enc, attachment, _inserted = cache._cache['ret/schema/1']
+        assert attachment is not None      # schema attachment captured
+        assert attachment == Alert._schema_attachment_bytes()
+
+    def test_none_schema_caches_no_attachment(self, session):
+        @z.zeared
+        class Plain(z.Message):
+            TOPIC = 'ret/noschema/{id}'
+            RETAINED = True
+            id: int = z.Int(required=True)
+            v: int = z.Int(required=True)
+
+        z.session = session
+        Plain(id=1, v=10).send()
+
+        cache = get_retention_cache(Plain, session)
+        _raw, _enc, attachment, _inserted = cache._cache['ret/noschema/1']
+        assert attachment is None
+
+    def test_late_subscriber_decodes_schema_stamped_snapshot(self, connected_pair):
+        session_a, session_b = connected_pair
+
+        @z.zeared
+        class Alert(z.Message):
+            TOPIC = 'ret/schema/late/{id}'
+            RETAINED = True
+            SCHEMA = '1'
+            id: int = z.Int(required=True)
+            v: int = z.Int(required=True)
+
+        # A publishes a retained, schema-stamped alert.
+        Alert(id=1, v=42).send(session=session_a)
+        wait()
+
+        # B joins late; the retained-fetch reply must carry the schema so B
+        # decodes it instead of dropping it as a mismatch.
+        received: list[tuple[int, int]] = []
+        errors: list = []
+        sub = Alert.on_message(
+            lambda m: received.append((m.id, m.v)),
+            on_error=lambda exc, raw: errors.append(exc),
+            session=session_b,
+        )
+        wait(0.3)
+        sub.close()
+
+        assert received == [(1, 42)]
+        assert not any(
+            isinstance(e, z.SchemaMismatchError) for e in errors
+        ), errors
+
+    def test_fetch_retained_decodes_schema_stamped_snapshot(self, connected_pair):
+        session_a, session_b = connected_pair
+
+        @z.zeared
+        class Alert(z.Message):
+            TOPIC = 'ret/schema/fetch/{id}'
+            RETAINED = True
+            SCHEMA = '1'
+            id: int = z.Int(required=True)
+            v: int = z.Int(required=True)
+
+        Alert(id=1, v=7).send(session=session_a)
+        Alert(id=2, v=9).send(session=session_a)
+        wait(0.2)
+
+        errors: list = []
+        got = Alert.fetch_retained(
+            session=session_b, on_error=lambda exc, raw: errors.append(exc),
+        )
+        assert {(m.id, m.v) for m in got} == {(1, 7), (2, 9)}
+        assert errors == []
+
+    def test_retained_snapshot_schema_survives_via_batch(self, session):
+        """The batch flush path must thread the attachment into store() too."""
+        @z.zeared
+        class Alert(z.Message):
+            TOPIC = 'ret/schema/batch/{id}'
+            RETAINED = True
+            SCHEMA = '1'
+            id: int = z.Int(required=True)
+            v: int = z.Int(required=True)
+
+        z.session = session
+        with z.batch():
+            Alert(id=1, v=1).send()
+
+        cache = get_retention_cache(Alert, session)
+        _raw, _enc, attachment, _inserted = cache._cache['ret/schema/batch/1']
+        assert attachment == Alert._schema_attachment_bytes()

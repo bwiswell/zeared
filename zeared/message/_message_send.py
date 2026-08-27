@@ -75,7 +75,9 @@ class _MessageSendMixin:
             return
 
         if retain_flag:
-            get_retention_cache(type(self), sess).store(concrete_topic, raw, encoding)
+            get_retention_cache(type(self), sess).store(
+                concrete_topic, raw, encoding, attachment=attachment,
+            )
         get_cache(type(self), sess).put(
             concrete_topic, raw, encoding, attachment=attachment,
         )
