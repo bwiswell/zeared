@@ -428,3 +428,125 @@ class TestNoFalsePositive:
 
         # The will should NOT have fired — peer is still alive.
         assert received == []
+
+
+class TestWillSchemaAttachment:
+    """Regression (0.2.4): the will path is the twin of the retention schema
+    bug. A ``SCHEMA``-stamped ``LIVELINESS`` class must carry its schema in
+    the ``_WillEnvelope`` so the synthesised sample re-stamps the attachment
+    — otherwise a schema-checking subscriber sees ``None``, mismatches, and
+    silently drops the will."""
+
+    def test_envelope_carries_class_schema(self, session):
+        @z.zeared
+        class Status(z.Message):
+            TOPIC = 'pres/schema/env/{name}'
+            LIVELINESS = True
+            SCHEMA = '1'
+            name: str = z.Str(required=True)
+            state: str = z.Str(required=True)
+
+        z.session = session
+        Status(name='alice', state='offline').register_will()
+
+        state = get_presence(session)
+        (envelope,) = list(state._wills.values())
+        assert envelope.schema == '1'
+
+    def test_none_schema_leaves_envelope_schema_none(self, session):
+        @z.zeared
+        class Status(z.Message):
+            TOPIC = 'pres/schema/none/{name}'
+            LIVELINESS = True
+            name: str = z.Str(required=True)
+            state: str = z.Str(required=True)
+
+        z.session = session
+        Status(name='alice', state='offline').register_will()
+
+        state = get_presence(session)
+        (envelope,) = list(state._wills.values())
+        assert envelope.schema is None
+
+    def test_schema_checking_subscriber_receives_will(self, connected_pair):
+        session_a, session_b = connected_pair
+
+        @z.zeared
+        class Status(z.Message):
+            TOPIC = 'pres/schema/fire/{name}'
+            LIVELINESS = True
+            SCHEMA = '1'
+            name: str = z.Str(required=True)
+            state: str = z.Str(required=True)
+
+        Status(name='alice', state='offline').register_will(session=session_a)
+        wait(0.3)
+
+        received: list[tuple[str, str]] = []
+        errors: list = []
+        # meta form so we can also assert the re-stamped schema is visible.
+        schemas: list = []
+
+        def cb(m, meta):
+            received.append((m.name, m.state))
+            schemas.append(meta.schema)
+
+        sub = Status.on_message(
+            cb,
+            on_error=lambda exc, raw: errors.append(exc),
+            session=session_b,
+        )
+        wait(0.3)
+
+        session_a.close()
+        wait(0.5)
+        sub.close()
+
+        # The will fired and was NOT dropped as a schema mismatch.
+        assert ('alice', 'offline') in received
+        assert not any(
+            isinstance(e, z.SchemaMismatchError) for e in errors
+        ), errors
+        # The synthesised sample re-stamped the class SCHEMA.
+        assert '1' in schemas
+
+    def test_will_dropped_when_subscriber_schema_differs(self, connected_pair):
+        """Sanity: the schema check still *works* on wills — a genuine
+        mismatch (producer '1', consumer '2') is dropped, proving the will
+        now carries a real schema tag rather than always-None."""
+        session_a, session_b = connected_pair
+
+        @z.zeared
+        class StatusV1(z.Message):
+            TOPIC = 'pres/schema/mismatch/{name}'
+            LIVELINESS = True
+            SCHEMA = '1'
+            name: str = z.Str(required=True)
+            state: str = z.Str(required=True)
+
+        @z.zeared
+        class StatusV2(z.Message):
+            TOPIC = 'pres/schema/mismatch/{name}'
+            LIVELINESS = True
+            SCHEMA = '2'
+            name: str = z.Str(required=True)
+            state: str = z.Str(required=True)
+
+        StatusV1(name='alice', state='offline').register_will(session=session_a)
+        wait(0.3)
+
+        received: list = []
+        errors: list = []
+        sub = StatusV2.on_message(
+            lambda m: received.append((m.name, m.state)),
+            on_error=lambda exc, raw: errors.append(exc),
+            session=session_b,
+        )
+        wait(0.3)
+
+        session_a.close()
+        wait(0.5)
+        sub.close()
+
+        assert received == []
+        assert any(isinstance(e, z.SchemaMismatchError) for e in errors)

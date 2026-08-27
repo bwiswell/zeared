@@ -213,6 +213,7 @@ class _PresenceObserver:
                     payload=envelope.payload,
                     encoding_mime=mime,
                     source_zid=envelope.source_zid,
+                    schema=envelope.schema,
                 )
                 for party in parties:
                     try:
