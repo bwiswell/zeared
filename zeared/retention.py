@@ -35,10 +35,14 @@ def _resolve_retention_ttl(cls, session) -> Optional[float]:
     return getattr(session, '_retention_ttl', None)
 
 
-# Cache value: ``(raw_bytes, encoding, inserted_at_monotonic)``. The
-# monotonic timestamp drives ``_RETENTION_TTL`` enforcement at query
-# time and is immune to wall-clock jumps.
-_CacheValue = Tuple[bytes, str, float]
+# Cache value: ``(raw_bytes, encoding, attachment, inserted_at_monotonic)``.
+# ``attachment`` is the per-class schema-attachment payload captured from
+# the original publish (or ``None`` when the class sets no ``SCHEMA``) — it
+# MUST ride back out on the queryable reply so a late subscriber's
+# retained-fetch / ``fetch_retained`` can pass the schema check and decode
+# the snapshot. The monotonic timestamp drives ``_RETENTION_TTL``
+# enforcement at query time and is immune to wall-clock jumps.
+_CacheValue = Tuple[bytes, str, Optional[bytes], float]
 
 
 class _RetentionCache:
@@ -58,7 +62,7 @@ class _RetentionCache:
     def __init__(self, cls: type, session: 'zenoh.Session'):
         self._cls = cls
         self._session = session
-        # concrete_topic → (raw_bytes, encoding string, inserted_monotonic)
+        # concrete_topic → (raw_bytes, encoding, attachment, inserted_monotonic)
         self._cache: Dict[str, _CacheValue] = {}
         # Trie of cached concrete topics — replaces the O(N) iterate-and-
         # intersect on every incoming query.
@@ -78,9 +82,20 @@ class _RetentionCache:
 
     # -- publisher side -------------------------------------------------
 
-    def store(self, concrete_topic: str, raw: bytes, encoding: str) -> None:
+    def store(
+        self,
+        concrete_topic: str,
+        raw: bytes,
+        encoding: str,
+        attachment: Optional[bytes] = None,
+    ) -> None:
         """Record the last retained payload for ``concrete_topic`` and
         ensure the class's Queryable(s) are declared.
+
+        ``attachment`` is the schema-attachment payload from the publish
+        (``None`` for classes with no ``SCHEMA``); it's cached so the
+        queryable reply can re-stamp it, letting a late subscriber pass
+        the schema check on the retained snapshot.
 
         Captures ``time.monotonic()`` at the call so ``_handle_query``
         can filter out entries older than ``cls.RETENTION_TTL`` (if set)
@@ -90,7 +105,7 @@ class _RetentionCache:
         now = time.monotonic()
         with self._lock:
             new_entry = concrete_topic not in self._cache
-            self._cache[concrete_topic] = (raw, encoding, now)
+            self._cache[concrete_topic] = (raw, encoding, attachment, now)
             if new_entry:
                 self._index.add(concrete_topic)
 
@@ -221,19 +236,23 @@ class _RetentionCache:
                 entry = self._cache.get(c)
                 if entry is None:
                     continue
-                raw, encoding, inserted = entry
+                raw, encoding, attachment, inserted = entry
                 if ttl is not None and (now - inserted) > ttl:
                     expired.append(c)
                     continue
-                payloads.append((c, raw, encoding))
+                payloads.append((c, raw, encoding, attachment))
             # Prune expired entries inline — bounded I/O cost amortised
             # across queries.
             for c in expired:
                 if self._cache.pop(c, None) is not None:
                     self._index.remove(c)
-        for concrete, raw, encoding in payloads:
+        for concrete, raw, encoding, attachment in payloads:
             try:
-                query.reply(concrete, raw, encoding=codec.MIME[encoding])
+                query.reply(
+                    concrete, raw,
+                    encoding=codec.MIME[encoding],
+                    attachment=attachment,
+                )
             except Exception as exc:  # noqa: BLE001
                 _log.warning(
                     '%s: retention reply failed on %s: %s',

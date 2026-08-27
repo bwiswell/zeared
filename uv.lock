@@ -139,7 +139,7 @@ source = { git = "https://github.com/bwiswell/seared#0b63b84f7c350853da011370986
 
 [[package]]
 name = "zeared"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "eclipse-zenoh" },

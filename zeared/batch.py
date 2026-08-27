@@ -79,7 +79,9 @@ def _flush(buffer: List[BufferedSend]) -> None:
                 ) from e
             continue
         if retain_mode == 'retain':
-            _ret.get_retention_cache(cls, sess).store(topic, raw, encoding)
+            _ret.get_retention_cache(cls, sess).store(
+                topic, raw, encoding, attachment=attachment,
+            )
         _pub.get_cache(cls, sess).put(
             topic, raw, encoding, attachment=attachment,
         )
