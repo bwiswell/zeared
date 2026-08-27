@@ -62,6 +62,7 @@ class _MessageWillMixin:
             target_key_expr=concrete_topic,
             encoding=encoding,
             payload=raw,
+            schema=type(self).SCHEMA,
         )
         get_presence(sess).register_will(type(self).__qualname__, envelope)
 

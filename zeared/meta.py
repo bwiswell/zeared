@@ -96,6 +96,21 @@ def _parse_attachment_schema(attachment: Optional[bytes]) -> Optional[str]:
     return schema if isinstance(schema, str) else None
 
 
+def build_attachment_schema(schema: Optional[str]) -> Optional[bytes]:
+    """Pack a ``schema`` value into the msgpack attachment shape.
+
+    Inverse of :func:`_parse_attachment_schema` — returns the wire bytes a
+    subscriber's schema check reads, or ``None`` when ``schema`` is unset.
+    Used to stamp the attachment on a synthesised will sample so the
+    presence path passes the same schema check as a live publish (the
+    ``Message._schema_attachment_bytes`` classmethod caches the equivalent
+    for the publish path).
+    """
+    if schema is None:
+        return None
+    return codec.pack({'schema': schema}, 'msgpack')
+
+
 def from_sample(sample: 'zenoh.Sample') -> ZenohMeta:
     """Build a ``ZenohMeta`` from a Zenoh ``Sample``.
 

@@ -163,6 +163,7 @@ class _SessionPresence:
                 target_key_expr=envelope.target_key_expr,
                 encoding=envelope.encoding,
                 payload=envelope.payload,
+                schema=envelope.schema,
             )
             try:
                 new_state.register_will(cls_qualname, new_envelope)

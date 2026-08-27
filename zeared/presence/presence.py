@@ -69,11 +69,19 @@ def _envelope_encoding() -> str:
 
 @s.seared
 class _WillEnvelope(s.Seared):
-    """Reserved wire shape for a registered LWT payload."""
-    source_zid:      str   = s.Str(required=True)
-    target_key_expr: str   = s.Str(required=True)
-    encoding:        str   = s.Str(required=True)
-    payload:         bytes = s.Bytes(required=True)
+    """Reserved wire shape for a registered LWT payload.
+
+    ``schema`` carries the registering class's ``SCHEMA`` value (or ``None``
+    when unset) so a synthesised will sample can be re-stamped with the same
+    attachment a live publish would carry — without it a schema-checking
+    subscriber sees ``None``, mismatches, and drops the will. ``default=None``
+    keeps envelopes from pre-0.2.4 peers (no ``schema`` key) decodable.
+    """
+    source_zid:      str        = s.Str(required=True)
+    target_key_expr: str        = s.Str(required=True)
+    encoding:        str        = s.Str(required=True)
+    payload:         bytes      = s.Bytes(required=True)
+    schema:          str | None = s.Str(default=None)
 
 
 def _slug(cls_qualname: str, concrete_topic: str) -> str:

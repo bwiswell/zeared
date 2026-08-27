@@ -77,10 +77,11 @@ across re-registrations of the same will.
 ```python
 @s.seared
 class _WillEnvelope(s.Seared):
-    source_zid:      str   = s.Str(required=True)
-    target_key_expr: str   = s.Str(required=True)
-    encoding:        str   = s.Str(required=True)
-    payload:         bytes = s.Bytes(required=True)
+    source_zid:      str        = s.Str(required=True)
+    target_key_expr: str        = s.Str(required=True)
+    encoding:        str        = s.Str(required=True)
+    payload:         bytes      = s.Bytes(required=True)
+    schema:          str | None = s.Str(default=None)
 ```
 
 Serialised on `__zeared/will/<zid>/<slug>`. The envelope wire encoding
@@ -91,6 +92,14 @@ the three sides always agree. The user payload *inside* the envelope
 continues to honor `cls.ENCODING` independently. Subscribers decode the
 envelope, match `target_key_expr` against their class templates, and (on
 liveliness DELETE for `<source_zid>`) synthesise a sample with the payload.
+
+`schema` (0.2.4) carries the registering class's `SCHEMA` value so the
+synthesised sample can be re-stamped with the attachment a live publish
+would carry (`build_attachment_schema` rebuilds it in `_SynthesizedSample`).
+Without it a schema-checking subscriber sees `None`, mismatches the class's
+value, and silently drops the will — the will-path twin of the retention
+schema-attachment bug fixed in 0.2.3. `default=None` keeps envelopes from
+pre-0.2.4 peers (which omit the key) decodable.
 
 ### `_SessionPresence` — per-session state
 

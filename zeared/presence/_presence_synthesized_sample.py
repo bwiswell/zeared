@@ -7,7 +7,11 @@ meta extraction) read its attribute set.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import zenoh
+
+from ..meta import build_attachment_schema
 
 
 class _SynthesizedSample:
@@ -27,6 +31,7 @@ class _SynthesizedSample:
         payload: bytes,
         encoding_mime: str,
         source_zid: str,
+        schema: Optional[str] = None,
     ):
         self.key_expr = key_expr
         self.payload = payload
@@ -34,4 +39,7 @@ class _SynthesizedSample:
         self.encoding = encoding_mime
         self.timestamp = None
         self.source_info = source_zid
-        self.attachment = None
+        # Re-stamp the registering class's SCHEMA as the attachment a live
+        # publish would carry, so a schema-checking subscriber decodes the
+        # will instead of dropping it as a mismatch. None when unset.
+        self.attachment = build_attachment_schema(schema)
