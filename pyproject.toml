@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.2.4"
+version = "0.2.5"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -9,8 +9,11 @@ requires-python = ">=3.11,<4.0"
 dependencies = [
     "eclipse-zenoh>=1.9.0",
     "msgpack>=1.1.2",
-    "seared>=0.2.1",
+    "seared>=0.2.2",
 ]
+
+[project.scripts]
+zeared-doc = "zeared.doc.generate:main"
 
 [dependency-groups]
 dev = [
