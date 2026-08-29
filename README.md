@@ -869,6 +869,42 @@ z.published_topics(session=external)
 
 Zero overhead for non-users: tracking is a single `set.add` per send.
 
+## TypeScript types for browser consumers
+
+`zeared.doc` generates TypeScript types for your message classes, so a browser
+app consuming mesh traffic over a websocket gets a typed view of the wire.
+**Types only** — the mesh→websocket bridge (auth, identity scope, transport)
+is yours to build; the generated types describe the JSON shape a bridge hands
+the browser after decoding a zeared message.
+
+```sh
+python -m zeared.doc.typescript rio_protocol -o rio-types.ts
+python -m zeared.doc.typescript rio_protocol -o rio-types.ts --check   # CI guard
+```
+
+```ts
+// Generated: one interface per message + referenced payloads, enums as unions.
+export interface RawRead {
+  source: string;
+  reader_id: number;
+  beam_id?: number;        // optional (has a default)
+  epc: string;
+  tid?: string | null;     // nullable (declared `str | None`)
+  rssi: number;
+  // …
+}
+```
+
+Mapping: scalars → `number`/`string`/`boolean`; `Enum` → literal unions
+(`0 | 1`, `"fast" | "slow"`); `many` → `T[]`; `keyed` → `Record<string, T>`;
+`z.T(Nested)` → an interface reference; `z.Union` → a discriminated union;
+`z.Tuple` → a TS tuple. Keys are **wire keys** (`data_key` when set). `required`
+→ no `?`; a default → `?`; `X | None` → `?: T | null`. `dump=False` fields are
+omitted. `Bytes` is base64 (`string`) on the JSON wire; frames/ndarrays are
+`unknown` — decode them in your bridge. Also available programmatically:
+`from zeared.doc import generate_ts; generate_ts('rio_protocol')` returns the
+`.ts` source as a string.
+
 ## Errors
 
 ```
