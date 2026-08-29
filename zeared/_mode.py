@@ -12,3 +12,4 @@ class Mode(enum.Enum):
     """Zenoh session mode supported by zeared factories."""
     PEER = 'peer'
     CLIENT = 'client'
+    ROUTER = 'router'

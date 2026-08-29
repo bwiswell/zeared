@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.2.6"
+version = "0.2.7"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },

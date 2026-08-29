@@ -14,8 +14,15 @@ so the package init stays a thin re-export module.
   initial_backoff=, max_backoff=, max_attempts=, auto_reconnect=False,
   probe_interval=10.0, timestamping=True, gc_interval=60.0,
   retention_ttl=None) -> Session | ManagedSession`
+- `hub(*, listen=, connect=, config=, zenoh_config=, retry=,
+  initial_backoff=, max_backoff=, max_attempts=, timestamping=True) ->
+  Session` — a **router-mode** relay for NAT-gated nodes (see
+  [`hubd.md`](hubd.md)). Relays pub/sub, queries, and liveliness in-process;
+  no `zenohd` binary. Returns a raw `zenoh.Session` (a listener has no
+  zeared-owned resources to supervise). `listen` defaults to
+  `['tcp/0.0.0.0:7447']`; `connect` links to other hubs.
 - `open(cfg: SessionConfig) -> Session | ManagedSession` — dispatches
-  on `cfg.mode`.
+  on `cfg.mode` (`PEER` / `CLIENT` / `ROUTER`).
 
 `config=` provides a declarative base spec; explicit kwargs override
 per-call. `zenoh_config=` layers raw Zenoh overrides on top.

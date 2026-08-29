@@ -787,6 +787,57 @@ Builder set: `.replace(**kwargs)`, `.with_retry(retry=True, **knobs)`,
 `.set_router(router)` (replace). The `with_*` / `set_*` split mirrors
 the field shape — list fields append, scalar fields replace.
 
+## NAT traversal: the relay hub
+
+Two nodes that can't reach each other directly — e.g. both behind NAT,
+outbound-only — need a relay in the middle. `z.hub()` opens a **router-mode**
+session that does exactly that, in-process: it relays pub/sub, queries, and
+liveliness (so retention/queryables **and** presence/LWT all work through it).
+The routing runs in Zenoh's Rust core, so throughput matches a standalone
+router — and there's **no `zenohd` binary to install**.
+
+```python
+# On a publicly-reachable host — bind and relay.
+hub = z.hub(listen=['tcp/0.0.0.0:7447'])
+
+# Each NAT-gated node connects OUT to the hub as a client. Client mode routes
+# everything through the hub and never attempts the direct peer links that
+# would fail under NAT.
+sess = z.client(router='tcp/hub.example.com:7447', auto_reconnect=True)
+```
+
+Run the hub as a standalone daemon (deploy it as a systemd service):
+
+```bash
+python -m zeared.hubd --listen tcp/0.0.0.0:7447
+```
+
+```bash
+python -m zeared.hubd \
+  --listen tcp/0.0.0.0:7447 \
+  --connect tcp/hub-b.example.com:7447 \   # link to another hub (multi-hub mesh)
+  --config /etc/zeared/hub.json5           # TLS / access-control config
+```
+
+The daemon is stateless and holds no zeared message state — it routes opaque
+samples, so it needs no schemas or `rio-protocol`. It stops cleanly on
+SIGINT/SIGTERM.
+
+Notes and limits:
+
+- **Secure a public hub.** An open relay is reachable by anyone who can hit
+  the port. Configure Zenoh **TLS/mTLS + access-control** via `--config`
+  (a JSON5 Zenoh config) or `z.hub(zenoh_config=...)`. `--listen`/`--connect`
+  layer on top of a `--config` file.
+- **Single hub is a SPOF.** For HA, run multiple hubs and link them
+  (`--connect` / `z.hub(connect=[...])`); nodes can list several routers.
+- **Hub returns a raw `zenoh.Session`** — a listener has no zeared-owned
+  resources to supervise, so there's no `ManagedSession` wrapper. The
+  *client* side gets `auto_reconnect=True` as usual.
+- **`z.client(router=...)` already targets any router** — including a
+  standalone `zenohd` if you'd rather run one. The hub just means you don't
+  have to.
+
 ### Auto-reconnect
 
 Long-running daemons that need to survive a session dying mid-flight
