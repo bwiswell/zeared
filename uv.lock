@@ -134,12 +134,12 @@ wheels = [
 
 [[package]]
 name = "seared"
-version = "0.2.1"
-source = { git = "https://github.com/bwiswell/seared#0b63b84f7c350853da011370986ce22843c08756" }
+version = "0.2.2"
+source = { git = "https://github.com/bwiswell/seared#2821e03a022e5893c8ad1f045d8ec948b6a357de" }
 
 [[package]]
 name = "zeared"
-version = "0.2.4"
+version = "0.2.5"
 source = { editable = "." }
 dependencies = [
     { name = "eclipse-zenoh" },
