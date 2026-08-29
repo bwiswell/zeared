@@ -74,7 +74,7 @@ from .retention import clear_retention_cache
 from .subscriber import Subscriber
 
 
-__version__ = '0.2.7'
+__version__ = '0.2.8'
 
 # Module-level defaults.
 # ``session`` is a dual-role handle (see ``_SessionHandle`` docstring) — the
