@@ -48,7 +48,7 @@ from seared import (
 )
 
 from . import _codec as codec
-from ._factories import client, open, peer  # noqa: A004 — `open` shadows builtin intentionally
+from ._factories import client, hub, open, peer  # noqa: A004 — `open` shadows builtin intentionally
 from ._managed_session import ManagedSession, OnReconnectHandle
 from ._mode import Mode
 from ._module_class import _ZearedModule
@@ -74,7 +74,7 @@ from .retention import clear_retention_cache
 from .subscriber import Subscriber
 
 
-__version__ = '0.2.6'
+__version__ = '0.2.7'
 
 # Module-level defaults.
 # ``session`` is a dual-role handle (see ``_SessionHandle`` docstring) — the
@@ -158,6 +158,7 @@ __all__ = [
     'client',
     'codec',
     'debug',
+    'hub',
     'open',
     'peer',
     'published_topics',

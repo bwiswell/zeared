@@ -97,6 +97,24 @@ def _build_config_for_client(
     return c
 
 
+def _build_config_for_router(
+    listen: list, connect: Optional[list],
+    zenoh_config: Optional[zenoh.Config], *, timestamping: bool = True,
+) -> zenoh.Config:
+    # A hub is a router that relays between nodes that can't reach each other
+    # directly (e.g. both NAT-gated, outbound-only). It routes pub/sub,
+    # queries, and liveliness in-process — no ``zenohd`` binary required.
+    c = zenoh_config if zenoh_config is not None else zenoh.Config()
+    if zenoh_config is None:
+        c.insert_json5('mode', '"router"')
+        if timestamping:
+            c.insert_json5('timestamping/enabled', 'true')
+    c.insert_json5('listen/endpoints', json.dumps(listen))
+    if connect:
+        c.insert_json5('connect/endpoints', json.dumps(connect))
+    return c
+
+
 def _wrap_managed(
     raw, open_fn, label,
     initial_backoff, max_backoff, max_attempts, probe_interval,
@@ -285,13 +303,78 @@ def client(
     )
 
 
+def hub(
+    *,
+    listen: Optional[list] = None,
+    connect: Optional[list] = None,
+    config: Optional[SessionConfig] = None,
+    zenoh_config: Optional[zenoh.Config] = None,
+    retry: object = _MISSING,
+    initial_backoff: object = _MISSING,
+    max_backoff: object = _MISSING,
+    max_attempts: object = _MISSING,
+    timestamping: bool = True,
+) -> zenoh.Session:
+    """Open a Zenoh router-mode session — a relay hub.
+
+    A hub lets nodes that can't reach each other directly still communicate:
+    each connects **outbound** to the hub (e.g. two peers behind NAT, both
+    outbound-only), and the hub routes pub/sub, queries, and liveliness
+    between them — everything zeared needs (retention/queryables and
+    presence/LWT included). This is the ``zenohd`` role, run in-process; no
+    external binary. The routing runs in Zenoh's Rust core, so throughput
+    matches a standalone router.
+
+    ``listen`` is the set of endpoints the hub binds (default
+    ``['tcp/0.0.0.0:7447']`` when neither ``listen`` nor ``config`` supplies
+    any). ``connect`` optionally links this hub to other hubs for a
+    multi-hub mesh. Point nodes at it with ``z.client(router='tcp/host:7447')``
+    — client mode routes everything through the hub and never attempts the
+    direct peer links that would fail under NAT.
+
+    Returns a raw :class:`zenoh.Session`: a hub is a listener with no
+    zeared-owned resources to supervise, so there is no ``ManagedSession``
+    wrapper. Secure a public hub with TLS / access-control via
+    ``zenoh_config=`` (or the daemon's ``--config`` file).
+    """
+    base_listen = list(config.listen) or None if config is not None else None
+    base_connect = list(config.connect) or None if config is not None else None
+    retry_b, initial_b, max_b, max_a = _resolve_retry_knobs(
+        config, retry, initial_backoff, max_backoff, max_attempts,
+    )
+    if listen is not None:
+        base_listen = listen
+    if connect is not None:
+        base_connect = connect
+    if not base_listen:
+        base_listen = ['tcp/0.0.0.0:7447']
+
+    label = f'hub(listen={base_listen}, connect={base_connect or []})'
+
+    def _open():
+        cfg = _build_config_for_router(
+            base_listen, base_connect, zenoh_config, timestamping=timestamping,
+        )
+        return zenoh.open(cfg)
+
+    return _open_with_retry(
+        _open,
+        retry=retry_b, initial_backoff=initial_b,
+        max_backoff=max_b, max_attempts=max_a,
+        endpoint_label=label,
+    )
+
+
 def open(cfg: SessionConfig) -> zenoh.Session:  # noqa: A001 — shadows builtin intentionally
     """Open a session from a :class:`SessionConfig`. Unified entry point.
 
-    Dispatches to :func:`peer` or :func:`client` based on ``cfg.mode``.
+    Dispatches to :func:`peer` / :func:`client` / :func:`hub` based on
+    ``cfg.mode``.
     """
     if cfg.mode is Mode.PEER:
         return peer(config=cfg)
     if cfg.mode is Mode.CLIENT:
         return client(config=cfg)
+    if cfg.mode is Mode.ROUTER:
+        return hub(config=cfg)
     raise ValueError(f'SessionConfig.mode unrecognised: {cfg.mode!r}')

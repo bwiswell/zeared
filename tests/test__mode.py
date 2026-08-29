@@ -12,9 +12,9 @@ class TestModeEnum:
     def test_mode_is_an_enum(self):
         assert issubclass(Mode, Enum)
 
-    def test_two_members(self):
+    def test_three_members(self):
         members = list(Mode)
-        assert len(members) == 2
+        assert len(members) == 3
 
     def test_peer_member(self):
         assert hasattr(Mode, 'PEER')
@@ -23,6 +23,11 @@ class TestModeEnum:
     def test_client_member(self):
         assert hasattr(Mode, 'CLIENT')
         assert isinstance(Mode.CLIENT, Mode)
+
+    def test_router_member(self):
+        assert hasattr(Mode, 'ROUTER')
+        assert isinstance(Mode.ROUTER, Mode)
+        assert Mode.ROUTER.value == 'router'
 
 
 class TestPublicReExport:
