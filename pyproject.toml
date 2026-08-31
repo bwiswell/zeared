@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.2.11"
+version = "0.2.12"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -22,6 +22,7 @@ bench = ["marshmallow>=3.26,<5.0"]
 
 [dependency-groups]
 dev = [
+    "deptry",
     "prek",
     "pytest>=8.0,<9.0",
     "ruff",
@@ -117,6 +118,13 @@ inline-quotes = "single"
 docstring-code-format = true
 line-ending = "lf"
 quote-style = "single"
+
+[tool.deptry.package_module_name_map]
+# The comparator package lives behind the repo-only `[bench]` extra, so a
+# default dev sync doesn't install it and deptry can't introspect its module
+# name. Naming it keeps `bench/` in scope (its imports still get checked
+# against the extra) instead of excluding it wholesale.
+marshmallow = ["marshmallow"]
 
 [tool.ty.src]
 # The benches import the `[bench]` extra (marshmallow) that a default dev
