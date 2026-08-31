@@ -15,7 +15,7 @@ class ZenohMeta(z.Zeared):
     source_info: Optional[str]                = z.Str()       # stringified source id
     attachment:  Optional[bytes]              = z.Bytes()
     schema:      Optional[str]                = z.Str()       # publisher's class SCHEMA
-    captures:    dict                         = z.Dict(missing={})
+    captures:    dict                         = z.Dict(default_factory=dict)
     origin:      Origin                       = z.Enum(enum=Origin, default=Origin.LIVE)
 ```
 
