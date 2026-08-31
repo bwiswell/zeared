@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Union, cast
 
 import zenoh
 
@@ -371,10 +371,14 @@ def open(cfg: SessionConfig) -> zenoh.Session:  # noqa: A001 — shadows builtin
     Dispatches to :func:`peer` / :func:`client` / :func:`hub` based on
     ``cfg.mode``.
     """
+    # ``peer`` / ``client`` declare ``Session | ManagedSession``; the
+    # wrapper is only returned when ``auto_reconnect=True``, which
+    # ``SessionConfig`` doesn't carry — so these always take the raw
+    # branch. Narrowed here to keep ``open``'s public return stable.
     if cfg.mode is Mode.PEER:
-        return peer(config=cfg)
+        return cast('zenoh.Session', peer(config=cfg))
     if cfg.mode is Mode.CLIENT:
-        return client(config=cfg)
+        return cast('zenoh.Session', client(config=cfg))
     if cfg.mode is Mode.ROUTER:
         return hub(config=cfg)
     raise ValueError(f'SessionConfig.mode unrecognised: {cfg.mode!r}')

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, TypeGuard
 
 from seared.doc import SchemaDoc
 from seared.doc import introspect as _seared_introspect
@@ -41,7 +41,7 @@ class MessageDoc:
     request: Optional[type]
 
 
-def is_message_class(obj: Any) -> bool:
+def is_message_class(obj: Any) -> 'TypeGuard[type[Message]]':
     """True for a concrete ``@zeared`` Message subclass (not the base)."""
     return (
         isinstance(obj, type)
@@ -51,7 +51,7 @@ def is_message_class(obj: Any) -> bool:
     )
 
 
-def introspect_message(cls: type) -> MessageDoc:
+def introspect_message(cls: 'type[Message]') -> MessageDoc:
     schema = _seared_introspect(cls)
     topic = getattr(cls, 'TOPIC', '') or ''
     field_attrs = {f.attr for f in schema.fields}

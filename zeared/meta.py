@@ -57,12 +57,12 @@ class ZenohMeta(s.Seared):
     layer; ``from_sample`` defaults it to ``LIVE``.
     """
     key_expr:    str                          = s.Str(required=True)
-    timestamp:   Optional[str]                = s.Str()          # raw HLC string
-    issued_at:   Optional[datetime.datetime]  = s.DateTime()     # parsed UTC
-    encoding:    Optional[str]                = s.Str()
-    source_info: Optional[str]                = s.Str()
-    attachment:  Optional[bytes]              = s.Bytes()
-    schema:      Optional[str]                = s.Str()
+    timestamp:   str | None                   = s.Str(default=None)       # raw HLC string
+    issued_at:   datetime.datetime | None     = s.DateTime(default=None)  # parsed UTC
+    encoding:    str | None                   = s.Str(default=None)
+    source_info: str | None                   = s.Str(default=None)
+    attachment:  bytes | None                 = s.Bytes(default=None)
+    schema:      str | None                   = s.Str(default=None)
     captures:    dict                         = s.Dict(default_factory=dict)
     origin:      Origin                       = s.Enum(enum=Origin, default=Origin.LIVE)
 

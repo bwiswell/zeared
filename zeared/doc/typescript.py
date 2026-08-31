@@ -19,8 +19,10 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from enum import Enum
 from typing import Any, Optional
 
+from seared import Seared
 from seared.doc import collect
 
 from .introspect import introspect_message, is_message_class
@@ -144,7 +146,7 @@ def _member(attr: str, wire_key: str, f: Any) -> list[str]:
     return lines
 
 
-def _real_docstring(cls: type) -> str:
+def _real_docstring(cls: 'type[Seared]') -> str:
     """The class's own docstring, or '' if it's the dataclass-generated
     signature (``Name(field: T = ...)``) that stands in when none was written."""
     doc = (cls.__doc__ or '').strip()
@@ -153,7 +155,7 @@ def _real_docstring(cls: type) -> str:
     return doc
 
 
-def _interface_jsdoc(cls: type) -> list[str]:
+def _interface_jsdoc(cls: 'type[Seared]') -> list[str]:
     """Leading JSDoc block for an interface — wire contract for a Message."""
     lines: list[str] = []
     doc = _real_docstring(cls).splitlines()
@@ -178,7 +180,7 @@ def _interface_jsdoc(cls: type) -> list[str]:
     return lines
 
 
-def render_interface(cls: type) -> str:
+def render_interface(cls: 'type[Seared]') -> str:
     """Render one ``export interface`` for a seared/message class."""
     out: list[str] = []
     out.extend(_interface_jsdoc(cls))
@@ -195,9 +197,9 @@ def render_interface(cls: type) -> str:
     return '\n'.join(out)
 
 
-def _collect_enums(classes: list[type]) -> list[type]:
+def _collect_enums(classes: 'list[type[Seared]]') -> 'list[type[Enum]]':
     """Gather every Enum class referenced by any field, deduped by identity."""
-    seen: dict[int, type] = {}
+    seen: 'dict[int, type[Enum]]' = {}
     for cls in classes:
         for _attr, _wire, f in cls.__seared_fields__:
             e = getattr(f, 'enum', None)
@@ -206,22 +208,22 @@ def _collect_enums(classes: list[type]) -> list[type]:
     return sorted(seen.values(), key=lambda e: e.__name__)
 
 
-def render_enum(enum_cls: type) -> str:
+def render_enum(enum_cls: 'type[Enum]') -> str:
     """Render an Enum as a TS union-of-literals type alias (wire values)."""
     literals = ' | '.join(_ts_literal(m.value) for m in enum_cls)
     return f'export type {enum_cls.__name__} = {literals};'
 
 
-def _expand(classes: list[type]) -> list[type]:
+def _expand(classes: 'list[type[Seared]]') -> 'list[type[Seared]]':
     """Full set to emit: every input class plus the transitive closure of its
     field references (nested ``T`` targets, ``Union`` variants) and its
     ``REQUEST`` payload closure. Deduped, then sorted ``(module, name)`` so
     output is deterministic regardless of input order (stable ``--check``)."""
     from seared.doc import introspect as _introspect
 
-    found: dict[int, type] = {}
+    found: 'dict[int, type[Seared]]' = {}
 
-    def walk(c: type) -> None:
+    def walk(c: 'type[Seared]') -> None:
         if id(c) in found or not getattr(c, '__seared_fields__', None):
             return
         found[id(c)] = c
@@ -236,7 +238,7 @@ def _expand(classes: list[type]) -> list[type]:
     return sorted(found.values(), key=lambda c: (c.__module__, c.__name__))
 
 
-def emit(classes: list[type]) -> str:
+def emit(classes: 'list[type[Seared]]') -> str:
     """Render a full ``.ts`` module for the given seared/message classes and
     everything they reference."""
     classes = _expand(classes)

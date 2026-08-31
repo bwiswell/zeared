@@ -13,6 +13,11 @@ from typing import Dict, Optional
 
 import zenoh
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .._managed_session import SessionLike
+
 from .. import _codec as codec
 from .._managed_session import resolve_raw
 from .._prefix_index import _PrefixIndex
@@ -219,7 +224,7 @@ def get_presence(session: zenoh.Session) -> _SessionPresence:
         return state
 
 
-def clear_presence_state(*, session: Optional[zenoh.Session] = None) -> None:
+def clear_presence_state(*, session: Optional['SessionLike'] = None) -> None:
     """Drop per-session presence state. Without ``session=``, clears all."""
     with _registry_lock:
         if session is None:

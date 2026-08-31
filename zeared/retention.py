@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 import zenoh
 
@@ -11,6 +11,10 @@ from . import _codec as codec
 from ._managed_session import resolve_raw
 from ._prefix_index import _PrefixIndex
 from .errors import TopicError, ZearedError
+
+if TYPE_CHECKING:
+    from ._managed_session import SessionLike
+    from .message import Message
 
 
 _log = logging.getLogger('zeared.retention')
@@ -42,7 +46,7 @@ def _resolve_retention_ttl(cls, session) -> Optional[float]:
 # retained-fetch / ``fetch_retained`` can pass the schema check and decode
 # the snapshot. The monotonic timestamp drives ``_RETENTION_TTL``
 # enforcement at query time and is immune to wall-clock jumps.
-_CacheValue = Tuple[bytes, str, Optional[bytes], float]
+_CacheValue = Tuple[bytes, codec.Encoding, Optional[bytes], float]
 
 
 class _RetentionCache:
@@ -59,7 +63,7 @@ class _RetentionCache:
         '_redeclaring',
     )
 
-    def __init__(self, cls: type, session: 'zenoh.Session'):
+    def __init__(self, cls: 'type[Message]', session: 'zenoh.Session'):
         self._cls = cls
         self._session = session
         # concrete_topic → (raw_bytes, encoding, attachment, inserted_monotonic)
@@ -86,7 +90,7 @@ class _RetentionCache:
         self,
         concrete_topic: str,
         raw: bytes,
-        encoding: str,
+        encoding: codec.Encoding,
         attachment: Optional[bytes] = None,
     ) -> None:
         """Record the last retained payload for ``concrete_topic`` and
@@ -265,7 +269,7 @@ _registry: Dict[Tuple[type, int], _RetentionCache] = {}
 _registry_lock = threading.Lock()
 
 
-def get_retention_cache(cls: type, session: 'zenoh.Session') -> _RetentionCache:
+def get_retention_cache(cls: 'type[Message]', session: 'zenoh.Session') -> _RetentionCache:
     key = (cls, id(session))
     cache = _registry.get(key)
     if cache is not None:
@@ -279,7 +283,7 @@ def get_retention_cache(cls: type, session: 'zenoh.Session') -> _RetentionCache:
         return cache
 
 
-def clear_retention_cache(*, session: Optional['zenoh.Session'] = None) -> None:
+def clear_retention_cache(*, session: Optional['SessionLike'] = None) -> None:
     """Drop cached retained payloads and undeclare queryables.
 
     Without ``session=``, clears every entry. With ``session=``, drops
@@ -307,7 +311,7 @@ def clear_retention_cache(*, session: Optional['zenoh.Session'] = None) -> None:
             c._index = _PrefixIndex()
 
 
-def effective_retain(cls: type, arg: Optional[bool]) -> bool:
+def effective_retain(cls: 'type[Message]', arg: Optional[bool]) -> bool:
     """Resolve the per-send ``retain=`` value against the class's ``RETAINED``."""
     retained = getattr(cls, 'RETAINED', False)
     if arg is None:

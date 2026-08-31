@@ -13,13 +13,15 @@ from ..errors import TopicError
 if TYPE_CHECKING:
     import zenoh
 
+    from .message import Message
+
 
 class _MessageWillMixin:
     """LWT registration surface on :class:`Message`."""
     __slots__ = ()
 
     def register_will(
-        self,
+        self: 'Message',
         *,
         session: Optional['zenoh.Session'] = None,
         topic: Optional[str] = None,

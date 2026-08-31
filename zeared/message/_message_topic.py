@@ -13,7 +13,7 @@ from .._template import Templates
 from ..errors import TopicError
 
 if TYPE_CHECKING:
-    pass
+    from .message import Message
 
 
 class _MessageTopicMixin:
@@ -49,7 +49,7 @@ class _MessageTopicMixin:
         return tpls
 
     @classmethod
-    def _schema_attachment_bytes(cls) -> Optional[bytes]:
+    def _schema_attachment_bytes(cls: 'type[Message]') -> Optional[bytes]:
         """Return the cached msgpack-encoded attachment bytes for this
         class's ``SCHEMA`` value, or ``None`` if ``SCHEMA`` is not set.
 

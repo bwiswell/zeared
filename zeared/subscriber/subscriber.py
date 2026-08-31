@@ -218,7 +218,7 @@ class Subscriber(Generic[M]):
         observer. Clears the schema-mismatch warn-once cache because
         peer zids may have changed.
         """
-        if self._closed or self._msg_cls is None:
+        if self._closed or self._msg_cls is None or self._dispatch is None:
             return
         if self._seen_mismatches is not None:
             self._seen_mismatches.clear()

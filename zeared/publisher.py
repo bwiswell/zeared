@@ -9,6 +9,7 @@ from ._managed_session import resolve_raw
 from .errors import ZearedError
 
 if TYPE_CHECKING:
+    from ._managed_session import SessionLike
     import zenoh
 
 
@@ -113,10 +114,15 @@ class _PublisherCache:
         attachment: Optional[bytes] = None,
     ) -> None:
         try:
-            kwargs = {'encoding': mime}
+            # Spelled out rather than spread from a dict: zenoh's ``put`` is
+            # fully typed, and a ``dict[str, bytes | str]`` splat binds to
+            # every optional keyword it declares.
             if attachment is not None:
-                kwargs['attachment'] = attachment
-            self._session.put(topic, raw, **kwargs)
+                self._session.put(
+                    topic, raw, encoding=mime, attachment=attachment,
+                )
+            else:
+                self._session.put(topic, raw, encoding=mime)
         except Exception as e:  # noqa: BLE001
             self.drop()
             raise ZearedError(
@@ -197,7 +203,7 @@ def published_topics(
     return out
 
 
-def clear_publisher_cache(*, session: 'zenoh.Session | None' = None) -> None:
+def clear_publisher_cache(*, session: 'SessionLike | None' = None) -> None:
     """Drop cached publishers.
 
     Without ``session=``, clears every entry in the registry. With

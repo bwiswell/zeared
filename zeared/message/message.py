@@ -22,7 +22,7 @@ dispatch).
 """
 from __future__ import annotations
 
-from typing import ClassVar, Literal, Optional, Tuple, Union
+from typing import ClassVar, Literal, Optional, Self, Tuple, Union
 
 import seared as s
 
@@ -111,7 +111,7 @@ class Message(
     @classmethod
     def _decode(
         cls, raw: bytes, key_expr: str, encoding: Encoding,
-    ) -> tuple['Message', dict[str, str]]:
+    ) -> tuple['Self', dict[str, str]]:
         """Reconstruct a message instance from wire bytes + key expression.
 
         Returns ``(instance, captures_dict)``: the decoded message plus the

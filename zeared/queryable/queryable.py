@@ -147,7 +147,7 @@ class Queryable(Generic[M]):
         raw. The dispatch closure is rebuilt from the retained handler so
         it captures the (possibly still-current) loop for async handlers.
         """
-        if self._closed or self._msg_cls is None:
+        if self._closed or self._msg_cls is None or self._handler is None:
             return
         msg_cls = self._msg_cls
         tpls = msg_cls._templates()

@@ -1,0 +1,11 @@
+# House hooks run via `prek` (`uv run prek install` once per clone).
+# One local hook gates every commit touching Python on a clean `ty` check.
+repos:
+  - repo: local
+    hooks:
+      - id: ty-check
+        name: ty check
+        entry: uv run ty check
+        language: system
+        pass_filenames: false
+        types: [python]

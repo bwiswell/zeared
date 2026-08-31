@@ -6,7 +6,7 @@ Sibling helper inside the ``subscriber`` Pattern B subdir.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Callable, List, Optional, Type
+from typing import TYPE_CHECKING, Callable, List, Optional, TypeVar
 
 from ..errors import RetainedFetchError
 from ..meta import Origin
@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from ..message import Message
 
 
+_M = TypeVar('_M', bound='Message')
+
 _log = logging.getLogger('zeared.subscriber')
 
 
@@ -24,7 +26,7 @@ def _fetch_retained(
     session: 'zenoh.Session',
     templates,
     dispatch: Callable,
-    msg_cls: Type,
+    msg_cls: 'type[Message]',
     on_error: Optional[Callable],
 ) -> None:
     """Issue ``session.get(wildcard)`` per declared template and route each
@@ -68,9 +70,9 @@ def _fetch_retained(
 def _collect_retained(
     session: 'zenoh.Session',
     templates,
-    msg_cls: Type,
+    msg_cls: 'type[_M]',
     on_error: Optional[Callable],
-) -> 'List[Message]':
+) -> 'List[_M]':
     """Issue ``session.get(wildcard)`` per declared template and return the
     decoded OK replies as typed instances — the collecting sibling of
     :func:`_fetch_retained`. Backs :meth:`Message.fetch_retained`.
@@ -84,7 +86,7 @@ def _collect_retained(
 
     from ._subscriber_dispatch import _pick_encoding
 
-    out: 'List[Message]' = []
+    out: 'List[_M]' = []
     for tpl in templates:
         try:
             replies = session.get(tpl.wildcard)

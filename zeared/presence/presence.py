@@ -29,6 +29,8 @@ import hashlib
 
 import seared as s
 
+from .._codec import Encoding
+
 
 ALIVE_PREFIX = '__zeared/alive'
 WILL_PREFIX = '__zeared/will'
@@ -55,7 +57,7 @@ def _resolve_gc_interval(session, observer_override=None) -> float:
     return getattr(session, '_gc_interval', _GC_INTERVAL_SECONDS)
 
 
-def _envelope_encoding() -> str:
+def _envelope_encoding() -> Encoding:
     """Pick the wire encoding for the will envelope itself.
 
     Honors ``zeared.debug`` symmetrically across publish, queryable

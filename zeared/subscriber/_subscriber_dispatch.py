@@ -72,8 +72,8 @@ def _adapt_async_callback(cb: Callable) -> Callable:
         asyncio.run_coroutine_threadsafe(inner(*args), loop)
 
     # Preserve arity so _wants_meta inspects correctly.
-    _sync_shim.__wrapped__ = inner  # type: ignore[attr-defined]
-    _sync_shim.__signature__ = inspect.signature(inner)  # type: ignore[attr-defined]
+    _sync_shim.__wrapped__ = inner  # ty: ignore[unresolved-attribute]
+    _sync_shim.__signature__ = inspect.signature(inner)  # ty: ignore[unresolved-attribute]
     return _sync_shim
 
 
@@ -102,7 +102,9 @@ def _make_presence_dispatcher(msg_cls, templates, dispatch) -> Callable:
     return on_presence
 
 
-def _pick_encoding(sample: 'zenoh.Sample', cls_encoding: str, debug: bool) -> str:
+def _pick_encoding(
+    sample: 'zenoh.Sample', cls_encoding: codec.Encoding, debug: bool,
+) -> codec.Encoding:
     """Derive the wire encoding to use when decoding an incoming sample."""
     declared = str(sample.encoding) if sample.encoding is not None else ''
     if 'json' in declared:
@@ -110,7 +112,7 @@ def _pick_encoding(sample: 'zenoh.Sample', cls_encoding: str, debug: bool) -> st
     if 'msgpack' in declared:
         return 'msgpack'
     # Fall back to the class default, honouring the global debug flag.
-    return codec.effective_encoding(cls_encoding, debug)  # type: ignore[arg-type]
+    return codec.effective_encoding(cls_encoding, debug)
 
 
 def _build_dispatch(
@@ -150,7 +152,9 @@ def _build_dispatch(
 
     tpls = msg_cls._templates()
 
-    def _dispatch_remove(sample: 'zenoh.Sample', origin: Origin) -> None:
+    def _dispatch_remove(
+        sample: 'zenoh.Sample', origin: Origin, cb: Callable[..., None],
+    ) -> None:
         key_expr = str(sample.key_expr)
         try:
             meta = from_sample(sample)
@@ -160,7 +164,7 @@ def _build_dispatch(
                 _tpl, captures = match
                 if captures:
                     meta.captures = dict(captures)
-            on_remove(meta)
+            cb(meta)
         except Exception as exc:  # noqa: BLE001
             wrapped = CallbackError(
                 f'{msg_cls.__name__} on_remove raised on key_expr='
@@ -182,7 +186,7 @@ def _build_dispatch(
         # registered one, else drop silently (no typed instance to build).
         if sample.kind == _zenoh.SampleKind.DELETE:
             if on_remove is not None:
-                _dispatch_remove(sample, origin)
+                _dispatch_remove(sample, origin, on_remove)
             return
         raw = bytes(sample.payload)
         key_expr = str(sample.key_expr)

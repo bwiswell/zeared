@@ -19,7 +19,7 @@ class _MessageSendMixin:
     __slots__ = ()
 
     def send(
-        self,
+        self: 'Message',
         *,
         session: Optional['zenoh.Session'] = None,
         topic: Optional[str] = None,

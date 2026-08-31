@@ -13,6 +13,7 @@ import threading
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
+    from .._managed_session import SessionLike
     import zenoh
 
     from .queryable import Queryable
@@ -44,7 +45,7 @@ def _deregister_queryable(session, qbl: 'Queryable') -> None:
             _queryables.pop(sid, None)
 
 
-def _close_queryables_for(session: 'zenoh.Session') -> None:
+def _close_queryables_for(session: 'SessionLike') -> None:
     """Close every queryable registered against this session. Called by
     ``z.release()`` right after subscribers are closed."""
     sid = id(session)

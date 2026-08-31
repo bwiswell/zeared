@@ -8,15 +8,15 @@ subscriber callbacks. Keeps Zenoh types out of user code.
 ```python
 @z.zeared
 class ZenohMeta(z.Zeared):
-    key_expr:    str                          = z.Str(required=True)
-    timestamp:   Optional[str]                = z.Str()       # raw HLC string
-    issued_at:   Optional[datetime.datetime]  = z.DateTime()  # parsed UTC
-    encoding:    Optional[str]                = z.Str()       # e.g. 'application/msgpack'
-    source_info: Optional[str]                = z.Str()       # stringified source id
-    attachment:  Optional[bytes]              = z.Bytes()
-    schema:      Optional[str]                = z.Str()       # publisher's class SCHEMA
-    captures:    dict                         = z.Dict(missing={})
-    origin:      Origin                       = z.Enum(enum=Origin, default=Origin.LIVE)
+    key_expr:    str                      = z.Str(required=True)
+    timestamp:   str | None               = z.Str(default=None)       # raw HLC string
+    issued_at:   datetime.datetime | None = z.DateTime(default=None)  # parsed UTC
+    encoding:    str | None               = z.Str(default=None)       # e.g. 'application/msgpack'
+    source_info: str | None               = z.Str(default=None)       # stringified source id
+    attachment:  bytes | None             = z.Bytes(default=None)
+    schema:      str | None               = z.Str(default=None)       # publisher's class SCHEMA
+    captures:    dict                     = z.Dict(default_factory=dict)
+    origin:      Origin                   = z.Enum(enum=Origin, default=Origin.LIVE)
 ```
 
 ## `meta.captures`

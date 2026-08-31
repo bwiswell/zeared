@@ -150,10 +150,24 @@ Class-level `RETENTION_TTL` is the only knob for raw sessions.
 ## Deduplication
 
 Retained-fetch replays are deduplicated against the live stream by default
-(see `Subscriber.DEDUPE = True`). Each retained reply for a given concrete
-topic is matched against the most recent live sample for that topic; if
-the wire payload is identical, the reply is suppressed. Set
-`DEDUPE = False` on the subscriber class to opt out.
+(see `Subscriber.DEDUPE = True`). Dedupe is **timestamp-based, not
+payload-based**: the subscriber remembers the highest HLC timestamp
+(`sample.timestamp`) seen per concrete topic, and drops any sample whose
+timestamp is `<=` that watermark. Payload bytes are never compared — a
+replay of the same sample is suppressed because it carries the same
+timestamp, not because it re-serialises identically. Set `DEDUPE = False`
+on the subscriber class (or pass `dedupe=False` per subscription) to opt
+out.
+
+Two consequences of the watermark rule:
+
+- It applies to **every** sample on a `RETAINED` + dedupe-active
+  subscription, not just replays — an out-of-order or re-delivered live
+  sample is dropped by the same check.
+- Samples with no timestamp bypass dedupe entirely. That is how
+  synthesised wills (`timestamp=None`) always fire, and it means dedupe
+  is inert against a session with HLC timestamping disabled (the
+  `z.peer()` / `z.client()` factories enable it by default).
 
 Dedupe is a *suppression* heuristic, orthogonal to the `meta.origin`
 provenance signal — a replay that survives dedupe is still delivered
@@ -165,7 +179,10 @@ every replay *and* can tell it is one.
 - **No automatic session-close cleanup.** Queryables are undeclared on
   `clear_retention_cache(session=...)` or registry re-init — nothing
   detects a session closing out from under us.
-- **No TTL.** Retained values live as long as the publishing session does.
+- **No cross-session durability.** The cache lives in the publishing
+  process, so retained values die with the publishing session — there is
+  no store-and-forward broker behind them. (Expiration *within* a live
+  session is available: see [TTL](#ttl--retention_ttl).)
 
 ## `clear_retention_cache(*, session=None)`
 

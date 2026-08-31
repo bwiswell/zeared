@@ -14,6 +14,11 @@ from typing import Callable, Dict, List, Optional
 
 import zenoh
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .._managed_session import SessionLike
+
 from .. import _codec as codec
 from .._managed_session import resolve_raw
 from ._presence_synthesized_sample import _SynthesizedSample
@@ -283,7 +288,7 @@ def get_observer(session: zenoh.Session) -> _PresenceObserver:
         return obs
 
 
-def clear_observer(session: Optional[zenoh.Session] = None) -> None:
+def clear_observer(session: Optional['SessionLike'] = None) -> None:
     """Stop observers. Without ``session=``, stops all."""
     with _observer_lock:
         if session is None:

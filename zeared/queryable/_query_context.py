@@ -36,7 +36,7 @@ def _parse_params(parameters: str) -> dict[str, str]:
     return dict(parse_qsl(parameters, keep_blank_values=True))
 
 
-def _pick_query_encoding(query: 'zenoh.Query') -> str:
+def _pick_query_encoding(query: 'zenoh.Query') -> codec.Encoding:
     """Encoding to decode a request payload with — honour the query's
     declared encoding hint, else default to msgpack."""
     enc = getattr(query, 'encoding', None)
@@ -69,7 +69,7 @@ class QueryContext:
         'key_expr', 'selector', 'parameters', 'params', 'captures', 'request',
     )
 
-    def __init__(self, query: 'zenoh.Query', msg_cls: type):
+    def __init__(self, query: 'zenoh.Query', msg_cls: 'type[Message]'):
         self._query = query
         self._msg_cls = msg_cls
         self.key_expr = str(query.key_expr)

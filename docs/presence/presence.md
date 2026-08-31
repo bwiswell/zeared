@@ -170,11 +170,12 @@ explicit removal. A future API can add this when a use case surfaces.
 ## What's NOT here (on purpose)
 
 - **Retention is NOT auto-transitioned on peer death.** Registering a will
-  does not touch the retention cache. Late subscribers joining after a
-  peer's graceful shutdown still see the last retained value — often what
-  diagnostic tooling wants.
-- **No subscriber watchdog.** "Is MY receive path healthy?" is a different
-  question from "is the peer alive?". Deferred to 0.0.9+.
+  does not touch the retention cache, and the two are independent: the
+  will fires, but the dead peer's retained values simply vanish with it —
+  the cache and its queryable lived in that process. A subscriber joining
+  afterwards gets *nothing* from the retained-fetch for those topics
+  (unless another live peer publishes them). See
+  [`retention.md`](../retention.md).
 - **No `Cls.on_presence(on_online, on_offline)` API.** Synthesised wills
   flowing through `on_message` / `alisten` are the primary surface. An
   explicit presence-change API can land later if consumers actually need
