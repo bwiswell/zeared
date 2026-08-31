@@ -5,8 +5,8 @@ Methods that mirror ``zenoh.Session``'s surface (``zid``, ``liveliness``,
 current raw via ``self.raw()`` so they always reflect the post-reconnect
 session — never a stale handle.
 
-Mixed into ``ManagedSession`` per the mixin-extract variant of
-Pattern B (codified in ``CLAUDE.local.md``).
+Mixed into ``ManagedSession`` via the MRO — a stateless mixin holding one
+extracted method cluster, so these stay methods on the composed class.
 """
 
 from __future__ import annotations

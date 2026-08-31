@@ -164,9 +164,11 @@ def _wrap_managed(  # noqa: PLR0913, PLR0917
 
 def _resolve_retry_knobs(
     config: SessionConfig | None,
-    # Each may be the `_MISSING` sentinel or a real value; the body narrows by
-    # identity. Typing them properly needs a sentinel type — see
-    # `project-plans/02-ty-adoption.md` §7 Q4, deferred.
+    # Each may be the `_MISSING` sentinel or a real value; the body narrows
+    # by identity. `Any` is a placeholder: typing these properly needs a
+    # dedicated sentinel type (`Union[T, _MissingType]`) so the declared
+    # signature stops erasing the real parameter types. Deferred — it is a
+    # public-signature change with no runtime effect.
     retry: Any,
     initial_backoff: Any,
     max_backoff: Any,

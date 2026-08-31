@@ -4,8 +4,9 @@ End-to-end publish → subscriber-received throughput on a single in-process
 Zenoh peer session, compared against `marshmallow` + raw Zenoh to measure
 zeared's overhead relative to the prior pattern.
 
-All numbers below come from the committed `bench/results.json` artifact.
-Regenerate both with:
+All numbers below come from the committed `bench/results.json` artifact —
+zeared 0.3.0, seared 0.3.0, `rusted` 0.2.0, `eclipse-zenoh` 1.9.0, CPython
+3.14.3. Regenerate with:
 
 ```bash
 uv run python -m bench
@@ -60,10 +61,10 @@ silently retarget them and publish compiled numbers under zeared's own name.
 
 | Strategy | pub/s | e2e/s | MB/s | wire (B) |
 |----------|------:|------:|-----:|---------:|
-| Zenoh + `marshmallow` (JSON) | 3,771 | 3,754 | 3.00 | 796 |
-| `zeared` (JSON, cached) | 6,424 | 6,394 | 5.11 | 796 |
-| `zeared` (msgpack, cached) | 7,172 | 7,074 | 3.82 | 533 |
-| `zeared` (msgpack, `PUBLISHER=False`) | 6,808 | 6,804 | 3.63 | 533 |
+| Zenoh + `marshmallow` (JSON) | 4,057 | 4,032 | 3.23 | 796 |
+| `zeared` (JSON, cached) | 6,971 | 6,894 | 5.55 | 796 |
+| `zeared` (msgpack, cached) | 7,670 | 7,609 | 4.09 | 533 |
+| `zeared` (msgpack, `PUBLISHER=False`) | 7,267 | 7,245 | 3.87 | 533 |
 
 msgpack is **33% smaller on the wire** than the JSON form (533 B vs 796 B)
 for the same payload.
@@ -74,14 +75,14 @@ for the same payload.
 
 | Strategy | pub/s | e2e/s | MB/s | wire (B) |
 |----------|------:|------:|-----:|---------:|
-| Zenoh + `marshmallow` (JSON) | 3,491 | 3,356 | 2.78 | 796 |
-| sync `send` + sync `on_message` (JSON) | 6,445 | 6,197 | 5.13 | 796 |
-| sync `send` + sync `on_message` (msgpack) | 7,234 | 6,888 | 3.86 | 533 |
-| `asend` + sync `on_message` (msgpack) | 2,720 | 2,615 | 1.45 | 533 |
-| sync `send` + `alisten` (msgpack) | 5,560 | 5,505 | 2.96 | 533 |
-| `asend` + `alisten` (msgpack) | 2,073 | 2,053 | 1.11 | 533 |
-| `asend` + `alisten` (JSON) | 2,056 | 2,035 | 1.64 | 796 |
-| sync `send` + `async def` `on_message` (msgpack) | 4,800 | 4,752 | 2.56 | 533 |
+| Zenoh + `marshmallow` (JSON) | 3,940 | 3,752 | 3.14 | 796 |
+| sync `send` + sync `on_message` (JSON) | 6,780 | 6,456 | 5.40 | 796 |
+| sync `send` + sync `on_message` (msgpack) | 6,844 | 6,560 | 3.65 | 533 |
+| `asend` + sync `on_message` (msgpack) | 2,703 | 2,598 | 1.44 | 533 |
+| sync `send` + `alisten` (msgpack) | 6,022 | 5,962 | 3.21 | 533 |
+| `asend` + `alisten` (msgpack) | 2,496 | 2,471 | 1.33 | 533 |
+| `asend` + `alisten` (JSON) | 2,389 | 2,365 | 1.90 | 796 |
+| sync `send` + `async def` `on_message` (msgpack) | 4,878 | 4,828 | 2.60 | 533 |
 
 Relative to the fastest row (sync msgpack — the default):
 
@@ -110,8 +111,8 @@ for free. Nothing in zeared declares or imports it.
 
 | Strategy | pub/s | e2e/s | MB/s | wire (B) |
 |----------|------:|------:|-----:|---------:|
-| `zeared` + `rusted` (JSON, cached) | 10,947 | 10,872 | 8.71 | 796 |
-| `zeared` + `rusted` (msgpack, cached) | 13,348 | 13,301 | 7.11 | 533 |
+| `zeared` + `rusted` (JSON, cached) | 12,226 | 12,151 | 9.73 | 796 |
+| `zeared` + `rusted` (msgpack, cached) | 15,232 | 15,208 | 8.12 | 533 |
 
 Against the same strategies on the pure-Python path, that is **1.70× on the
 JSON path and 1.86× on msgpack**, end to end — serialization is a large
@@ -147,17 +148,17 @@ except where marked `peer`. `mosquitto` is started by the bench itself.
 
 | Row | e2e/s | wire (B) |
 |-----|------:|---------:|
-| pydantic + MQTT (QoS 0) | 8,407 | 670 |
-| pydantic + MQTT (QoS 1) | 2,871 | 670 |
-| seared + MQTT (QoS 0) | 5,130 | 796 |
-| seared + MQTT (QoS 1) | 2,521 | 796 |
-| pydantic + Zenoh (router, raw) | 26,447 | 670 |
-| seared + Zenoh (router, raw) | 7,657 | 796 |
-| zeared + Zenoh (router) | 6,976 | 796 |
-| zeared + Zenoh (peer) | 7,311 | 796 |
-| zeared + Zenoh (peer, msgpack default) | 8,055 | 533 |
-| zeared + `rusted` + Zenoh (peer, JSON) | 12,519 | 796 |
-| zeared + `rusted` + Zenoh (peer, msgpack default) | 13,954 | 533 |
+| pydantic + MQTT (QoS 0) | 9,941 | 670 |
+| pydantic + MQTT (QoS 1) | 3,197 | 670 |
+| seared + MQTT (QoS 0) | 5,952 | 796 |
+| seared + MQTT (QoS 1) | 2,545 | 796 |
+| pydantic + Zenoh (router, raw) | 24,877 | 670 |
+| seared + Zenoh (router, raw) | 6,864 | 796 |
+| zeared + Zenoh (router) | 6,252 | 796 |
+| zeared + Zenoh (peer) | 6,719 | 796 |
+| zeared + Zenoh (peer, msgpack default) | 7,282 | 533 |
+| zeared + `rusted` + Zenoh (peer, JSON) | 11,812 | 796 |
+| zeared + `rusted` + Zenoh (peer, msgpack default) | 14,405 | 533 |
 
 > **Read these on end-to-end rate, not publish rate.** `paho`'s `publish()`
 > hands off to a network thread and returns, so the MQTT rows' publish-side
@@ -170,41 +171,62 @@ except where marked `peer`. `mosquitto` is started by the bench itself.
 
 | Comparison | Result |
 |------------|--------|
-| **Codec**, same raw Zenoh transport | pydantic **3.45x** faster than seared |
-| **Codec**, same MQTT transport (QoS 0) | pydantic **1.64x** faster |
-| **Transport**, same pydantic codec | Zenoh **3.15x** faster than MQTT |
+| **Codec**, same raw Zenoh transport | pydantic **3.6x** faster than seared |
+| **Codec**, same MQTT transport (QoS 0) | pydantic **1.7x** faster |
+| **Transport**, same pydantic codec | Zenoh **2.5x** faster than MQTT |
 | zeared's `Message` wrapper over raw seared + Zenoh | **9%** cost |
-| Zenoh peer vs router topology | **5%** faster |
-| msgpack vs JSON on the same path | **10%** faster, **33%** smaller |
-| `rusted` accelerator on the native stack | **1.73x** |
+| Zenoh peer vs router topology | **7%** faster |
+| msgpack vs JSON on the same path | **8%** faster, **33%** smaller |
+| `rusted` accelerator on the native stack | **2.0x** |
 
 **pydantic wins the codec axis, and by a lot.** That is the expected result,
 not a surprise: its core is compiled and seared's is not — seared's own
 benchmarks already record pydantic-core as several times faster on the dict
-path. The codec gap is narrower over MQTT (1.64x) simply because the
-transport dominates there and there is less headroom to win.
+path. The codec gap is narrower over MQTT (1.7x) simply because the transport
+dominates there and there is less headroom to win.
+
+### Run-to-run variance
+
+These rows move more than the rest of this page, so the ratios below are
+**medians of three full runs**, not the single committed run in the table
+above. Measured spread (max/min over three runs):
+
+| Row | spread |
+|-----|-------:|
+| seared + Zenoh (router, raw) | 0% |
+| pydantic + MQTT (QoS 1) | 3% |
+| zeared + Zenoh (peer, msgpack default) | 12% |
+| pydantic + MQTT (QoS 0) | 13% |
+| zeared + `rusted` + Zenoh (peer, msgpack) | 17% |
+| pydantic + Zenoh (router, raw) | 19% |
+
+Anything below roughly 1.2x on this page should be read as "comparable",
+not as a win.
 
 ### The answer
 
-Against the stack as usually deployed:
+Against the stack as usually deployed (medians of three runs):
 
 | zeared config | vs pydantic + MQTT QoS 0 | vs QoS 1 |
 |---------------|-------------------------:|---------:|
-| default (msgpack, peer) | **0.96x** | **2.81x** |
-| with `rusted` | **1.66x** | **4.86x** |
+| default (msgpack, peer) | **0.82x** | **2.30x** |
+| with `rusted` | **1.59x** | **4.44x** |
 
-At default configuration against QoS 0, it is **a dead heat** — pydantic's
-codec advantage very nearly cancels Zenoh's transport advantage. Anyone
-choosing between the two on raw throughput alone, at this payload size, is
-choosing between equals.
+**At default configuration against QoS 0, pydantic + MQTT is ahead** — around
+1.2x. pydantic's codec advantage is larger than Zenoh's transport advantage
+at this payload size, and pure-Python seared does not make it back. If raw
+QoS 0 throughput on one box is the only thing that matters to you, that is
+the honest answer, and it is not the one favouring this library.
 
-Two things move it:
+Two things change it:
 
 - **QoS 1** — at-least-once delivery, which is what most production MQTT
-  fleets actually run — costs MQTT roughly 3x. Against that baseline zeared
-  is 2.8x ahead before any accelerator.
-- **`rusted`** closes the codec gap, and the transport advantage stops being
-  cancelled: 1.66x against QoS 0, 4.86x against QoS 1.
+  fleets actually run — costs MQTT roughly 3x, and it is the more meaningful
+  comparison against Zenoh's reliable `put`. Against that baseline zeared is
+  **2.3x** ahead before any accelerator.
+- **`rusted`** closes the codec gap, and the ordering flips: **1.59x**
+  against QoS 0, **4.44x** against QoS 1. The accelerator is what makes the
+  native stack faster on both axes rather than trading one for the other.
 
 ### Caveats
 

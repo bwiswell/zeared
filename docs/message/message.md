@@ -131,7 +131,7 @@ class AnyEvent(z.Message):
     TOPIC = 'peer/{name}/event'               # canonical (publishable)
     EXTRA_TOPICS = ('peer/**',)               # subscribe-only wildcard
     name: str = z.Str(required=True)
-    payload: dict = z.Dict()
+    payload: dict = z.Dict(default_factory=dict)
 
 AnyEvent(name='alice', payload={'x': 1}).send()   # publishes canonical
 # Subscriber receives BOTH peer/alice/event (typed path) AND any

@@ -1,8 +1,8 @@
 """``_MessageTopicMixin`` — topic-template parsing + schema attachment cache.
 
-Methods extracted into a mixin per the variant of Pattern B codified in
-``CLAUDE.local.md``: ``Message`` composes this mixin via MRO so the
-methods stay as classmethods (not helper functions taking ``cls``).
+One extracted method cluster: ``Message`` composes this stateless mixin
+via the MRO so the methods stay classmethods, rather than becoming helper
+functions taking ``cls``.
 """
 
 from __future__ import annotations

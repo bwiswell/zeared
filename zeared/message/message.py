@@ -1,9 +1,10 @@
 """``Message`` — the zeared message base class.
 
-Primary file of the ``message`` Pattern B subdir. The class itself is
-slim: declared class attributes plus the ``unretain`` descriptor and
-the ``_decode`` classmethod. Method clusters extracted into mixins
-per the variant codified in ``CLAUDE.local.md``:
+Primary file of the ``message`` subdir. The class itself is slim:
+declared class attributes plus the ``unretain`` descriptor and the
+``_decode`` classmethod. Method clusters are extracted into sibling
+modules as stateless mixins, composed here via the MRO so they stay
+methods rather than helper functions taking ``cls``:
 
 - ``_MessageTopicMixin`` (``_message_topic.py``) — template parsing,
   schema attachment cache, multi-segment field-binding validation.
