@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.2.12"
+version = "0.2.13"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -9,7 +9,7 @@ requires-python = ">=3.14,<4.0"
 dependencies = [
     "eclipse-zenoh>=1.9.0",
     "msgpack>=1.1.2",
-    "seared>=0.2.9",
+    "seared>=0.2.9,<0.3.0",
 ]
 
 [project.scripts]
@@ -38,6 +38,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["zeared"]
+
+# The bench ships with the repo, not the package.
+[tool.hatch.build.targets.sdist]
+exclude = ["/bench"]
 
 [tool.ruff]
 line-length = 120
@@ -107,12 +111,9 @@ inline-quotes = "single"
 # CLIs whose product *is* stdout.
 "zeared/doc/generate.py" = ["T201"]
 "zeared/doc/typescript.py" = ["T201"]
-# Repo-only benchmark scripts — excluded from the wheel, never imported by
-# library code. `INP001`: they are standalone scripts, not a package (unlike
-# seared, whose bench is a `python -m bench` package). `D`/`ANN`: comparator
-# schema boilerplate and throwaway timing helpers. Revisit if bench/ ever
-# becomes a package.
-"bench/**/*.py" = ["T201", "INP001", "D", "ANN", "S101", "ARG", "PLR", "ASYNC110"]
+# The bench is a package now (`python -m bench`), matching seared, so the only
+# waiver it needs is the one seared has: its product *is* stdout.
+"bench/**/*.py" = ["T201"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -126,15 +127,26 @@ quote-style = "single"
 # against the extra) instead of excluding it wholesale.
 marshmallow = ["marshmallow"]
 
+[tool.deptry.per_rule_ignores]
+# `rusted` is seared's optional compiled accelerator. Following seared, zeared
+# declares it nowhere: pending published wheels you either have it on your
+# system and the accelerated bench suite runs, or the suite sits out. DEP001
+# covers the absent case; DEP003 the case where a dev has it installed out of
+# band, which is exactly the intended posture. Revisit when rusted ships to
+# PyPI and can become an ordinary optional dependency.
+DEP001 = ["rusted"]
+DEP003 = ["rusted"]
+
 [tool.ty.src]
 # The benches import the `[bench]` extra (marshmallow) that a default dev
 # sync doesn't install; ty skips just those files. Named individually so a
 # future bench that needs no comparator stays checked.
 exclude = [
     "tests",
-    "bench/bench_async.py",
-    "bench/bench_throughput.py",
-    "bench/bench_wire.py",
+    # Bench modules importing packages a default dev sync doesn't install: the
+    # `marshmallow` comparator (behind the `bench` extra) and `rusted`.
+    "bench/baseline.py",
+    "bench/suite_rusted.py",
 ]
 
 [tool.pytest.ini_options]

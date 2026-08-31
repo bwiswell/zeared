@@ -69,7 +69,8 @@ swapped on every reconnect).
 
 For pure throughput, the sync path is ~60% faster on publish loops (the
 per-call `to_thread` cost dominates). For responsive services, the
-ergonomic wins are worth it. See `tests/bench_async.py`.
+ergonomic wins are worth it. See `docs/overview/benchmarks.md`, or run
+`uv run python -m bench` for the current numbers.
 
 ## `alisten` subscriber lifecycle
 
