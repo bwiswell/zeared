@@ -5,8 +5,9 @@ Prints a table per suite and (unless ``--no-write``) records the run to
 ``docs/overview/benchmarks.md``.
 
 Suites that need a package a default dev sync doesn't install (the
-``marshmallow`` comparator, the ``rusted`` accelerator) are skipped with a
-note rather than failing the run.
+``marshmallow`` comparator, the ``rusted`` accelerator) — or an external
+binary it can't find (``mosquitto``, for the stack comparison) — are skipped
+with a note rather than failing the run.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ _SUITES = [
     ('suite_rusted', 'n'),
     ('suite_throughput', 'duration'),
     ('suite_async', 'duration'),
+    ('suite_stacks', 'n'),
 ]
 
 _DEFAULT_OUT = Path(__file__).parent / 'results.json'
