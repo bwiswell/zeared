@@ -1,8 +1,9 @@
 # House hooks run via `prek` (`uv run prek install` once per clone).
 # Local hooks gate every commit touching Python on clean `ruff` lint +
-# format and a clean `ty` check. Order follows ruff's own guidance: lint
-# first, formatter last so it tidies anything the lint pass touched. `ty`
-# is a whole-project check, so it takes no filenames.
+# format, clean dependency hygiene, and a clean `ty` check. Order follows
+# ruff's own guidance: lint first, formatter last so it tidies anything the
+# lint pass touched. `deptry` and `ty` are whole-project checks, so they take
+# no filenames.
 repos:
   - repo: local
     hooks:
@@ -16,6 +17,12 @@ repos:
         entry: uv run ruff format --force-exclude
         language: system
         types_or: [python, pyi]
+      - id: deptry
+        name: deptry
+        entry: uv run deptry .
+        language: system
+        pass_filenames: false
+        types: [python]
       - id: ty-check
         name: ty check
         entry: uv run ty check
