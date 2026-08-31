@@ -283,8 +283,8 @@ wheels = [
 
 [[package]]
 name = "seared"
-version = "0.2.9"
-source = { git = "https://github.com/bwiswell/seared#35caf3f65dc5b76eefe8e7b5eb8dd076c24c55bb" }
+version = "0.3.0"
+source = { git = "https://github.com/bwiswell/seared#55a66869ba2150eb61013a6ac42e38e21384f510" }
 
 [[package]]
 name = "tomli"

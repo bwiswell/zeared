@@ -1022,23 +1022,26 @@ default vs. `marshmallow` + Zenoh on the same schema:
 
 | Strategy                          | pub/s | wire (B) |
 |-----------------------------------|------:|---------:|
-| Zenoh + `marshmallow` (JSON)      | 3,837 | 796      |
-| `zeared` sync (msgpack, cached)   | 7,513 | 533      |
+| Zenoh + `marshmallow` (JSON)      | 4,057 | 796      |
+| `zeared` sync (msgpack, cached)   | 7,670 | 533      |
 
-zeared is ~96% faster and ~33% smaller on the wire.
+zeared is ~89% faster and ~33% smaller on the wire.
 
-**"Pydantic + MQTT, or zeared?"** — the comparison people actually want.
-The short answer is that it depends on two independent things, and the
-honest numbers are less lopsided than either side's marketing: pydantic's
-compiled core beats pure-Python seared on serialization (~3.4x), Zenoh
-beats a broker-mediated MQTT hop on transport (~3.2x), and at default
-configuration against MQTT QoS 0 the two very nearly cancel. Against
-QoS 1 — what most production fleets run — zeared is ~2.8x ahead, and
-~4.9x with the optional `rusted` accelerator.
+**"Pydantic + MQTT, or zeared?"** — the comparison people actually want, and
+one that splits into two independent questions. pydantic's compiled core
+beats pure-Python seared on serialization (~3.6x); Zenoh beats a
+broker-mediated MQTT hop on transport (~2.5x). Netted out at default
+configuration against MQTT QoS 0, **pydantic + MQTT comes out ~1.2x ahead** —
+the codec gap is the larger of the two, and pure Python doesn't make it back.
 
-The full matrix (both axes isolated, sync + async variants, JSON /
-msgpack, cached / uncached), methodology, caveats, and reproduction
-commands live in
+Two things change that. Against **QoS 1** — at-least-once, what most
+production fleets actually run, and the closer analogue to Zenoh's reliable
+`put` — zeared is ~2.3x ahead. And with the optional `rusted` accelerator the
+codec gap closes and the ordering flips: ~1.6x against QoS 0, ~4.4x against
+QoS 1.
+
+The full matrix (both axes isolated, sync + async variants, JSON / msgpack,
+cached / uncached), methodology, run-to-run variance, and caveats live in
 [`docs/overview/benchmarks.md`](docs/overview/benchmarks.md). Run them
 yourself with `uv run python -m bench`.
 
