@@ -261,3 +261,63 @@ class TestWatchdogViaOnMessage:
         sub.close()
 
         assert 'quiet' in events
+
+
+# ---------------------------------------------------------------------------
+# Origin gating (0.3.0) — only LIVE samples feed the watchdog: a retained
+# replay can't establish cadence from stale data, and a will (the producer
+# died) can't reset the quiet timer.
+# ---------------------------------------------------------------------------
+
+
+class TestWatchdogOriginGating:
+    def _build(self, watchdog):
+        from collections import OrderedDict
+
+        from zeared.subscriber._subscriber_dispatch import _build_dispatch
+
+        @z.zeared
+        class Gate(z.Message):
+            TOPIC = 'wdg/gate'
+            v: int = z.Int(required=True)
+
+        return Gate, _build_dispatch(
+            Gate, None, lambda m: None,
+            wants_meta=False,
+            dedupe_active=False,
+            expected_schema=None,
+            seen_mismatches=OrderedDict(),
+            seen_ts={},
+            watchdog=watchdog,
+            schema_mismatch_cache_max=64,
+        )
+
+    def _sample(self):
+        from zeared import _codec as codec
+        from zeared.presence._presence_synthesized_sample import (
+            _SynthesizedSample,
+        )
+        return _SynthesizedSample(
+            key_expr='wdg/gate',
+            payload=codec.pack({'v': 1}, 'msgpack'),
+            encoding_mime='application/msgpack',
+            source_zid='zid-test',
+        )
+
+    def test_live_pings_replay_and_will_do_not(self):
+        class StubWatchdog:
+            pings = 0
+            def ping(self):
+                self.pings += 1
+
+        wd = StubWatchdog()
+        _cls, dispatch = self._build(wd)
+
+        dispatch(self._sample())                            # default LIVE
+        assert wd.pings == 1
+        dispatch(self._sample(), origin=z.Origin.REPLAY)
+        assert wd.pings == 1
+        dispatch(self._sample(), origin=z.Origin.WILL)
+        assert wd.pings == 1
+        dispatch(self._sample(), origin=z.Origin.LIVE)
+        assert wd.pings == 2

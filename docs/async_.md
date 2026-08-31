@@ -28,7 +28,7 @@ the one sharp edge (raw `threading.Thread` does NOT propagate context).
 | `aopen` | `def aopen(cfg) -> _AsyncSessionContextManager` | async-context-managed dispatch on `SessionConfig` |
 | `asend` | `async def asend(msg, *, session=None, topic=None) -> None` | free-function form of `msg.asend(...)` |
 | `asend_batch` | `async def asend_batch(cls, items, *, session=None, topic=None) -> None` | free-function form of `Cls.asend_batch(...)` |
-| `alisten` | `async def alisten(cls, *, session=None, maxsize=0) -> AsyncIterator` | async generator yielding messages |
+| `alisten` | `async def alisten(cls, *, session=None, maxsize=0, meta=False) -> AsyncIterator` | async generator yielding messages (or `(msg, meta)` tuples) |
 | `abatch` | `@asynccontextmanager async def abatch()` | async counterpart of `z.batch()` |
 
 ### Async session lifecycle
@@ -86,6 +86,19 @@ hood. No explicit cleanup required.
 `maxsize=0` (default) gives an unbounded `asyncio.Queue`. Pass a positive
 integer for backpressure — delivery into the queue blocks when full, at
 which point Zenoh's internal buffering takes over.
+
+`meta=True` (0.3.0) yields `(msg, meta)` tuples instead of bare
+messages — `meta` is the same `ZenohMeta` a 2-arg `on_message` callback
+receives (captures, schema, `origin`, ...). This is the async-iterator
+path's access to the replay-vs-live signal:
+
+```python
+async for msg, meta in Telemetry.alisten(meta=True):
+    if meta.origin is z.Origin.REPLAY:
+        seed(msg)
+    else:
+        react(msg)
+```
 
 ## Coroutine-callback detection in `on_message`
 

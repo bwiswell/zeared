@@ -59,11 +59,24 @@ class _MessageSubscribeMixin:
         auto_reconnect: bool = True,
         dedupe: Optional[bool] = None,
         on_remove: 'Optional[Callable[[ZenohMeta], None]]' = None,
+        retained_fetch: bool = True,
     ) -> "'Subscriber[_M]'":
         """Subscribe to this message's topic(s) — all declared templates.
 
         ``cb`` may be ``cb(msg)`` or ``cb(msg, meta)``; arity is inspected once
         at subscribe time. ``meta`` is a ``ZenohMeta`` seared dataclass.
+        ``meta.origin`` carries the sample's provenance — ``Origin.LIVE``
+        for a real publish, ``Origin.REPLAY`` for a retained-fetch delivery
+        (subscribe-time or post-reconnect), ``Origin.WILL`` for a
+        presence-synthesised will.
+
+        ``retained_fetch`` (default ``True``) controls the subscribe-time
+        retained fetch on ``RETAINED`` classes. Pass ``False`` for a
+        live-only subscription: no cached values are replayed at subscribe
+        time or after a reconnect, and the blocking ``session.get`` those
+        fetches issue is skipped. By the time ``on_message`` returns with
+        the default, every subscribe-time replay has been delivered (or
+        dedupe-suppressed) — everything after is live or marked.
 
         ``on_remove`` (optional) is the tombstone feed: it fires on DELETE
         samples — a peer's ``unretain()`` or any ``session.delete`` on a
@@ -108,6 +121,7 @@ class _MessageSubscribeMixin:
             auto_reconnect=auto_reconnect,
             dedupe=dedupe,
             on_remove=on_remove,
+            retained_fetch=retained_fetch,
         )
 
     @classmethod

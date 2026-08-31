@@ -92,6 +92,10 @@ the three sides always agree. The user payload *inside* the envelope
 continues to honor `cls.ENCODING` independently. Subscribers decode the
 envelope, match `target_key_expr` against their class templates, and (on
 liveliness DELETE for `<source_zid>`) synthesise a sample with the payload.
+Synthesised samples dispatch with `meta.origin = Origin.WILL` (0.3.0) —
+the reliable way for a 2-arg callback to recognise a will, replacing the
+old `issued_at is None` heuristic (which is also true for any sample from
+an unstamped session).
 
 `schema` (0.2.4) carries the registering class's `SCHEMA` value so the
 synthesised sample can be re-stamped with the attachment a live publish

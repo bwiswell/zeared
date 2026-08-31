@@ -204,6 +204,89 @@ class TestNonRetainedClassUnaffected:
         assert len(received) == 3
 
 
+class TestOriginSignal:
+    """The replay-vs-live signal (0.3.0): ``meta.origin`` carries the
+    sample's provenance, determined by the local delivery path — the
+    live subscriber callback (LIVE), a retained-fetch reply (REPLAY),
+    or presence will synthesis (WILL)."""
+
+    def test_live_sample_marked_live(self, session):
+        @z.zeared
+        class Tick(z.Message):
+            TOPIC = 'orig/live/{n}'
+            n: int = z.Int(required=True)
+
+        origins: list[z.Origin] = []
+        z.session = session
+        sub = Tick.on_message(lambda m, meta: origins.append(meta.origin))
+        wait()
+
+        Tick(n=1).send()
+        wait()
+        sub.close()
+
+        assert origins == [z.Origin.LIVE]
+
+    def test_retained_replay_marked_replay(self, connected_pair):
+        """A late subscriber's retained-fetch delivery is REPLAY; a
+        subsequent real publish is LIVE."""
+        session_a, session_b = connected_pair
+
+        @z.zeared
+        class Tele(z.Message):
+            TOPIC = 'orig/ret/{id}'
+            RETAINED = True
+            id: int = z.Int(required=True)
+            v: int = z.Int(required=True)
+
+        Tele(id=1, v=10).send(session=session_a)
+        wait(0.3)
+
+        received: list[tuple[int, z.Origin]] = []
+        sub = Tele.on_message(
+            lambda m, meta: received.append((m.v, meta.origin)),
+            session=session_b,
+        )
+        wait(0.5)
+
+        Tele(id=1, v=20).send(session=session_a)
+        wait(0.5)
+        sub.close()
+
+        assert (10, z.Origin.REPLAY) in received
+        assert (20, z.Origin.LIVE) in received
+
+    def test_synthesised_will_marked_will(self, connected_pair):
+        session_a, session_b = connected_pair
+
+        @z.zeared
+        class Status(z.Message):
+            TOPIC = 'orig/will/{name}'
+            RETAINED = True
+            LIVELINESS = True
+            name:  str = z.Str(required=True)
+            state: str = z.Str(required=True)
+
+        Status(name='alice', state='online').send(session=session_a)
+        Status(name='alice', state='offline').register_will(session=session_a)
+        wait(0.3)
+
+        received: list[tuple[str, z.Origin]] = []
+        sub = Status.on_message(
+            lambda m, meta: received.append((m.state, meta.origin)),
+            session=session_b,
+        )
+        wait(0.3)
+
+        z.release(session=session_a)
+        wait(0.5)
+        sub.close()
+
+        # 'online' arrived via the retained fetch; 'offline' via synthesis.
+        assert ('online', z.Origin.REPLAY) in received
+        assert ('offline', z.Origin.WILL) in received
+
+
 class TestHLCTimestampLexCompare:
     """Pin: HLC-formatted timestamps lex-compare in time order. Zenoh
     zero-pads the integer prefix; same-timestamp lex-compare returns

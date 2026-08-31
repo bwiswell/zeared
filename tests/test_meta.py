@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 
-from zeared.meta import ZenohMeta, _parse_attachment_schema, _parse_hlc
+from zeared.meta import Origin, ZenohMeta, _parse_attachment_schema, _parse_hlc
 
 
 class TestZenohMeta:
@@ -13,6 +13,7 @@ class TestZenohMeta:
         assert m.captures == {}
         assert m.schema is None
         assert m.issued_at is None
+        assert m.origin is Origin.LIVE
 
     def test_full(self):
         m = ZenohMeta(
@@ -32,6 +33,33 @@ class TestZenohMeta:
         assert d['schema'] == '1.0'
         # Bytes are base64-encoded via seared's Bytes field.
         assert isinstance(d['attachment'], str)
+
+
+class TestOrigin:
+    """Pin: ``Origin`` is the provenance enum on ``meta.origin`` —
+    string-valued, defaulting to ``LIVE``, round-tripping through
+    seared as its string value."""
+
+    def test_exported_from_package_root(self):
+        import zeared as z
+        assert z.Origin is Origin
+
+    def test_values(self):
+        assert Origin.LIVE == 'live'
+        assert Origin.REPLAY == 'replay'
+        assert Origin.WILL == 'will'
+
+    def test_from_sample_shape_defaults_live(self):
+        # ``from_sample`` never sets origin — the dispatch layer does.
+        m = ZenohMeta(key_expr='a/b')
+        assert m.origin is Origin.LIVE
+
+    def test_round_trip_as_string_value(self):
+        m = ZenohMeta(key_expr='a/b', origin=Origin.WILL)
+        d = ZenohMeta.dump(m)
+        assert d['origin'] == 'will'
+        m2 = ZenohMeta.load(d)
+        assert m2.origin is Origin.WILL
 
 
 class TestParseHLC:

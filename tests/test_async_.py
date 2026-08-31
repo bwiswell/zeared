@@ -449,3 +449,62 @@ class TestMixed:
         sub.close()
 
         assert sorted(received) == [1, 2]
+
+
+class TestAlistenMeta:
+    """``alisten(meta=True)`` (0.3.0) yields ``(msg, meta)`` tuples —
+    the async-iterator path's access to captures / schema / origin."""
+
+    def test_meta_true_yields_tuples_with_live_origin(self, session):
+        @z.zeared
+        class Tick(z.Message):
+            TOPIC = 'aio/metatick/{n}'
+            n: int = z.Int(required=True)
+
+        async def main():
+            z.session = session
+            got: list = []
+
+            async def producer():
+                await asyncio.sleep(0.1)
+                await Tick(n=7).asend()
+
+            async def consumer():
+                async for msg, meta in Tick.alisten(meta=True):
+                    got.append((msg.n, meta.key_expr, meta.origin))
+                    break
+
+            await asyncio.gather(consumer(), producer())
+            return got
+
+        got = asyncio.run(main())
+        assert got == [(7, 'aio/metatick/7', z.Origin.LIVE)]
+
+    def test_meta_true_marks_retained_replay(self, connected_pair):
+        session_a, session_b = connected_pair
+
+        @z.zeared
+        class Tele(z.Message):
+            TOPIC = 'aio/metaret/{id}'
+            RETAINED = True
+            id: int = z.Int(required=True)
+            v: int = z.Int(required=True)
+
+        Tele(id=1, v=10).send(session=session_a)
+        wait()
+
+        async def main():
+            seen: list = []
+
+            async def consumer():
+                async for msg, meta in Tele.alisten(
+                    session=session_b, meta=True,
+                ):
+                    seen.append((msg.v, meta.origin))
+                    break
+
+            await asyncio.wait_for(consumer(), timeout=3.0)
+            return seen
+
+        got = asyncio.run(main())
+        assert got == [(10, z.Origin.REPLAY)]

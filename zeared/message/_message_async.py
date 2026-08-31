@@ -61,12 +61,17 @@ class _MessageAsyncMixin:
         *,
         session: Optional['zenoh.Session'] = None,
         maxsize: int = 0,
+        meta: bool = False,
     ):
         """Async-iterator subscriber. ``async for msg in Cls.alisten(): ...``.
 
         Each incoming sample is decoded and delivered through an
         ``asyncio.Queue`` bridging from the Zenoh callback thread. Break
         out of the loop (or cancel the iterating task) to close cleanly.
+
+        ``meta=True`` yields ``(msg, meta)`` tuples — ``meta`` is the same
+        ``ZenohMeta`` a 2-arg ``on_message`` callback receives (captures,
+        schema, ``origin``, ...).
         """
         from ..async_ import alisten
-        return alisten(cls, session=session, maxsize=maxsize)
+        return alisten(cls, session=session, maxsize=maxsize, meta=meta)

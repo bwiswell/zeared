@@ -993,3 +993,60 @@ class TestPolarsFrameOnTheWire:
 
         assert len(received) == 1
         assert received[0].equals(df)
+
+
+class TestRetainedFetchOptOut:
+    """``on_message(cb, retained_fetch=False)`` — live-only subscription:
+    no cached values replay at subscribe time (or reconnect), live
+    samples still flow."""
+
+    def test_no_replay_but_live_still_flows(self, connected_pair):
+        session_a, session_b = connected_pair
+
+        @z.zeared
+        class Tele(z.Message):
+            TOPIC = 'rf/opt/{id}'
+            RETAINED = True
+            id: int = z.Int(required=True)
+            v: int = z.Int(required=True)
+
+        Tele(id=1, v=10).send(session=session_a)
+        wait(0.3)
+
+        received: list[tuple[int, z.Origin]] = []
+        sub = Tele.on_message(
+            lambda m, meta: received.append((m.v, meta.origin)),
+            session=session_b,
+            retained_fetch=False,
+        )
+        wait(0.5)
+        # The cached v=10 must NOT have been replayed.
+        assert received == []
+
+        Tele(id=1, v=20).send(session=session_a)
+        wait(0.5)
+        sub.close()
+
+        assert received == [(20, z.Origin.LIVE)]
+
+    def test_flag_stored_for_reconnect(self, session):
+        """``_redeclare`` consults the stored flag — pin that it survives
+        onto the handle (the reconnect path shares ``_fetch_retained``
+        with the subscribe-time path, covered in
+        ``test__subscriber_retained_fetch.py``)."""
+        @z.zeared
+        class Tele(z.Message):
+            TOPIC = 'rf/flag/{id}'
+            RETAINED = True
+            id: int = z.Int(required=True)
+            v: int = z.Int(required=True)
+
+        z.session = session
+        sub_default = Tele.on_message(lambda m: None)
+        sub_optout = Tele.on_message(lambda m: None, retained_fetch=False)
+        try:
+            assert sub_default._retained_fetch is True
+            assert sub_optout._retained_fetch is False
+        finally:
+            sub_default.close()
+            sub_optout.close()
