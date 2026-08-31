@@ -1,9 +1,8 @@
 """``_OnReconnectMixin`` — the ``on_reconnect`` callback registry + ``_fire_reconnect_callbacks`` driver.
 
-Mixin variant of Pattern B: the ``ManagedSession`` class composes this
-mixin via MRO so the callback-registry methods stay as methods (not
-helper functions taking ``self``). Per the convention codified in
-``CLAUDE.local.md``.
+``ManagedSession`` composes this stateless mixin via the MRO so the
+callback-registry methods stay as methods, rather than becoming helper
+functions taking ``self``.
 """
 
 from __future__ import annotations

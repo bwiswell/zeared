@@ -6,9 +6,9 @@ the current raw session — for namespace handles (``.liveliness()``,
 ``.zid()``, etc.) we use explicit wrappers so handles always reflect the
 current raw and never become stale.
 
-Primary file of the ``_managed_session`` Pattern B subdir. Method
-clusters extracted via mixin (per the variant codified in
-``CLAUDE.local.md``):
+Primary file of the ``_managed_session`` subdir. Method clusters are
+extracted into sibling modules as stateless mixins, composed here via the
+MRO so they stay methods on ``ManagedSession``:
 
 - ``_OnReconnectMixin`` (in ``_on_reconnect_mixin.py``) — the
   ``on_reconnect(cb)`` callback registry + ``_fire_reconnect_callbacks``

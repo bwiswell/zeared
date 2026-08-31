@@ -15,8 +15,9 @@ bridge is the consumer's to build):
   ``export type`` declarations for every message + referenced payload.
 - CLI: ``python -m zeared.doc.typescript <module-or-package> [-o out.ts] [--check]``.
 
-Requires ``seared >= 0.2.2`` (for ``seared.doc``). See
-project-plans/03-schema-docgen.md in the seared repo.
+Requires ``seared >= 0.2.2``, which is where ``seared.doc`` — the
+discovery / reference-closure / index / ``--check`` pipeline this module
+layers a Message-aware renderer onto — was introduced.
 """
 
 from .generate import build_docs, document, introspect, main, render_one

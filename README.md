@@ -45,7 +45,7 @@ pip install git+https://www.github.com/bwiswell/zeared.git
 uv add git+https://www.github.com/bwiswell/zeared.git
 ```
 
-Requires Python ≥ 3.11. Pulls in
+Requires Python ≥ 3.14. Pulls in
 [`seared`](https://www.github.com/bwiswell/seared), `eclipse-zenoh`, and
 `msgpack`.
 
@@ -72,7 +72,7 @@ class Telemetry(z.Message):
     id:    int            = z.Int(required=True)
     x:     float          = z.Float(required=True)
     y:     float          = z.Float(required=True)
-    label: Optional[str]  = z.Str()
+    label: str | None     = z.Str(default=None)
 
 
 # Open a session and set it as the default.
@@ -320,7 +320,7 @@ ID for a request/response bridge:
 class CliRequest(z.Message):
     TOPIC = 'workload/cli/request/{corr_id}'   # corr_id not on the payload
     cmd: str = z.Str(required=True)
-    args: list = z.Str(many=True, missing=[])
+    args: list = z.Str(many=True, default_factory=list)
 
 def on_request(msg: CliRequest, meta: z.ZenohMeta):
     corr_id = meta.captures['corr_id']         # routing plumbing
@@ -338,7 +338,7 @@ class AnyEvent(z.Message):
     TOPIC = 'peer/{name}/event'                # canonical (publishable)
     EXTRA_TOPICS = ('peer/**',)                # subscribe-only wildcard
     name:    str  = z.Str(required=True)
-    payload: dict = z.Dict()
+    payload: dict = z.Dict(default_factory=dict)
 ```
 
 For variable-depth tails on **publishable** topics, use a named
@@ -443,7 +443,7 @@ class PeerStatus(z.Message):
     LIVELINESS = True                 # opt in
     name:   str = z.Str(required=True)
     state:  str = z.Str(required=True)
-    detail: str = z.Str(missing='')
+    detail: str = z.Str(default='')
 
 
 # Producer — at startup:
@@ -1022,13 +1022,25 @@ default vs. `marshmallow` + Zenoh on the same schema:
 
 | Strategy                          | pub/s | wire (B) |
 |-----------------------------------|------:|---------:|
-| Zenoh + `marshmallow` (JSON)      | 3,950 | 796      |
-| `zeared` sync (msgpack, cached)   | 7,064 | 533      |
+| Zenoh + `marshmallow` (JSON)      | 3,837 | 796      |
+| `zeared` sync (msgpack, cached)   | 7,513 | 533      |
 
-zeared is ~80% faster and ~33% smaller on the wire. The full matrix
-(sync + async variants, JSON / msgpack, cached / uncached, async-iter
-+ async-callback shapes), methodology, and reproduction commands live
-in [`docs/overview/benchmarks.md`](docs/overview/benchmarks.md).
+zeared is ~96% faster and ~33% smaller on the wire.
+
+**"Pydantic + MQTT, or zeared?"** — the comparison people actually want.
+The short answer is that it depends on two independent things, and the
+honest numbers are less lopsided than either side's marketing: pydantic's
+compiled core beats pure-Python seared on serialization (~3.4x), Zenoh
+beats a broker-mediated MQTT hop on transport (~3.2x), and at default
+configuration against MQTT QoS 0 the two very nearly cancel. Against
+QoS 1 — what most production fleets run — zeared is ~2.8x ahead, and
+~4.9x with the optional `rusted` accelerator.
+
+The full matrix (both axes isolated, sync + async variants, JSON /
+msgpack, cached / uncached), methodology, caveats, and reproduction
+commands live in
+[`docs/overview/benchmarks.md`](docs/overview/benchmarks.md). Run them
+yourself with `uv run python -m bench`.
 
 ## Schema and timestamps
 
@@ -1139,6 +1151,24 @@ prod_sub  = Telemetry.on_message(prod_cb)                 # class default (dedup
 ```sh
 uv sync
 uv run pytest tests/
+```
+
+Four checks gate every commit, wired as `prek` hooks — run
+`uv run prek install` once per clone:
+
+```sh
+uv run ruff check          # lint
+uv run ruff format         # format
+uv run deptry .            # dependency hygiene
+uv run ty check            # type check
+```
+
+The benchmarks and their comparator libraries are repo-only, behind an
+opt-in extra:
+
+```sh
+uv sync --extra bench
+uv run python -m bench
 ```
 
 Tests mirror source layout exactly — one `test_*.py` per source file.

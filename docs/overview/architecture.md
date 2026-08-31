@@ -76,6 +76,33 @@ subscribers still honour sender-declared encodings — the flag only flips
 
 See [`_codec.md`](../_codec.md).
 
+## Source layout convention ("Pattern B")
+
+Most of the tree is flat modules. When one grows past what reads
+comfortably in a single file, it becomes a **subdirectory** instead:
+
+- A **primary file** named after the package (`message/message.py`,
+  `_managed_session/_managed_session.py`) holding the class itself —
+  declared attributes and anything that can't be lifted out.
+- **Sibling modules** holding extracted method clusters, one concern per
+  file (`_message_send.py`, `_zenoh_api_mixin.py`).
+- An `__init__.py` that re-exports the public names, so the import path
+  never changes when a module is split.
+
+Extracted clusters stay **methods**, via mixins composed onto the primary
+class through the MRO — not helper functions taking `self` or `cls`. The
+mixins hold no state (`__slots__ = ()`) and are never instantiated alone;
+they exist to keep `msg.send()` a method while letting `send` live in its
+own file. Where a mixin reaches for attributes the composed class owns,
+that contract is declared explicitly for the type checker rather than left
+implicit — see `_managed_session/_helpers.py`.
+
+Tests mirror this exactly: one `test_*.py` per source file, in a matching
+subdirectory.
+
+Subdirs following this shape: `message/`, `presence/`, `queryable/`,
+`subscriber/`, `_managed_session/`, `_reconnect/`, `_template/`.
+
 ## What lives where
 
 ```
