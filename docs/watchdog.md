@@ -9,6 +9,13 @@ One long-running thread per watchdog instance. The thread does
 `event.wait(timeout=N)` / `event.clear()` in a loop; the Zenoh delivery
 thread calls `ping()` from the dispatch path to wake the wait.
 
+**Only `Origin.LIVE` samples ping the watchdog** (0.3.0). A retained
+replay can't establish cadence from stale cached data, and a
+synthesised will — the producer *died* — can't reset the quiet timer.
+Consequence: a `startup_grace` subscriber whose only traffic was the
+subscribe-time replay correctly fires `on_quiet` when no live sample
+follows. (Pre-0.3.0, replays and wills pinged like live samples.)
+
 ```python
 class _SubscriberWatchdog:
     def __init__(self, interval, on_quiet, on_active, startup_grace=None):

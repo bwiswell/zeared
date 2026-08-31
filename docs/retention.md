@@ -4,7 +4,10 @@ MQTT-style retained messages on Zenoh. Each publisher of a retained-topic
 class keeps a local cache of the last payload per concrete topic and
 declares a Zenoh `Queryable` on its wildcard(s). Subscribers on a retained
 class automatically call `session.get(wildcard)` at subscribe time and
-pipe reply samples through the same dispatch path as live messages.
+pipe reply samples through the same dispatch path as live messages —
+marked `meta.origin = Origin.REPLAY`, so a 2-arg callback can tell cached
+state from live traffic (see [`meta.md`](meta.md)). A subscription that
+never wants replay opts out with `on_message(cb, retained_fetch=False)`.
 
 ## User surface
 
@@ -151,6 +154,11 @@ Retained-fetch replays are deduplicated against the live stream by default
 topic is matched against the most recent live sample for that topic; if
 the wire payload is identical, the reply is suppressed. Set
 `DEDUPE = False` on the subscriber class to opt out.
+
+Dedupe is a *suppression* heuristic, orthogonal to the `meta.origin`
+provenance signal — a replay that survives dedupe is still delivered
+with `origin = REPLAY`. An audit subscriber with `dedupe=False` sees
+every replay *and* can tell it is one.
 
 ## Non-goals (documented sharp edges)
 

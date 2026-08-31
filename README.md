@@ -24,6 +24,7 @@ once, get publish, subscribe, and topic routing for free.
 - **Subscriber watchdog.** Optional per-subscription freshness detector — `Cls.on_message(cb, expected_interval=N, on_quiet=, on_active=)` fires callbacks when a subscription goes silent and again when it resumes. Optimistic by default (waits for first message); `startup_grace=N` opts into "tell me if I haven't heard within N seconds of subscribing."
 - **Unified shutdown.** `z.release(session=sess)` walks every zeared-owned resource for the session in the right order — subscribers, queryables, publisher cache, retention queryable, presence observer, presence state, then `session.close()`. The graceful-shutdown path that used to take six separate calls is one.
 - **Retention dedupe by default.** `RETAINED` classes auto-deduplicate retention-fetch replies against live publishes via `(key_expr, timestamp)`. Opt out per class with `DEDUPE = False`.
+- **Replay-vs-live signal.** `meta.origin` tells a subscriber how each sample arrived — `z.Origin.LIVE` (a real publish), `z.Origin.REPLAY` (delivered from a retention cache at subscribe time or after reconnect), or `z.Origin.WILL` (presence-synthesised). Determined by the local delivery path, never read from the wire. Live-only subscriptions via `on_message(cb, retained_fetch=False)`; async-iterator access via `Cls.alisten(meta=True)`.
 - **Sync + async.** Every send/subscribe has an `a`-prefixed sibling: `await msg.asend()`, `async for msg in Cls.alisten(): ...`, `async with z.abatch(): ...`. `on_message(cb)` detects `async def` callbacks and schedules them on the running loop.
 - **Batching primitives.** `with z.batch(): ...` collects sends for atomic flush-or-discard on exception; `Cls.send_batch(items)` is the homogeneous-bulk shortcut. `asyncio` tasks get per-task isolation via `contextvars`.
 - **Multi-session from day one.** Module-level default, thread-local scoped override via `with z.session(other): ...`, and per-call `session=` kwarg — all three resolve in a fixed precedence.
@@ -171,6 +172,18 @@ sample schedules the coroutine on the loop via
 `asyncio.run_coroutine_threadsafe`. This keeps the sync publish path fast
 while letting the handler `await` downstream work.
 
+`alisten(meta=True)` yields `(msg, meta)` tuples instead of bare
+messages — the async-iterator path's access to `meta.captures`,
+`meta.schema`, and `meta.origin` (the replay-vs-live signal):
+
+```python
+async for msg, meta in Telemetry.alisten(meta=True):
+    if meta.origin is z.Origin.REPLAY:
+        seed(msg)          # initial state sync
+    else:
+        react(msg)         # live change
+```
+
 Sync and async calls share state: `z.session`, `z.debug`, the publisher
 cache, and the batch buffer (stored in a `ContextVar` so each `asyncio`
 task gets its own). Mix freely.
@@ -214,6 +227,7 @@ Rules:
 - `unretain()` requires `RETAINED = True`; the wire signal is a native Zenoh `DELETE` sample. `on_message`'s `cb` never sees DELETEs — register `on_message(cb, on_remove=...)` for the tombstone feed (below).
 - Queryables are declared lazily on the first retained publish — a class that declares `RETAINED = True` but never sends wastes nothing.
 - Retained fetches are deduplicated against the live stream by default — a retained reply whose wire payload matches the most recent live sample for the same concrete topic is suppressed. Set `DEDUPE = False` on the subscriber class to opt out.
+- Retained-fetch deliveries are marked `meta.origin = z.Origin.REPLAY` (live samples are `LIVE`), so a 2-arg callback can seed state from replays without re-acting on them. The fetch drains before `on_message` returns — after that, everything is live or marked. A subscription that never wants replay passes `retained_fetch=False` (skips the fetch — and its blocking `session.get` — at subscribe time and on every reconnect).
 - TTL via `RETENTION_TTL = N` (seconds) on the class, or `peer(retention_ttl=N)` for a session-wide fallback (`auto_reconnect=True` only). Class-level always wins; session-level fills in for unconfigured classes. Lazy expiration — entries are checked + pruned on the next subscriber retained-fetch.
 
 ### Removals: the tombstone feed and full-set reconcile
@@ -444,7 +458,8 @@ SharedLlmRegistry(peer='alice').register_will()
 
 
 # Subscriber — receives the will as a synthesised sample, identical shape
-# to a real publish. The caller's callback fires either way.
+# to a real publish (a 2-arg callback sees meta.origin = z.Origin.WILL).
+# The caller's callback fires either way.
 def handler(msg: PeerStatus):
     print(msg.name, msg.state, msg.detail)
 
@@ -515,6 +530,12 @@ Telemetry.on_message(
 `on_quiet` and `on_active` accept `async def` callbacks. They fire on a
 dedicated watchdog thread — not the Zenoh delivery thread — so code that
 mutates shared state needs to handle that.
+
+Only **live** samples feed the watchdog (0.3.0): a retained replay
+can't establish cadence from stale cached data, and a synthesised will
+— the producer died — can't reset the quiet timer. A `startup_grace`
+subscriber whose only traffic was the subscribe-time replay correctly
+fires `on_quiet` when no live sample follows.
 
 When the watchdog is constructed without a running event loop (the
 common case — `Cls.on_message` called from sync code), async callbacks
@@ -658,7 +679,7 @@ Arbitrary strings passed to `send(topic=...)` raise `TopicError`.
 `on_message(cb)` inspects `cb`'s arity once at subscribe time:
 
 - `cb(msg)` — decoded message only.
-- `cb(msg, meta)` — `meta` is a `ZenohMeta` seared dataclass carrying the resolved `key_expr`, `timestamp`, wire `encoding`, `source_info`, and optional `attachment`. No Zenoh types leak into user code.
+- `cb(msg, meta)` — `meta` is a `ZenohMeta` seared dataclass carrying the resolved `key_expr`, `timestamp`, wire `encoding`, `source_info`, optional `attachment`, and `origin` (the replay-vs-live signal: `z.Origin.LIVE` / `REPLAY` / `WILL`). No Zenoh types leak into user code.
 
 ```python
 def on_telemetry(msg: Telemetry, meta: z.ZenohMeta) -> None:

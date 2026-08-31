@@ -60,7 +60,7 @@ class Subscriber(Generic[M]):
         '_watchdog', '_closed',
         # Redeclaration state — populated by `_declare`, used on reconnect.
         '_msg_cls', '_dispatch', '_on_error', '_auto_reconnect',
-        '_seen_mismatches',
+        '_seen_mismatches', '_retained_fetch',
     )
 
     def __init__(
@@ -81,6 +81,7 @@ class Subscriber(Generic[M]):
         self._dispatch = None
         self._on_error = None
         self._auto_reconnect = True
+        self._retained_fetch = True
         # Pointer to the dispatch closure's schema-mismatch cache; held on
         # the instance so reconnect can clear it (peer zids may have
         # changed; stale entries would silently drop legit mismatches).
@@ -100,6 +101,7 @@ class Subscriber(Generic[M]):
         auto_reconnect: bool = True,
         dedupe: Optional[bool] = None,
         on_remove: Optional[Callable] = None,
+        retained_fetch: bool = True,
     ) -> 'Subscriber':
         tpls = msg_cls._templates()
         cb = _adapt_async_callback(cb)
@@ -170,8 +172,10 @@ class Subscriber(Generic[M]):
 
         # Retained-fetch: for RETAINED classes, pull any cached values from
         # peer queryables via session.get() on each declared wildcard. Reply
-        # samples flow through the same dispatch as live samples.
-        if getattr(msg_cls, 'RETAINED', False):
+        # samples flow through the same dispatch as live samples, marked
+        # origin=REPLAY. ``retained_fetch=False`` skips the fetch entirely
+        # (live-only subscriber) — here and on every reconnect.
+        if getattr(msg_cls, 'RETAINED', False) and retained_fetch:
             _fetch_retained(session, tpls.all, dispatch, msg_cls, on_error)
 
         # Presence-aware subscribers: for LIVELINESS classes, register an
@@ -199,6 +203,7 @@ class Subscriber(Generic[M]):
         sub_handle._on_error = on_error
         sub_handle._auto_reconnect = auto_reconnect
         sub_handle._seen_mismatches = seen_mismatches
+        sub_handle._retained_fetch = retained_fetch
         _register_subscriber(session, sub_handle)
         return sub_handle
 
@@ -206,8 +211,9 @@ class Subscriber(Generic[M]):
         """Rebuild the underlying ``zenoh.Subscriber`` set against
         ``new_raw_session``. Called by the reconnect machinery.
 
-        Re-fires the retained fetch (RETAINED classes) so cached state
-        replays — dedupe (0.0.9) suppresses already-seen samples.
+        Re-fires the retained fetch (RETAINED classes, unless the
+        subscription opted out via ``retained_fetch=False``) so cached
+        state replays — dedupe (0.0.9) suppresses already-seen samples.
         Re-registers the presence dispatcher with the post-reconnect
         observer. Clears the schema-mismatch warn-once cache because
         peer zids may have changed.
@@ -238,7 +244,7 @@ class Subscriber(Generic[M]):
             ) from e
         self._zenoh_subs = tuple(new_subs)
 
-        if getattr(msg_cls, 'RETAINED', False):
+        if getattr(msg_cls, 'RETAINED', False) and self._retained_fetch:
             _fetch_retained(
                 new_raw_session, tpls.all, dispatch, msg_cls, self._on_error,
             )

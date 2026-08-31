@@ -21,7 +21,7 @@ from ..errors import (
     SchemaMismatchError,
     SubscriptionError,
 )
-from ..meta import _parse_attachment_schema, from_sample
+from ..meta import Origin, _parse_attachment_schema, from_sample
 
 if TYPE_CHECKING:
     import zenoh
@@ -93,7 +93,7 @@ def _make_presence_dispatcher(msg_cls, templates, dispatch) -> Callable:
         if match is None:
             return False
         try:
-            dispatch(syn_sample)
+            dispatch(syn_sample, origin=Origin.WILL)
         except Exception:  # noqa: BLE001
             # dispatch() already routes its own exceptions through on_error
             # / logging — nothing extra to do here.
@@ -138,16 +138,23 @@ def _build_dispatch(
     ``captures`` carry the removed key's template slots; a tombstone has no
     payload, so no typed instance is reconstructed. When ``on_remove`` is
     ``None``, DELETE samples are dropped silently (historical behaviour).
+
+    The returned closure takes a keyword-only ``origin`` (default
+    ``Origin.LIVE`` — the underlying ``zenoh.Subscriber`` calls it with the
+    sample alone). The retained-fetch and presence paths pass ``REPLAY`` /
+    ``WILL`` respectively; the value lands on ``meta.origin`` and gates the
+    watchdog ping (cadence measures the live stream only).
     """
     import zenoh as _zenoh
     import zeared as z
 
     tpls = msg_cls._templates()
 
-    def _dispatch_remove(sample: 'zenoh.Sample') -> None:
+    def _dispatch_remove(sample: 'zenoh.Sample', origin: Origin) -> None:
         key_expr = str(sample.key_expr)
         try:
             meta = from_sample(sample)
+            meta.origin = origin
             match = tpls.match(key_expr)
             if match is not None:
                 _tpl, captures = match
@@ -168,12 +175,14 @@ def _build_dispatch(
                     '%s on_remove callback raised', msg_cls.__name__,
                 )
 
-    def dispatch(sample: 'zenoh.Sample') -> None:
+    def dispatch(
+        sample: 'zenoh.Sample', *, origin: Origin = Origin.LIVE,
+    ) -> None:
         # DELETE samples (tombstones): route to on_remove if the subscriber
         # registered one, else drop silently (no typed instance to build).
         if sample.kind == _zenoh.SampleKind.DELETE:
             if on_remove is not None:
-                _dispatch_remove(sample)
+                _dispatch_remove(sample, origin)
             return
         raw = bytes(sample.payload)
         key_expr = str(sample.key_expr)
@@ -247,6 +256,7 @@ def _build_dispatch(
         try:
             if wants_meta:
                 meta = from_sample(sample)
+                meta.origin = origin
                 if captures:
                     meta.captures = dict(captures)
                 cb(msg, meta)
@@ -265,8 +275,11 @@ def _build_dispatch(
                     '%s subscriber callback raised', msg_cls.__name__,
                 )
             return
-        # Successful dispatch — feed the watchdog (if any).
-        if watchdog is not None:
+        # Successful dispatch — feed the watchdog (if any). Live samples
+        # only: cadence measures the live stream, so a retained replay
+        # can't establish it from stale data and a will (the producer
+        # died) can't reset the quiet timer.
+        if watchdog is not None and origin is Origin.LIVE:
             watchdog.ping()
 
     return dispatch

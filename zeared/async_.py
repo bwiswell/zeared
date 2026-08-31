@@ -216,6 +216,7 @@ async def alisten(
     *,
     session: Optional['zenoh.Session'] = None,
     maxsize: int = 0,
+    meta: bool = False,
 ) -> AsyncIterator:
     """Async generator yielding decoded messages for ``cls``.
 
@@ -226,12 +227,20 @@ async def alisten(
     ``maxsize=0`` (default) means an unbounded queue; set a positive value
     to apply backpressure (delivery blocks when the queue is full, which
     for Zenoh means dropping to zenoh's internal buffering).
+
+    ``meta=True`` yields ``(msg, meta)`` tuples instead of bare messages —
+    ``meta`` is the same ``ZenohMeta`` a 2-arg ``on_message`` callback
+    receives (captures, schema, ``origin``, ...).
     """
     queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
     loop = asyncio.get_running_loop()
 
-    def _cb(msg: 'Message') -> None:
-        loop.call_soon_threadsafe(queue.put_nowait, msg)
+    if meta:
+        def _cb(msg: 'Message', m) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, (msg, m))
+    else:
+        def _cb(msg: 'Message') -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, msg)
 
     sub = cls.on_message(_cb, session=session)
     try:

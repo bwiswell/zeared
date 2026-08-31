@@ -74,8 +74,25 @@ during setup roll back any subs already created.
 When `msg_cls.RETAINED` is `True`, `_declare` issues a `session.get()` per
 declared template wildcard after bringing up the live subscribers. Reply
 samples — cached payloads from peer `_RetentionCache` queryables — flow
-through the same dispatch function used for live samples. Decode failures
+through the same dispatch function used for live samples, marked
+`meta.origin = Origin.REPLAY` so 2-arg callbacks can distinguish cached
+state from live traffic (see [`../meta.md`](../meta.md)). Decode failures
 route through the unified `on_error` hook. See [`retention.md`](retention.md).
+
+The fetch drains synchronously inside `_declare`, so by the time
+`on_message` returns every subscribe-time replay has been delivered (or
+dedupe-suppressed) — the initial-sync boundary. Live samples that
+interleave during the fetch are labeled `LIVE`.
+
+Per-subscription opt-out — a **live-only** subscriber:
+
+```python
+sub = Telemetry.on_message(cb, retained_fetch=False)
+```
+
+No cached values replay at subscribe time or after a reconnect, and the
+blocking `session.get()` those fetches issue is skipped entirely. The
+flag is stored on the handle so `_redeclare` honours it too.
 
 `Cls.fetch_retained()` exposes the same `session.get()` sweep as a
 standalone, one-shot call that **returns** the decoded instances instead of
@@ -116,7 +133,8 @@ stashed wills for that peer and calls each interested dispatcher with a
 synthesised sample. The dispatcher matches the will's `target_key_expr`
 against this class's templates; if it matches, the subscriber's normal
 `dispatch` function fires — the callback sees a regular `cb(msg)` (or
-`cb(msg, meta)`) with `meta.source_info = peer_zid`.
+`cb(msg, meta)`) with `meta.source_info = peer_zid` and
+`meta.origin = Origin.WILL`.
 
 `Subscriber.close()` unregisters from the observer. See [`presence.md`](presence.md).
 

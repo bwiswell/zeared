@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code artifacts
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+
+# In-project plans (local working docs, not committed)
+/project-plans/

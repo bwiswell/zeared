@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import enum
 import logging
 import re
 from typing import TYPE_CHECKING, Optional
@@ -14,6 +15,19 @@ if TYPE_CHECKING:
 
 
 _log = logging.getLogger('zeared.meta')
+
+
+class Origin(enum.StrEnum):
+    """Provenance of a dispatched sample — how it reached this subscriber.
+
+    Determined entirely by the local delivery path (never read from the
+    wire): the live ``zenoh.Subscriber`` callback, a retained-fetch
+    ``session.get`` reply, or the presence observer's will synthesis.
+    """
+    LIVE = 'live'      # delivered by the live zenoh subscriber
+    REPLAY = 'replay'  # delivered from a retention cache via retained-fetch
+                       # (subscribe-time and post-reconnect)
+    WILL = 'will'      # synthesised by the presence observer
 
 
 @s.seared
@@ -35,6 +49,12 @@ class ZenohMeta(s.Seared):
     ``issued_at`` is parsed from ``sample.timestamp`` (Zenoh HLC) when
     timestamping is enabled. ``None`` when no timestamp on the sample
     (synthesised wills, raw publishes pre-0.0.13, etc.).
+
+    ``origin`` is the sample's provenance — ``Origin.LIVE`` for a real
+    publish through the live subscriber, ``Origin.REPLAY`` for a
+    retained-fetch delivery (subscribe-time or post-reconnect), and
+    ``Origin.WILL`` for a presence-synthesised will. Set by the dispatch
+    layer; ``from_sample`` defaults it to ``LIVE``.
     """
     key_expr:    str                          = s.Str(required=True)
     timestamp:   Optional[str]                = s.Str()          # raw HLC string
@@ -44,6 +64,7 @@ class ZenohMeta(s.Seared):
     attachment:  Optional[bytes]              = s.Bytes()
     schema:      Optional[str]                = s.Str()
     captures:    dict                         = s.Dict(default_factory=dict)
+    origin:      Origin                       = s.Enum(enum=Origin, default=Origin.LIVE)
 
 
 # Zenoh HLC sample timestamp shape: ``<8-hex-seconds><8-hex-frac>/<id>``.

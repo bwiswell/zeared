@@ -66,7 +66,7 @@ from .errors import (
     SubscriptionError, TopicError, ZearedError,
 )
 from .message import Message
-from .meta import ZenohMeta
+from .meta import Origin, ZenohMeta
 from .presence import clear_observer, clear_presence_state
 from .publisher import clear_publisher_cache, published_topics
 from .queryable import Queryable, QueryContext, clear_queryable_cache
@@ -74,7 +74,7 @@ from .retention import clear_retention_cache
 from .subscriber import Subscriber
 
 
-__version__ = '0.2.8'
+__version__ = '0.2.9'
 
 # Module-level defaults.
 # ``session`` is a dual-role handle (see ``_SessionHandle`` docstring) — the
@@ -123,6 +123,7 @@ __all__ = [
     'Mode',
     'NoSessionError',
     'OnReconnectHandle',
+    'Origin',
     'QueryContext',
     'QueryError',
     'Queryable',

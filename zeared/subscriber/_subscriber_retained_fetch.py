@@ -9,6 +9,7 @@ import logging
 from typing import TYPE_CHECKING, Callable, List, Optional, Type
 
 from ..errors import RetainedFetchError
+from ..meta import Origin
 
 if TYPE_CHECKING:
     import zenoh
@@ -27,7 +28,9 @@ def _fetch_retained(
     on_error: Optional[Callable],
 ) -> None:
     """Issue ``session.get(wildcard)`` per declared template and route each
-    reply sample through the subscriber's dispatch path.
+    reply sample through the subscriber's dispatch path with
+    ``origin=Origin.REPLAY`` — these are cached values delivered after the
+    fact, not publishes the subscriber witnessed.
 
     Failures to issue the get() are logged (no useful recovery) — the live
     subscriber is still active and will deliver future messages.
@@ -46,7 +49,7 @@ def _fetch_retained(
             if ok is None:
                 continue   # error reply; skip
             try:
-                dispatch(ok)
+                dispatch(ok, origin=Origin.REPLAY)
             except Exception as exc:  # noqa: BLE001
                 raw = bytes(getattr(ok, 'payload', b''))
                 wrapped = RetainedFetchError(

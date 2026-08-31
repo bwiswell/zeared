@@ -16,6 +16,7 @@ class ZenohMeta(z.Zeared):
     attachment:  Optional[bytes]              = z.Bytes()
     schema:      Optional[str]                = z.Str()       # publisher's class SCHEMA
     captures:    dict                         = z.Dict(missing={})
+    origin:      Origin                       = z.Enum(enum=Origin, default=Origin.LIVE)
 ```
 
 ## `meta.captures`
@@ -65,6 +66,35 @@ session with timestamping disabled).
 For users who need the raw HLC string (e.g. for cross-replay dedupe
 ordering), `meta.timestamp` carries it unmodified. `meta.issued_at` is
 the friendly form.
+
+## `meta.origin` — the replay-vs-live signal
+
+`Origin` (exported as `z.Origin`) is a `StrEnum` carrying the sample's
+provenance — *how it reached this subscriber*:
+
+| Value | Meaning |
+|-------|---------|
+| `Origin.LIVE`   | Delivered by the live zenoh subscriber — a real publish. |
+| `Origin.REPLAY` | Delivered from a retention cache via retained-fetch (at subscribe time or after a reconnect). Cached state, not an event the subscriber witnessed. |
+| `Origin.WILL`   | Synthesised by the presence observer when a peer's liveliness token disappeared. |
+
+The value is determined entirely by the **local delivery path** — it is
+never read from (or written to) the wire, so mixed-version fleets
+interoperate untouched. Set by the dispatch layer; `from_sample`
+defaults it to `LIVE`.
+
+The canonical use is the sync-then-react pattern on `RETAINED` classes:
+
+```python
+def on_state(msg: TagState, meta: z.ZenohMeta):
+    if meta.origin is z.Origin.REPLAY:
+        seed(msg)         # initial state sync — don't act on it
+    else:
+        react(msg)        # live change (or a will)
+```
+
+Prefer this over the old `issued_at is None` heuristic for detecting
+wills — that is also true for any sample from an unstamped session.
 
 ## `from_sample(sample: zenoh.Sample) -> ZenohMeta`
 
