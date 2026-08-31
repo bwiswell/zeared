@@ -9,10 +9,13 @@ walk handles both. Output is a set of concrete topics that intersect the
 query — semantically identical to the prior linear search, just pruned
 by the trie structure.
 """
+
 from __future__ import annotations
 
-from typing import Iterable, Iterator, List
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # Sentinel for the leaf-set inside each trie node — using a string with
 # leading/trailing underscores avoids any collision with real path segments.
@@ -50,7 +53,7 @@ class _PrefixIndex:
     def remove(self, topic: str) -> None:
         """Remove a concrete topic. Idempotent (silently ignores misses)."""
         segs = topic.split('/')
-        path: List[dict] = [self._root]
+        path: list[dict] = [self._root]
         node = self._root
         for seg in segs:
             child = node.get(seg)
@@ -82,7 +85,7 @@ class _PrefixIndex:
         segs = query_key.split('/')
         yield from self._walk(self._root, segs, 0)
 
-    def _walk(self, node: dict, segs: List[str], i: int) -> Iterator[str]:
+    def _walk(self, node: dict, segs: list[str], i: int) -> Iterator[str]:  # noqa: C901
         if i == len(segs):
             leaves = node.get(_LEAF_KEY)
             if leaves:
@@ -93,7 +96,7 @@ class _PrefixIndex:
             # Match zero or more remaining segments. ``**`` may be the LAST
             # segment of the query (the only form zeared currently produces),
             # but handle anywhere for completeness.
-            remaining = segs[i + 1:]
+            remaining = segs[i + 1 :]
             if not remaining:
                 # Trailing `**` matches one-or-more remaining segments.
                 # Emit only descendants — leaves at the current node
@@ -117,9 +120,8 @@ class _PrefixIndex:
             if child is not None:
                 yield from self._walk(child, segs, i + 1)
 
-    def _walk_starstar(self, node: dict, remaining: List[str]) -> Iterator[str]:
-        """Handle non-trailing ``**``: try each depth where ``remaining``
-        could line up against the trie structure."""
+    def _walk_starstar(self, node: dict, remaining: list[str]) -> Iterator[str]:
+        """Handle non-trailing ``**``: try each depth where ``remaining`` could line up against the trie structure."""
         # First option: ** matched zero segments here — try matching
         # `remaining` from this node directly.
         yield from self._walk(node, remaining, 0)

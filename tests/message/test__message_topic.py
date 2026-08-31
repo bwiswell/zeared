@@ -5,6 +5,7 @@ multi-segment field-binding validation).
 End-to-end coverage lives in ``test_message.py``; this file targets
 the mixin's behaviour directly.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -30,14 +31,16 @@ class TestTemplateCache:
 
         t1 = M._templates()
         t2 = M._templates()
-        assert t1 is t2   # cached
+        assert t1 is t2  # cached
 
     def test_missing_topic_raises(self):
         with pytest.raises(z.TopicError, match='TOPIC is not defined'):
+
             @z.zeared
             class M(z.Message):
                 # No TOPIC declared.
                 x: int = z.Int(required=True)
+
             M._templates()
 
 
@@ -83,9 +86,11 @@ class TestMultiSegmentFieldValidation:
         M._templates()
 
     def test_non_str_multi_slot_rejected(self):
-        with pytest.raises(z.TopicError, match='must bind to z.Str'):
+        with pytest.raises(z.TopicError, match=r'must bind to z\.Str'):
+
             @z.zeared
             class M(z.Message):
                 TOPIC = 'log/{tail**}'
                 tail: int = z.Int(required=True)
+
             M._templates()

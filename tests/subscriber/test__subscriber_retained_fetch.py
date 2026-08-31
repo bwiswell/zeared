@@ -7,6 +7,7 @@ End-to-end retained-fetch behaviour is covered by ``test_retention.py``
 and ``test_subscriber.py``; this file confirms the module's public
 surface.
 """
+
 from __future__ import annotations
 
 from zeared.meta import Origin
@@ -26,6 +27,7 @@ class _FakeReply:
 class _FakeSession:
     """Stub with just enough surface for ``_fetch_retained``: ``get``
     returns one canned reply per call."""
+
     def __init__(self, replies):
         self._replies = replies
 

@@ -24,7 +24,10 @@ class TestZenohMeta:
             attachment=b'extra',
             schema='1.0',
             issued_at=datetime.datetime(
-                2026, 1, 1, tzinfo=datetime.timezone.utc,
+                2026,
+                1,
+                1,
+                tzinfo=datetime.UTC,
             ),
         )
         d = ZenohMeta.dump(m)
@@ -42,6 +45,7 @@ class TestOrigin:
 
     def test_exported_from_package_root(self):
         import zeared as z
+
         assert z.Origin is Origin
 
     def test_values(self):
@@ -81,7 +85,7 @@ class TestParseHLC:
         assert isinstance(result, datetime.datetime)
         assert result.tzinfo is not None
         # Within a fractional second of expected.
-        expected = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+        expected = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
         assert abs((result - expected).total_seconds()) < 1.0
 
     def test_returns_none_on_garbled(self):
@@ -100,11 +104,13 @@ class TestParseAttachmentSchema:
 
     def test_returns_schema_when_present(self):
         from zeared import _codec as codec
+
         att = codec.pack({'schema': '1.0'}, 'msgpack')
         assert _parse_attachment_schema(att) == '1.0'
 
     def test_returns_none_when_field_absent(self):
         from zeared import _codec as codec
+
         att = codec.pack({'other': 'x'}, 'msgpack')
         assert _parse_attachment_schema(att) is None
 
@@ -113,5 +119,6 @@ class TestParseAttachmentSchema:
 
     def test_returns_none_on_non_dict(self):
         from zeared import _codec as codec
+
         att = codec.pack(['not-a-dict'], 'msgpack')
         assert _parse_attachment_schema(att) is None

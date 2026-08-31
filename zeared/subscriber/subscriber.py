@@ -6,10 +6,12 @@ retained-fetch helper lives in ``_subscriber_retained_fetch.py``;
 the module-level subscriber registry used by
 ``z.release(session=)`` lives in ``_subscriber_registry.py``.
 """
+
 from __future__ import annotations
 
+import contextlib
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Callable, Generic, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Self, TypeVar
 
 from .._managed_session import resolve_raw
 from ..errors import SubscriptionError
@@ -27,9 +29,13 @@ from ._subscriber_registry import (
 from ._subscriber_retained_fetch import _fetch_retained
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import zenoh
 
+    from .._managed_session import ManagedSession, SessionLike
     from ..message import Message
+    from ..watchdog import _SubscriberWatchdog
 
 
 # Type parameter for generic-parameterised ``Subscriber[Cls]``. Bound to
@@ -38,7 +44,7 @@ if TYPE_CHECKING:
 M = TypeVar('M', bound='Message')
 
 
-class Subscriber(Generic[M]):
+class Subscriber[M: 'Message']:
     """Zeared subscription handle.
 
     Wraps N underlying ``zenoh.Subscriber`` instances — one per declared
@@ -56,20 +62,28 @@ class Subscriber(Generic[M]):
     """
 
     __slots__ = (
-        '_zenoh_subs', '_session', '_presence_dispatcher',
-        '_watchdog', '_closed',
+        '_auto_reconnect',
+        '_closed',
+        '_dispatch',
         # Redeclaration state — populated by `_declare`, used on reconnect.
-        '_msg_cls', '_dispatch', '_on_error', '_auto_reconnect',
-        '_seen_mismatches', '_retained_fetch',
+        '_msg_cls',
+        '_on_error',
+        '_presence_dispatcher',
+        '_retained_fetch',
+        '_seen_mismatches',
+        '_session',
+        '_watchdog',
+        '_zenoh_subs',
     )
 
     def __init__(
         self,
         zenoh_subs: tuple,
-        session=None,
-        presence_dispatcher=None,
-        watchdog=None,
-    ):
+        session: SessionLike | None = None,
+        presence_dispatcher: Callable[..., bool] | None = None,
+        watchdog: _SubscriberWatchdog | None = None,
+    ) -> None:
+        """Wrap already-declared zenoh subscribers as a zeared handle."""
         self._zenoh_subs = zenoh_subs
         self._session = session
         self._presence_dispatcher = presence_dispatcher
@@ -85,25 +99,25 @@ class Subscriber(Generic[M]):
         # Pointer to the dispatch closure's schema-mismatch cache; held on
         # the instance so reconnect can clear it (peer zids may have
         # changed; stale entries would silently drop legit mismatches).
-        self._seen_mismatches: 'Optional[OrderedDict[tuple, None]]' = None
+        self._seen_mismatches: OrderedDict[tuple, None] | None = None
 
     @classmethod
-    def _declare(
+    def _declare(  # noqa: PLR0913, PLR0917
         cls,
-        msg_cls: Type['Message'],
-        session: 'zenoh.Session',
+        msg_cls: type[Message],
+        session: SessionLike,
         cb: Callable[..., None],
-        on_error: Optional[Callable[[Exception, bytes], None]],
-        expected_interval: Optional[float] = None,
-        on_quiet: Optional[Callable] = None,
-        on_active: Optional[Callable] = None,
-        startup_grace: Optional[float] = None,
-        auto_reconnect: bool = True,
-        dedupe: Optional[bool] = None,
-        on_remove: Optional[Callable] = None,
-        retained_fetch: bool = True,
-    ) -> 'Subscriber':
-        tpls = msg_cls._templates()
+        on_error: Callable[[Exception, bytes], None] | None,
+        expected_interval: float | None = None,
+        on_quiet: Callable | None = None,
+        on_active: Callable | None = None,
+        startup_grace: float | None = None,
+        auto_reconnect: bool = True,  # noqa: FBT001, FBT002
+        dedupe: bool | None = None,  # noqa: FBT001
+        on_remove: Callable | None = None,
+        retained_fetch: bool = True,  # noqa: FBT001, FBT002
+    ) -> Subscriber:
+        tpls = msg_cls._templates()  # noqa: SLF001
         cb = _adapt_async_callback(cb)
         wants_meta = _wants_meta(cb)
         # DELETE-sample (tombstone) callback — async-adapted like ``cb`` so
@@ -115,8 +129,11 @@ class Subscriber(Generic[M]):
         watchdog = None
         if expected_interval is not None:
             from ..watchdog import _SubscriberWatchdog
+
             watchdog = _SubscriberWatchdog(
-                expected_interval, on_quiet, on_active,
+                expected_interval,
+                on_quiet,
+                on_active,
                 startup_grace=startup_grace,
             )
 
@@ -128,19 +145,19 @@ class Subscriber(Generic[M]):
         # lexicographic ordering matches temporal ordering.
         class_dedupe = getattr(msg_cls, 'DEDUPE', True)
         effective_dedupe = dedupe if dedupe is not None else class_dedupe
-        dedupe_active = (
-            getattr(msg_cls, 'RETAINED', False) and effective_dedupe
-        )
-        seen_ts: 'dict[str, str]' = {}
+        dedupe_active = getattr(msg_cls, 'RETAINED', False) and effective_dedupe
+        seen_ts: dict[str, str] = {}
 
         # Schema-mismatch warn-once cache — bounded ``OrderedDict``
         # keyed on (sender_zid, observed_schema). Cleared on close and
         # on `_redeclare` (post-reconnect; peer zids change).
         expected_schema = getattr(msg_cls, 'SCHEMA', None)
-        seen_mismatches: 'OrderedDict[tuple, None]' = OrderedDict()
+        seen_mismatches: OrderedDict[tuple, None] = OrderedDict()
 
         dispatch = _build_dispatch(
-            msg_cls, on_error, cb,
+            msg_cls,
+            on_error,
+            cb,
             wants_meta=wants_meta,
             dedupe_active=dedupe_active,
             expected_schema=expected_schema,
@@ -159,16 +176,13 @@ class Subscriber(Generic[M]):
         zenoh_subs: list = []
         try:
             for tpl in tpls.all:
-                zenoh_subs.append(raw.declare_subscriber(tpl.wildcard, dispatch))
-        except Exception as e:  # noqa: BLE001
+                zenoh_subs.append(raw.declare_subscriber(tpl.wildcard, dispatch))  # noqa: PERF401  (partial list drives rollback below)
+        except Exception as e:
             for sub in zenoh_subs:
-                try:
+                with contextlib.suppress(Exception):
                     sub.undeclare()
-                except Exception:  # noqa: BLE001
-                    pass
-            raise SubscriptionError(
-                f'{msg_cls.__name__}: failed to declare subscriber: {e}'
-            ) from e
+            msg = f'{msg_cls.__name__}: failed to declare subscriber: {e}'
+            raise SubscriptionError(msg) from e
 
         # Retained-fetch: for RETAINED classes, pull any cached values from
         # peer queryables via session.get() on each declared wildcard. Reply
@@ -185,9 +199,12 @@ class Subscriber(Generic[M]):
         presence_dispatcher = None
         if getattr(msg_cls, 'LIVELINESS', False):
             presence_dispatcher = _make_presence_dispatcher(
-                msg_cls, tpls, dispatch,
+                msg_cls,
+                tpls,
+                dispatch,
             )
             from ..presence import get_observer
+
             observer = get_observer(session)
             observer.start()
             observer.register(presence_dispatcher)
@@ -207,9 +224,10 @@ class Subscriber(Generic[M]):
         _register_subscriber(session, sub_handle)
         return sub_handle
 
-    def _redeclare(self, new_raw_session, managed_session) -> None:
-        """Rebuild the underlying ``zenoh.Subscriber`` set against
-        ``new_raw_session``. Called by the reconnect machinery.
+    def _redeclare(self, new_raw_session: zenoh.Session, managed_session: ManagedSession) -> None:
+        """Rebuild the underlying ``zenoh.Subscriber`` set against ``new_raw_session``.
+
+        Called by the reconnect machinery.
 
         Re-fires the retained fetch (RETAINED classes, unless the
         subscription opted out via ``retained_fetch=False``) so cached
@@ -225,28 +243,29 @@ class Subscriber(Generic[M]):
 
         msg_cls = self._msg_cls
         dispatch = self._dispatch
-        tpls = msg_cls._templates()
+        tpls = msg_cls._templates()  # noqa: SLF001
 
         new_subs: list = []
         try:
             for tpl in tpls.all:
-                new_subs.append(
+                new_subs.append(  # noqa: PERF401  (partial list drives rollback below)
                     new_raw_session.declare_subscriber(tpl.wildcard, dispatch),
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             for s in new_subs:
-                try:
+                with contextlib.suppress(Exception):
                     s.undeclare()
-                except Exception:  # noqa: BLE001
-                    pass
-            raise SubscriptionError(
-                f'{msg_cls.__name__}: redeclare after reconnect failed: {e}'
-            ) from e
+            msg = f'{msg_cls.__name__}: redeclare after reconnect failed: {e}'
+            raise SubscriptionError(msg) from e
         self._zenoh_subs = tuple(new_subs)
 
         if getattr(msg_cls, 'RETAINED', False) and self._retained_fetch:
             _fetch_retained(
-                new_raw_session, tpls.all, dispatch, msg_cls, self._on_error,
+                new_raw_session,
+                tpls.all,
+                dispatch,
+                msg_cls,
+                self._on_error,
             )
 
         # Re-register with the per-session presence observer if applicable.
@@ -254,37 +273,37 @@ class Subscriber(Generic[M]):
         # bind to the managed session as the durable identity.
         if self._presence_dispatcher is not None:
             from ..presence import get_observer
+
             observer = get_observer(managed_session)
             observer.start()
             observer.register(self._presence_dispatcher)
 
     def close(self) -> None:
+        """Undeclare every underlying zenoh subscriber. Idempotent."""
         if self._closed:
             return
         self._closed = True
         # Cancel the watchdog FIRST so a pending on_quiet can't fire after
         # the user thinks the subscriber is gone.
         if self._watchdog is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._watchdog.cancel()
-            except Exception:  # noqa: BLE001
-                pass
         for sub in self._zenoh_subs:
-            try:
+            with contextlib.suppress(Exception):
                 sub.undeclare()
-            except Exception:  # noqa: BLE001
-                pass
         if self._presence_dispatcher is not None and self._session is not None:
-            try:
+            with contextlib.suppress(Exception):
                 from ..presence import get_observer
+
                 observer = get_observer(self._session)
                 observer.unregister(self._presence_dispatcher)
-            except Exception:  # noqa: BLE001
-                pass
-        _deregister_subscriber(self._session, self)
+        if self._session is not None:
+            _deregister_subscriber(self._session, self)
 
-    def __enter__(self) -> 'Subscriber':
+    def __enter__(self) -> Self:
+        """Enter the context manager — returns the subscriber handle."""
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *exc: object) -> None:
+        """Exit the context manager — closes the handle."""
         self.close()

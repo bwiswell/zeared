@@ -1,13 +1,11 @@
-"""Synthesised sample shim — minimal stand-in for ``zenoh.Sample`` when
-firing a will locally.
+"""Synthesised sample shim — minimal stand-in for ``zenoh.Sample`` when firing a will locally.
 
 Lives in its own file (per one-class-per-file) even though it's small;
 both ``_presence_observer.py`` and external callers (subscriber dispatch,
 meta extraction) read its attribute set.
 """
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 import zenoh
 
@@ -20,9 +18,15 @@ class _SynthesizedSample:
     Exposes the attributes ``zeared.subscriber.dispatch`` and
     ``meta.from_sample`` read. No real Zenoh types involved.
     """
+
     __slots__ = (
-        'key_expr', 'payload', 'kind', 'encoding',
-        'timestamp', 'source_info', 'attachment',
+        'attachment',
+        'encoding',
+        'key_expr',
+        'kind',
+        'payload',
+        'source_info',
+        'timestamp',
     )
 
     def __init__(
@@ -31,8 +35,8 @@ class _SynthesizedSample:
         payload: bytes,
         encoding_mime: str,
         source_zid: str,
-        schema: Optional[str] = None,
-    ):
+        schema: str | None = None,
+    ) -> None:
         self.key_expr = key_expr
         self.payload = payload
         self.kind = zenoh.SampleKind.PUT

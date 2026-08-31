@@ -1,16 +1,18 @@
-"""``_MessageSubscribeMixin`` — subscriber + introspection surface
-(``on_message`` + ``published_topics``).
+"""``_MessageSubscribeMixin`` — subscriber + introspection surface (``on_message`` + ``published_topics``).
 
 Mixin — contributes no instance state. ``Message`` composes this via MRO.
 ``_decode`` stays on the primary :class:`Message` class because both
 ``Subscriber`` (via the dispatch closure) and the introspection layer
 import it directly.
 """
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Optional, Type, TypeVar, Union
+from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import zenoh
 
     from ..meta import ZenohMeta
@@ -23,22 +25,26 @@ _M = TypeVar('_M', bound='Message')
 
 class _MessageSubscribeMixin:
     """Subscribe + introspection surface on :class:`Message`."""
+
     __slots__ = ()
 
     @classmethod
     def published_topics(
         cls,
         *,
-        session: Optional['zenoh.Session'] = None,
+        session: zenoh.Session | None = None,
     ) -> frozenset:
-        """Snapshot of concrete topics this class has published on the given
-        session (or aggregated across all sessions when ``session=None``).
+        """Snapshot of concrete topics this class has published on.
+
+        Snapshot of concrete topics this class has published on the given session (or
+        aggregated across all sessions when ``session=None``).
 
         Includes topics that have since been tombstoned via ``unretain()``
         and topics that bypassed the publisher cache (e.g. ``PUBLISHER =
         False`` classes). Intended for dashboards and diagnostic tooling.
         """
         from ..publisher import published_topics as _pt
+
         per_session = _pt(cls=cls, session=session)
         out: set[str] = set()
         for topics in per_session.values():
@@ -46,21 +52,21 @@ class _MessageSubscribeMixin:
         return frozenset(out)
 
     @classmethod
-    def on_message(
-        cls: 'Type[_M]',
-        cb: 'Union[Callable[[_M], None], Callable[[_M, ZenohMeta], None]]',
+    def on_message(  # noqa: PLR0913
+        cls: type[_M],
+        cb: Callable[[_M], None] | Callable[[_M, ZenohMeta], None],
         *,
-        session: Optional['zenoh.Session'] = None,
-        on_error: Optional[Callable[[Exception, bytes], None]] = None,
-        expected_interval: Optional[float] = None,
-        on_quiet: Optional[Callable] = None,
-        on_active: Optional[Callable] = None,
-        startup_grace: Optional[float] = None,
+        session: zenoh.Session | None = None,
+        on_error: Callable[[Exception, bytes], None] | None = None,
+        expected_interval: float | None = None,
+        on_quiet: Callable | None = None,
+        on_active: Callable | None = None,
+        startup_grace: float | None = None,
         auto_reconnect: bool = True,
-        dedupe: Optional[bool] = None,
-        on_remove: 'Optional[Callable[[ZenohMeta], None]]' = None,
+        dedupe: bool | None = None,
+        on_remove: Callable[[ZenohMeta], None] | None = None,
         retained_fetch: bool = True,
-    ) -> "'Subscriber[_M]'":
+    ) -> Subscriber[_M]:
         """Subscribe to this message's topic(s) — all declared templates.
 
         ``cb`` may be ``cb(msg)`` or ``cb(msg, meta)``; arity is inspected once
@@ -107,13 +113,16 @@ class _MessageSubscribeMixin:
         arrives (or the grace window expires), subsequent waits use
         ``expected_interval`` as usual.
         """
-        from ..subscriber import Subscriber  # local import: forward reference
-
         import zeared as z
 
+        from ..subscriber import Subscriber  # local import: forward reference
+
         sess = z.session.resolve(session)
-        return Subscriber._declare(
-            cls, sess, cb, on_error,
+        return Subscriber._declare(  # noqa: SLF001
+            cls,
+            sess,
+            cb,
+            on_error,
             expected_interval=expected_interval,
             on_quiet=on_quiet,
             on_active=on_active,
@@ -125,7 +134,7 @@ class _MessageSubscribeMixin:
         )
 
     @classmethod
-    def coerce_captures(cls: 'type[Message]', captures: dict) -> dict:
+    def coerce_captures(cls: type[Message], captures: dict) -> dict:
         """Coerce raw string template captures through their declared fields.
 
         ``on_remove`` (and ``meta.captures`` generally) hands back template
@@ -139,19 +148,16 @@ class _MessageSubscribeMixin:
         out: dict = {}
         for name, raw_val in captures.items():
             f = spec_by_attr.get(name)
-            out[name] = (
-                f.deserialize(raw_val, validate=True) if f is not None
-                else raw_val
-            )
+            out[name] = f.deserialize(raw_val, validate=True) if f is not None else raw_val
         return out
 
     @classmethod
     def fetch_retained(
-        cls: 'Type[_M]',
+        cls: type[_M],
         *,
-        session: Optional['zenoh.Session'] = None,
-        on_error: Optional[Callable[[Exception, bytes], None]] = None,
-    ) -> 'list[_M]':
+        session: zenoh.Session | None = None,
+        on_error: Callable[[Exception, bytes], None] | None = None,
+    ) -> list[_M]:
         """One-shot typed snapshot of this class's current retained set.
 
         Issues ``session.get`` across every declared template wildcard,
@@ -172,9 +178,8 @@ class _MessageSubscribeMixin:
         from ..errors import TopicError
 
         if not getattr(cls, 'RETAINED', False):
-            raise TopicError(
-                f'{cls.__name__}.fetch_retained requires RETAINED = True'
-            )
+            msg = f'{cls.__name__}.fetch_retained requires RETAINED = True'
+            raise TopicError(msg)
         import zeared as z
 
         from ..subscriber._subscriber_retained_fetch import _collect_retained

@@ -5,18 +5,17 @@ Parser/match/render tests live here, plus one smoke test per affected
 subsystem (retention, presence, batch, async) confirming multi-segment
 captures compose correctly with the existing wire path.
 """
+
 from __future__ import annotations
 
 import asyncio
 
 import pytest
-
-import zeared as z
-from zeared._template import Template, Templates
-from zeared.errors import TopicError
-
 from conftest import wait
 
+import zeared as z
+from zeared._template import Template
+from zeared.errors import TopicError
 
 # ---------------------------------------------------------------------------
 # Parser
@@ -142,7 +141,7 @@ class TestDeclaredFieldRoundTrip:
         class Log(z.Message):
             TOPIC = 'log/{service}/{tail**}'
             service: str = z.Str(required=True)
-            tail:    str = z.Str(required=True)
+            tail: str = z.Str(required=True)
 
         # Just exercise template parse + render; live wire round-trip
         # is in the Phase-2 retention/batch/async smoke tests.
@@ -159,6 +158,7 @@ class TestDeclaredFieldRoundTrip:
     def test_capture_only_lands_on_meta(self, session):
         """Undeclared multi-segment slots flow through to meta.captures
         as a slash-containing string (matches single-segment behaviour)."""
+
         @z.zeared
         class Log(z.Message):
             TOPIC = 'log/{service}/{tail**}'
@@ -218,6 +218,7 @@ class TestFieldBindingValidation:
 
     def test_undeclared_slot_no_validation_error(self):
         """Capture-only slots are allowed — landing as meta.captures str."""
+
         @z.zeared
         class Ok(z.Message):
             TOPIC = 'log/{tail**}'
@@ -238,6 +239,7 @@ class TestNamedSingleAtAnyPosition:
     """Pin: ``peer/{cluster}/{host}/status`` — named single-segment captures
     at non-trailing positions work today via ``(?P<name>[^/]+)``. This is a
     regression test for that pre-existing behaviour."""
+
     def test_multi_named_singles_round_trip(self):
         t = Template.parse('peer/{cluster}/{host}/status')
         assert t.field_names == ('cluster', 'host')
@@ -268,7 +270,7 @@ class TestExtraTopicsInteraction:
             TOPIC = 'log/{service}/{tail**}'
             EXTRA_TOPICS = ('audit/**',)
             service: str = z.Str(required=True)
-            tail:    str = z.Str(required=True)
+            tail: str = z.Str(required=True)
 
         tpls = Log._templates()
         assert tpls.canonical.publishable is True
@@ -306,8 +308,8 @@ class TestRetentionRoundTrip:
             TOPIC = 'log/{service}/{tail**}'
             RETAINED = True
             service: str = z.Str(required=True)
-            tail:    str = z.Str(required=True)
-            line:    str = z.Str(required=True)
+            tail: str = z.Str(required=True)
+            line: str = z.Str(required=True)
 
         # Publisher caches a deep-tail concrete topic.
         Log(service='svc', tail='2026/04/24/info', line='boot').send(session=session_a)
@@ -337,12 +339,14 @@ class TestPresenceWillRoundTrip:
             TOPIC = 'service/{service}/{path**}'
             LIVELINESS = True
             service: str = z.Str(required=True)
-            path:    str = z.Str(required=True)
-            state:   str = z.Str(required=True)
+            path: str = z.Str(required=True)
+            state: str = z.Str(required=True)
 
         # Producer A registers a will at a deep concrete topic.
         Heartbeat(
-            service='svc', path='region/eu/host1', state='offline',
+            service='svc',
+            path='region/eu/host1',
+            state='offline',
         ).register_will(session=session_a)
         wait(0.3)
 
@@ -367,8 +371,8 @@ class TestBatchRoundTrip:
         class Log(z.Message):
             TOPIC = 'log/{service}/{tail**}'
             service: str = z.Str(required=True)
-            tail:    str = z.Str(required=True)
-            line:    str = z.Str(required=True)
+            tail: str = z.Str(required=True)
+            line: str = z.Str(required=True)
 
         z.session = session
 
@@ -396,8 +400,8 @@ class TestAsyncRoundTrip:
         class Log(z.Message):
             TOPIC = 'log/{service}/{tail**}'
             service: str = z.Str(required=True)
-            tail:    str = z.Str(required=True)
-            line:    str = z.Str(required=True)
+            tail: str = z.Str(required=True)
+            line: str = z.Str(required=True)
 
         async def main():
             received: list[tuple[str, str, str]] = []

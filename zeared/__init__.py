@@ -16,11 +16,13 @@ zeared as z`` and pick up every Field type, the decorator (renamed
 base class, and the error hierarchy. All seared names are still
 reachable as ``seared.*`` for callers who prefer the two-package style.
 """
+
 from __future__ import annotations
 
 import sys
 
 from seared import (
+    UUID,
     Bool,
     Bytes,
     Date,
@@ -35,15 +37,18 @@ from seared import (
     Path,
     PolarsFrame,
     SearedError,
-    Seared as Zeared,  # base class, renamed for uniform texture
     Str,
     T,
     Time,
     TimeDelta,
     Tuple,
-    UUID,
     Union,
     ValidationError,
+)
+from seared import (
+    Seared as Zeared,  # base class, renamed for uniform texture
+)
+from seared import (
     seared as zeared,  # decorator, renamed for the same reason
 )
 
@@ -55,15 +60,34 @@ from ._module_class import _ZearedModule
 from ._release import release, release_all
 from ._session import _SessionHandle
 from .async_ import (
-    abatch, aclient, afetch_retained, alisten, aon_query, aopen, apeer,
-    aquery, aquery_one, asend, asend_batch, aunretain,
+    abatch,
+    aclient,
+    afetch_retained,
+    alisten,
+    aon_query,
+    aopen,
+    apeer,
+    aquery,
+    aquery_one,
+    asend,
+    asend_batch,
+    aunretain,
 )
 from .batch import batch
 from .config import SessionConfig
 from .errors import (
-    CallbackError, DecodeError, NoSessionError, QueryableError, QueryError,
-    RetainedFetchError, SchemaMismatchError, SessionDeadError, SubscriberError,
-    SubscriptionError, TopicError, ZearedError,
+    CallbackError,
+    DecodeError,
+    NoSessionError,
+    QueryableError,
+    QueryError,
+    RetainedFetchError,
+    SchemaMismatchError,
+    SessionDeadError,
+    SubscriberError,
+    SubscriptionError,
+    TopicError,
+    ZearedError,
 )
 from .message import Message
 from .meta import Origin, ZenohMeta
@@ -72,7 +96,6 @@ from .publisher import clear_publisher_cache, published_topics
 from .queryable import Queryable, QueryContext, clear_queryable_cache
 from .retention import clear_retention_cache
 from .subscriber import Subscriber
-
 
 __version__ = '0.2.9'
 
@@ -90,51 +113,51 @@ sys.modules[__name__].__class__ = _ZearedModule
 
 
 __all__ = [
+    'UUID',
     # seared re-exports (decorator renamed to ``zeared`` for flavour)
     'Bool',
     'Bytes',
+    # zeared surface
+    'CallbackError',
     'Date',
     'DateTime',
     'Decimal',
+    'DecodeError',
     'Dict',
     'Enum',
     'Float',
     'Int',
-    'NDArray',
-    'PandasFrame',
-    'Path',
-    'PolarsFrame',
-    'SearedError',
-    'Zeared',
-    'Str',
-    'T',
-    'Time',
-    'TimeDelta',
-    'Tuple',
-    'UUID',
-    'Union',
-    'ValidationError',
-    'zeared',
-    # zeared surface
-    'CallbackError',
-    'DecodeError',
     'ManagedSession',
     'Message',
     'Mode',
+    'NDArray',
     'NoSessionError',
     'OnReconnectHandle',
     'Origin',
+    'PandasFrame',
+    'Path',
+    'PolarsFrame',
     'QueryContext',
     'QueryError',
     'Queryable',
     'QueryableError',
     'RetainedFetchError',
     'SchemaMismatchError',
+    'SearedError',
+    'SessionConfig',
     'SessionDeadError',
+    'Str',
     'Subscriber',
     'SubscriberError',
     'SubscriptionError',
+    'T',
+    'Time',
+    'TimeDelta',
     'TopicError',
+    'Tuple',
+    'Union',
+    'ValidationError',
+    'Zeared',
     'ZearedError',
     'ZenohMeta',
     'abatch',
@@ -149,7 +172,6 @@ __all__ = [
     'asend',
     'asend_batch',
     'aunretain',
-    'SessionConfig',
     'batch',
     'clear_observer',
     'clear_presence_state',
@@ -166,4 +188,5 @@ __all__ = [
     'release',
     'release_all',
     'session',
+    'zeared',
 ]

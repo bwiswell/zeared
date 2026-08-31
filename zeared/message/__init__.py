@@ -21,7 +21,7 @@ shared ``_unretain_impl`` (instance-vs-class ``unretain`` dispatch).
 Public surface unchanged: callers continue to write
 ``from zeared.message import Message``.
 """
-from .message import Encoding, Message
 
+from .message import Encoding, Message
 
 __all__ = ['Encoding', 'Message']

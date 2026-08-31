@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING
 
-from ._codec import Encoding
 from . import publisher as _pub
 from . import retention as _ret
+from ._codec import Encoding
 
 if TYPE_CHECKING:
-    import zenoh
+    import types
 
+    from ._managed_session import SessionLike
     from .message import Message
 
 
@@ -26,9 +27,14 @@ if TYPE_CHECKING:
 # ``attachment_bytes`` is the per-class schema-attachment payload (or
 # ``None`` for classes without ``SCHEMA``, and always ``None`` for
 # tombstones — DELETE samples don't carry attachments).
-BufferedSend = Tuple[
-    'type[Message]', 'zenoh.Session', str, bytes, Encoding, str,
-    Optional[bytes],
+BufferedSend = tuple[
+    'type[Message]',
+    'SessionLike',
+    str,
+    bytes,
+    Encoding,
+    str,
+    bytes | None,
 ]
 
 
@@ -37,13 +43,13 @@ BufferedSend = Tuple[
 # — each task inherits a copy of the context on creation, and mutations don't
 # leak back to the parent. In plain-sync threads the behaviour is unchanged:
 # each new thread starts with an empty stack.
-_buffer_stack: ContextVar[Optional[List[List[BufferedSend]]]] = ContextVar(
+_buffer_stack: ContextVar[list[list[BufferedSend]] | None] = ContextVar(
     'zeared.batch_stack',
     default=None,
 )
 
 
-def _get_stack() -> List[List[BufferedSend]]:
+def _get_stack() -> list[list[BufferedSend]]:
     """Return the current context's stack, treating ``None`` as empty.
 
     NEVER mutates the ContextVar — that's reserved for the
@@ -57,7 +63,7 @@ def _get_stack() -> List[List[BufferedSend]]:
     return stack if stack is not None else []
 
 
-def current_buffer() -> Optional[List[BufferedSend]]:
+def current_buffer() -> list[BufferedSend] | None:
     """Return the innermost active batch buffer, or ``None``.
 
     Flat-nesting semantics: there is at most one live buffer per context
@@ -69,25 +75,31 @@ def current_buffer() -> Optional[List[BufferedSend]]:
     return stack[-1]
 
 
-def _flush(buffer: List[BufferedSend]) -> None:
+def _flush(buffer: list[BufferedSend]) -> None:
     """Drain buffer → publisher / retention caches, dispatched by retain_mode."""
     for cls, sess, topic, raw, encoding, retain_mode, attachment in buffer:
         if retain_mode == 'tombstone':
             _ret.get_retention_cache(cls, sess).delete(topic)
             try:
                 sess.delete(topic)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 from .errors import ZearedError
-                raise ZearedError(
-                    f'{cls.__name__}: session.delete failed on {topic!r}: {e}'
-                ) from e
+
+                msg = f'{cls.__name__}: session.delete failed on {topic!r}: {e}'
+                raise ZearedError(msg) from e
             continue
         if retain_mode == 'retain':
             _ret.get_retention_cache(cls, sess).store(
-                topic, raw, encoding, attachment=attachment,
+                topic,
+                raw,
+                encoding,
+                attachment=attachment,
             )
         _pub.get_cache(cls, sess).put(
-            topic, raw, encoding, attachment=attachment,
+            topic,
+            raw,
+            encoding,
+            attachment=attachment,
         )
     buffer.clear()
 
@@ -97,7 +109,7 @@ class _BatchHandle:
 
     __slots__ = ('_buffer',)
 
-    def __init__(self, buffer: List[BufferedSend]):
+    def __init__(self, buffer: list[BufferedSend]) -> None:
         self._buffer = buffer
 
     def flush(self) -> None:
@@ -114,11 +126,11 @@ class _BatchContext(AbstractContextManager):
     ``b.flush()`` mid-block to drain explicitly).
     """
 
-    __slots__ = ('_owns', '_buffer', '_token')
+    __slots__ = ('_buffer', '_owns', '_token')
 
     def __init__(self) -> None:
         self._owns = False
-        self._buffer: Optional[List[BufferedSend]] = None
+        self._buffer: list[BufferedSend] | None = None
         self._token = None
 
     def __enter__(self) -> _BatchHandle:
@@ -135,7 +147,12 @@ class _BatchContext(AbstractContextManager):
             self._buffer = stack[-1]
         return _BatchHandle(self._buffer)
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: types.TracebackType | None,
+    ) -> None:
         if not self._owns:
             return
         # Restore the pre-enter ContextVar value (typically ``None`` /

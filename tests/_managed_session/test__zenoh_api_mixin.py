@@ -6,6 +6,7 @@ End-to-end behaviour through ``ManagedSession`` lives in
 ``test_session.py`` / ``test_reconnect.py``. This file confirms the
 mixin's public surface.
 """
+
 from __future__ import annotations
 
 from zeared._managed_session._zenoh_api_mixin import _ZenohApiMixin
@@ -23,6 +24,5 @@ class TestMixinSurface:
             assert hasattr(_ZenohApiMixin, name), f'missing {name}'
 
     def test_declare_methods_present(self):
-        for name in ('declare_publisher', 'declare_subscriber',
-                     'declare_queryable'):
+        for name in ('declare_publisher', 'declare_subscriber', 'declare_queryable'):
             assert hasattr(_ZenohApiMixin, name), f'missing {name}'

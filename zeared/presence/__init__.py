@@ -14,38 +14,38 @@ Public surface (everything previously importable from
 ``zeared.presence``) is re-exported here; internal callers can keep
 using ``from .presence import X`` unchanged.
 """
+
 from ._presence_observer import (
     Dispatcher,
-    _PresenceObserver,
     _observer_lock,
     _observer_registry,
+    _PresenceObserver,
     clear_observer,
     get_observer,
 )
 from ._presence_session import (
-    _SessionPresence,
     _registry,
     _registry_lock,
+    _SessionPresence,
     clear_presence_state,
     get_presence,
 )
 from ._presence_synthesized_sample import _SynthesizedSample
 from .presence import (
+    _GC_INTERVAL_SECONDS,
     ALIVE_PREFIX,
     WILL_PREFIX,
-    _GC_INTERVAL_SECONDS,
-    _WillEnvelope,
     _envelope_encoding,
     _resolve_gc_interval,
     _slug,
+    _WillEnvelope,
 )
-
 
 __all__ = [
     'ALIVE_PREFIX',
-    'Dispatcher',
     'WILL_PREFIX',
     '_GC_INTERVAL_SECONDS',
+    'Dispatcher',
     '_PresenceObserver',
     '_SessionPresence',
     '_SynthesizedSample',

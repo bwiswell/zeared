@@ -7,8 +7,8 @@ parser; ``_templates.py`` holds the aggregate ``Templates`` collection
 Public surface unchanged: callers continue to write
 ``from zeared._template import Template, Templates``.
 """
+
 from ._template import Template
 from ._templates import Templates
-
 
 __all__ = ['Template', 'Templates']

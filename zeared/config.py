@@ -9,16 +9,15 @@ Named ``SessionConfig`` (rather than ``Config``) to avoid colliding with
 ``zenoh.Config`` — they cohabit when users want raw Zenoh overrides via the
 ``zenoh_config=`` factory kwarg.
 """
+
 from __future__ import annotations
 
 import dataclasses
 import os
-from typing import Optional
 
 import seared as s
 
 from ._mode import Mode
-
 
 _ENV_PREFIX_DEFAULT = 'ZEARED_SESSION_'
 
@@ -35,7 +34,8 @@ def _parse_bool(value: str) -> bool:
         return True
     if v in ('false', '0', 'no', 'off', ''):
         return False
-    raise ValueError(f'cannot parse {value!r} as bool')
+    msg = f'cannot parse {value!r} as bool'
+    raise ValueError(msg)
 
 
 @s.seared
@@ -60,18 +60,22 @@ class SessionConfig(s.Seared):
       - :meth:`with_connect` / :meth:`with_listen` — append endpoints.
       - :meth:`set_router` — replace the client-mode router shortcut.
     """
-    mode:            Mode          = s.Enum(enum=Mode, required=True)
-    router:          str | None    = s.Str(default=None)      # client shortcut
-    connect:         list          = s.Str(many=True, default_factory=list)
-    listen:          list          = s.Str(many=True, default_factory=list)
-    retry:           bool          = s.Bool(default=False)
-    initial_backoff: float         = s.Float(default=0.1)
-    max_backoff:     float         = s.Float(default=30.0)
-    max_attempts:    int | None    = s.Int(default=None)
+
+    # fmt: off
+    # Column-aligned deliberately — mirrors docs/config.md.
+    mode:            Mode       = s.Enum(enum=Mode, required=True)
+    router:          str | None = s.Str(default=None)      # client shortcut
+    connect:         list       = s.Str(many=True, default_factory=list)
+    listen:          list       = s.Str(many=True, default_factory=list)
+    retry:           bool       = s.Bool(default=False)
+    initial_backoff: float      = s.Float(default=0.1)
+    max_backoff:     float      = s.Float(default=30.0)
+    max_attempts:    int | None = s.Int(default=None)
+    # fmt: on
 
     # -- builders -----------------------------------------------------
 
-    def replace(self, **changes) -> 'SessionConfig':
+    def replace(self, **changes: object) -> SessionConfig:
         """Return a copy with the given fields overridden.
 
         Accepts any field name on ``SessionConfig``; unknown keys raise
@@ -81,15 +85,15 @@ class SessionConfig(s.Seared):
 
     def with_retry(
         self,
-        retry: bool = True,
+        retry: bool = True,  # noqa: FBT001, FBT002
         *,
-        initial_backoff: Optional[float] = None,
-        max_backoff: Optional[float] = None,
-        max_attempts: Optional[int] = None,
-    ) -> 'SessionConfig':
-        """Return a copy with retry enabled (or disabled) and any supplied
-        backoff knobs overridden. Knobs left as ``None`` keep their current
-        values.
+        initial_backoff: float | None = None,
+        max_backoff: float | None = None,
+        max_attempts: int | None = None,
+    ) -> SessionConfig:
+        """Return a copy with retry enabled (or disabled) and any supplied backoff knobs overridden.
+
+        Knobs left as ``None`` keep their current values.
         """
         changes: dict = {'retry': retry}
         if initial_backoff is not None:
@@ -100,20 +104,22 @@ class SessionConfig(s.Seared):
             changes['max_attempts'] = max_attempts
         return dataclasses.replace(self, **changes)
 
-    def with_connect(self, *endpoints: str) -> 'SessionConfig':
+    def with_connect(self, *endpoints: str) -> SessionConfig:
         """Return a copy with the given endpoints APPENDED to ``connect``."""
         return dataclasses.replace(
-            self, connect=[*self.connect, *endpoints],
+            self,
+            connect=[*self.connect, *endpoints],
         )
 
-    def with_listen(self, *endpoints: str) -> 'SessionConfig':
+    def with_listen(self, *endpoints: str) -> SessionConfig:
         """Return a copy with the given endpoints APPENDED to ``listen``."""
         return dataclasses.replace(
-            self, listen=[*self.listen, *endpoints],
+            self,
+            listen=[*self.listen, *endpoints],
         )
 
     @classmethod
-    def from_env(cls, prefix: str = _ENV_PREFIX_DEFAULT) -> 'SessionConfig':
+    def from_env(cls, prefix: str = _ENV_PREFIX_DEFAULT) -> SessionConfig:
         """Build a ``SessionConfig`` from environment variables.
 
         Env keys are read as ``{prefix}{FIELD_NAME}``, uppercase with
@@ -158,7 +164,7 @@ class SessionConfig(s.Seared):
     # — seared's auto-attached version produces an identical result with
     # the canonical install hint pointing at ``seared[yaml]``.
 
-    def set_router(self, router: str) -> 'SessionConfig':
+    def set_router(self, router: str) -> SessionConfig:
         """Return a copy with ``router`` set (replaces any existing value).
 
         Named ``set_router`` rather than ``with_router`` for builder-verb

@@ -4,7 +4,7 @@ import datetime
 import enum
 import logging
 import re
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import seared as s
 
@@ -24,10 +24,10 @@ class Origin(enum.StrEnum):
     wire): the live ``zenoh.Subscriber`` callback, a retained-fetch
     ``session.get`` reply, or the presence observer's will synthesis.
     """
-    LIVE = 'live'      # delivered by the live zenoh subscriber
-    REPLAY = 'replay'  # delivered from a retention cache via retained-fetch
-                       # (subscribe-time and post-reconnect)
-    WILL = 'will'      # synthesised by the presence observer
+
+    LIVE = 'live'  # delivered by the live zenoh subscriber
+    REPLAY = 'replay'  # from a retention cache (subscribe-time or post-reconnect)
+    WILL = 'will'  # synthesised by the presence observer
 
 
 @s.seared
@@ -56,15 +56,20 @@ class ZenohMeta(s.Seared):
     ``Origin.WILL`` for a presence-synthesised will. Set by the dispatch
     layer; ``from_sample`` defaults it to ``LIVE``.
     """
-    key_expr:    str                          = s.Str(required=True)
-    timestamp:   str | None                   = s.Str(default=None)       # raw HLC string
-    issued_at:   datetime.datetime | None     = s.DateTime(default=None)  # parsed UTC
-    encoding:    str | None                   = s.Str(default=None)
-    source_info: str | None                   = s.Str(default=None)
-    attachment:  bytes | None                 = s.Bytes(default=None)
-    schema:      str | None                   = s.Str(default=None)
-    captures:    dict                         = s.Dict(default_factory=dict)
-    origin:      Origin                       = s.Enum(enum=Origin, default=Origin.LIVE)
+
+    # fmt: off
+    # Column-aligned deliberately — mirrors docs/meta.md and reads as a
+    # wire-contract table. The formatter would collapse it.
+    key_expr:    str                      = s.Str(required=True)
+    timestamp:   str | None               = s.Str(default=None)       # raw HLC string
+    issued_at:   datetime.datetime | None = s.DateTime(default=None)  # parsed UTC
+    encoding:    str | None               = s.Str(default=None)
+    source_info: str | None               = s.Str(default=None)
+    attachment:  bytes | None             = s.Bytes(default=None)
+    schema:      str | None               = s.Str(default=None)
+    captures:    dict                     = s.Dict(default_factory=dict)
+    origin:      Origin                   = s.Enum(enum=Origin, default=Origin.LIVE)
+    # fmt: on
 
 
 # Zenoh HLC sample timestamp shape: ``<8-hex-seconds><8-hex-frac>/<id>``.
@@ -73,7 +78,7 @@ class ZenohMeta(s.Seared):
 _HLC_RE = re.compile(r'^([0-9a-fA-F]{16})/')
 
 
-def _parse_hlc(ts) -> Optional[datetime.datetime]:
+def _parse_hlc(ts: object) -> datetime.datetime | None:
     """Parse a Zenoh HLC sample timestamp into a UTC ``datetime``.
 
     Zenoh HLC is a 64-bit NTP-style fixed-point timestamp followed by a
@@ -93,13 +98,14 @@ def _parse_hlc(ts) -> Optional[datetime.datetime]:
         # Convert NTP fractional 32-bit field to seconds.
         frac_seconds = fraction / (1 << 32)
         return datetime.datetime.fromtimestamp(
-            seconds + frac_seconds, tz=datetime.timezone.utc,
+            seconds + frac_seconds,
+            tz=datetime.UTC,
         )
-    except (ValueError, OSError, OverflowError):
+    except ValueError, OSError, OverflowError:
         return None
 
 
-def _parse_attachment_schema(attachment: Optional[bytes]) -> Optional[str]:
+def _parse_attachment_schema(attachment: bytes | None) -> str | None:
     """Extract the ``schema`` field from a Zenoh attachment payload.
 
     Returns the schema string when present, ``None`` when the attachment
@@ -117,7 +123,7 @@ def _parse_attachment_schema(attachment: Optional[bytes]) -> Optional[str]:
     return schema if isinstance(schema, str) else None
 
 
-def build_attachment_schema(schema: Optional[str]) -> Optional[bytes]:
+def build_attachment_schema(schema: str | None) -> bytes | None:
     """Pack a ``schema`` value into the msgpack attachment shape.
 
     Inverse of :func:`_parse_attachment_schema` — returns the wire bytes a
@@ -132,7 +138,7 @@ def build_attachment_schema(schema: Optional[str]) -> Optional[bytes]:
     return codec.pack({'schema': schema}, 'msgpack')
 
 
-def from_sample(sample: 'zenoh.Sample') -> ZenohMeta:
+def from_sample(sample: zenoh.Sample) -> ZenohMeta:
     """Build a ``ZenohMeta`` from a Zenoh ``Sample``.
 
     ``captures`` starts empty — the subscriber fills it in from the matched

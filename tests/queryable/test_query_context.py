@@ -1,6 +1,7 @@
 """Unit tests for ``QueryContext`` parsing helpers and the selector
 renderer — no live session needed for most of these.
 """
+
 from __future__ import annotations
 
 import zeared as z

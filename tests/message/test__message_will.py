@@ -4,6 +4,7 @@
 End-to-end LWT coverage lives in ``test_presence.py``. This file
 confirms the mixin surface and the LIVELINESS guard.
 """
+
 from __future__ import annotations
 
 import pytest

@@ -5,14 +5,13 @@ Comprehensive end-to-end coverage lives in ``test_presence.py``; this
 file confirms the file's public surface is importable and that the
 core constructor / registry helpers behave.
 """
+
 from __future__ import annotations
 
-import threading
-
 from zeared.presence._presence_session import (
-    _SessionPresence,
     _registry,
     _registry_lock,
+    _SessionPresence,
     clear_presence_state,
     get_presence,
 )

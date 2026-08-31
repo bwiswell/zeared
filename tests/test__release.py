@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import time
+import contextlib
 
 import pytest
+from conftest import wait
 
 import zeared as z
+from zeared.presence import _observer_registry
+from zeared.presence import _registry as _pres_registry
 from zeared.publisher import _registry as _pub_registry
 from zeared.retention import _registry as _ret_registry
-from zeared.presence import _registry as _pres_registry, _observer_registry
 from zeared.subscriber import _subscribers
-
-from conftest import wait
 
 
 class TestReleaseRequiresKwarg:
@@ -36,10 +36,10 @@ class TestReleaseWalksAllResources:
 
         z.session = session
         # Populate all five registries.
-        sub = M.on_message(lambda m: None)            # subscribers
+        M.on_message(lambda m: None)  # subscribers
         wait()
-        M(id=1, v=1).send()                           # publisher cache + retention
-        M(id=1, v=1).register_will()                  # presence state
+        M(id=1, v=1).send()  # publisher cache + retention
+        M(id=1, v=1).register_will()  # presence state
         wait()
 
         sid = id(session)
@@ -77,9 +77,9 @@ class TestReleaseIdempotent:
 
 class TestReleaseDoesNotUseDefault:
     def test_default_session_does_not_satisfy_kwarg(self, session):
-        z.session = session   # set the module-level default
+        z.session = session  # set the module-level default
         with pytest.raises(TypeError):
-            z.release()       # explicit-always: must pass session=
+            z.release()  # explicit-always: must pass session=
 
 
 class TestReleasePropagatesPeerWill:
@@ -98,7 +98,7 @@ class TestReleasePropagatesPeerWill:
         class Status(z.Message):
             TOPIC = 'rel/peer/{name}/status'
             LIVELINESS = True
-            name:  str = z.Str(required=True)
+            name: str = z.Str(required=True)
             state: str = z.Str(required=True)
 
         Status(name='alice', state='offline').register_will(session=session_a)
@@ -123,6 +123,7 @@ class TestReleaseClosesSubscribers:
     def test_subscriber_close_cancels_watchdog(self, session):
         """Released subscribers are properly closed — pending watchdogs
         cancelled, registry deregistered."""
+
         @z.zeared
         class M(z.Message):
             TOPIC = 'rel/wd/{id}'
@@ -130,7 +131,7 @@ class TestReleaseClosesSubscribers:
 
         z.session = session
         fired: list[str] = []
-        sub = M.on_message(
+        M.on_message(
             lambda m: None,
             expected_interval=0.5,
             on_quiet=lambda: fired.append('quiet'),
@@ -153,12 +154,14 @@ class TestReleaseAll:
     def test_releases_multiple_sessions(self):
         """Open three sessions, register varied state on each, call
         release_all, assert all registries empty."""
-        from zeared.publisher import _registry as _pub_registry
-        from zeared.retention import _registry as _ret_registry
         from zeared.presence import (
-            _registry as _pres_registry,
             _observer_registry as _obs_registry,
         )
+        from zeared.presence import (
+            _registry as _pres_registry,
+        )
+        from zeared.publisher import _registry as _pub_registry
+        from zeared.retention import _registry as _ret_registry
         from zeared.subscriber import _subscribers
 
         @z.zeared
@@ -169,16 +172,17 @@ class TestReleaseAll:
 
         # Open three peer sessions (multicast disabled — they're isolated).
         from conftest import _peer_session
+
         sessions = [_peer_session(), _peer_session(), _peer_session()]
 
         try:
             # Register varied state.
             # Session 0: subscriber.
-            sub = Tele.on_message(lambda m: None, session=sessions[0])
+            Tele.on_message(lambda m: None, session=sessions[0])
             # Session 1: publisher cache + retention.
             Tele(n=1, v=1).send(session=sessions[1])
             # Session 2: also a subscriber.
-            sub2 = Tele.on_message(lambda m: None, session=sessions[2])
+            Tele.on_message(lambda m: None, session=sessions[2])
             wait(0.1)
 
             # Sanity: registries non-empty.
@@ -201,10 +205,8 @@ class TestReleaseAll:
             # If release_all worked, sessions are already closed.
             # Best-effort cleanup just in case the test failed mid-run.
             for s in sessions:
-                try:
+                with contextlib.suppress(Exception):
                     s.close()
-                except Exception:
-                    pass
 
     def test_no_args(self):
         """Pin: ``release_all`` takes no arguments."""
@@ -225,16 +227,18 @@ class TestReleaseAll:
         sess = z.peer(auto_reconnect=True, probe_interval=0)
         try:
             # Pre-condition: no per-resource registry entries.
-            from zeared.subscriber import _subscribers
             from zeared.publisher import _registry as _pub_registry
             from zeared.retention import _registry as _ret_registry
+            from zeared.subscriber import _subscribers
+
             assert _subscribers == {}
             assert _pub_registry == {}
             assert _ret_registry == {}
 
             # The reconnect worker is alive by construction.
             worker = sess._reconnect_thread
-            assert worker is not None and worker.is_alive()
+            assert worker is not None
+            assert worker.is_alive()
 
             # Pre-0.0.17, release_all here would do nothing — wrapper
             # not in any walked registry. Post-0.0.17, the WeakSet walk
@@ -248,10 +252,8 @@ class TestReleaseAll:
                 'WeakSet walk regressed'
             )
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 sess._teardown(call_close=True)
-            except Exception:
-                pass
 
     def test_managed_session_in_weakset_after_construction(self):
         """Pin: every ManagedSession registers itself in the WeakSet."""

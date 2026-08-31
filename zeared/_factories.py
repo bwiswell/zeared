@@ -1,36 +1,45 @@
-"""Session-opening factories — ``peer`` / ``client`` / ``open`` plus the
-shared retry / config-building / managed-wrap helpers.
+"""Session-opening factories and their shared helpers.
+
+Session-opening factories — ``peer`` / ``client`` / ``open`` plus the shared retry /
+config-building / managed-wrap helpers.
 
 Pulled out of ``__init__.py`` so the package init can stay a thin
 re-export-and-glue module under the 300-line cap. Public names are
 re-exported by ``__init__.py``.
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import time
-from typing import Callable, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import zenoh
 
 from ._managed_session import ManagedSession
 from ._mode import Mode
-from .config import SessionConfig
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from .config import SessionConfig
 
 _log_connect = logging.getLogger('zeared.connect')
 
 _MISSING = object()
 
+# Reconnect attempts logged at INFO before escalating to WARNING.
+_QUIET_ATTEMPTS = 3
 
-def _open_with_retry(
+
+def _open_with_retry(  # noqa: PLR0913
     open_fn: Callable[[], zenoh.Session],
     *,
     retry: bool,
     initial_backoff: float,
     max_backoff: float,
-    max_attempts: Optional[int],
+    max_attempts: int | None,
     endpoint_label: str,
 ) -> zenoh.Session:
     """Call ``open_fn`` once or retry with exponential backoff.
@@ -46,28 +55,37 @@ def _open_with_retry(
     while True:
         try:
             sess = open_fn()
-            if attempts > 0:
-                _log_connect.info(
-                    'connected to %s after %d retries', endpoint_label, attempts,
-                )
-            return sess
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             attempts += 1
             if max_attempts is not None and attempts >= max_attempts:
                 raise
-            level = logging.INFO if attempts <= 3 else logging.WARNING
+            level = logging.INFO if attempts <= _QUIET_ATTEMPTS else logging.WARNING
             _log_connect.log(
                 level,
                 '%s connect failed (attempt %d): %s — retrying in %.1fs',
-                endpoint_label, attempts, e, backoff,
+                endpoint_label,
+                attempts,
+                e,
+                backoff,
             )
             time.sleep(backoff)
             backoff = min(backoff * 2, max_backoff)
+        else:
+            if attempts > 0:
+                _log_connect.info(
+                    'connected to %s after %d retries',
+                    endpoint_label,
+                    attempts,
+                )
+            return sess
 
 
 def _build_config_for_peer(
-    connect: Optional[list], listen: Optional[list],
-    zenoh_config: Optional[zenoh.Config], *, timestamping: bool = True,
+    connect: list | None,
+    listen: list | None,
+    zenoh_config: zenoh.Config | None,
+    *,
+    timestamping: bool = True,
 ) -> zenoh.Config:
     # User let us build the config when ``zenoh_config is None`` — set
     # the mode + opt into HLC timestamping (RETAINED + DEDUPE need it).
@@ -85,8 +103,10 @@ def _build_config_for_peer(
 
 
 def _build_config_for_client(
-    endpoints: list, zenoh_config: Optional[zenoh.Config],
-    *, timestamping: bool = True,
+    endpoints: list,
+    zenoh_config: zenoh.Config | None,
+    *,
+    timestamping: bool = True,
 ) -> zenoh.Config:
     c = zenoh_config if zenoh_config is not None else zenoh.Config()
     if zenoh_config is None:
@@ -98,8 +118,11 @@ def _build_config_for_client(
 
 
 def _build_config_for_router(
-    listen: list, connect: Optional[list],
-    zenoh_config: Optional[zenoh.Config], *, timestamping: bool = True,
+    listen: list,
+    connect: list | None,
+    zenoh_config: zenoh.Config | None,
+    *,
+    timestamping: bool = True,
 ) -> zenoh.Config:
     # A hub is a router that relays between nodes that can't reach each other
     # directly (e.g. both NAT-gated, outbound-only). It routes pub/sub,
@@ -115,13 +138,20 @@ def _build_config_for_router(
     return c
 
 
-def _wrap_managed(
-    raw, open_fn, label,
-    initial_backoff, max_backoff, max_attempts, probe_interval,
+def _wrap_managed(  # noqa: PLR0913, PLR0917
+    raw: zenoh.Session,
+    open_fn: Callable[[], zenoh.Session],
+    label: str,
+    initial_backoff: float,
+    max_backoff: float,
+    max_attempts: int | None,
+    probe_interval: float,
 ) -> ManagedSession:
     from ._reconnect import start_probe
+
     sess = ManagedSession(
-        raw, open_fn,
+        raw,
+        open_fn,
         endpoint_label=label,
         probe_interval=probe_interval,
         initial_backoff=initial_backoff,
@@ -133,10 +163,19 @@ def _wrap_managed(
 
 
 def _resolve_retry_knobs(
-    config, retry, initial_backoff, max_backoff, max_attempts,
-):
-    """Layer explicit retry kwargs over a ``SessionConfig`` base; return
-    ``(retry_b, initial_b, max_b, max_a)``. Shared by ``peer`` / ``client``."""
+    config: SessionConfig | None,
+    # Each may be the `_MISSING` sentinel or a real value; the body narrows by
+    # identity. Typing them properly needs a sentinel type — see
+    # `project-plans/02-ty-adoption.md` §7 Q4, deferred.
+    retry: Any,
+    initial_backoff: Any,
+    max_backoff: Any,
+    max_attempts: Any,
+) -> tuple[bool, float, float, int | None]:
+    """Layer explicit retry kwargs over a ``SessionConfig`` base; return ``(retry_b, initial_b, max_b, max_a)``.
+
+    Shared by ``peer`` / ``client``.
+    """
     if config is not None:
         retry_b = bool(config.retry)
         initial_b = float(config.initial_backoff)
@@ -155,37 +194,55 @@ def _resolve_retry_knobs(
     return retry_b, initial_b, max_b, max_a
 
 
-def _finalise_session(
-    raw, _open, label, *,
-    auto_reconnect, retention_ttl, gc_interval, probe_interval,
-    initial_b, max_b, max_a, factory_name,
-):
-    """Post-open: return raw or wrap as ManagedSession; reject
-    ``retention_ttl`` on raw sessions. Shared by ``peer`` / ``client``."""
+def _finalise_session(  # noqa: PLR0913
+    raw: zenoh.Session,
+    _open: Callable[[], zenoh.Session],
+    label: str,
+    *,
+    auto_reconnect: bool,
+    retention_ttl: float | None,
+    gc_interval: float,
+    probe_interval: float,
+    initial_b: float,
+    max_b: float,
+    max_a: int | None,
+    factory_name: str,
+) -> zenoh.Session | ManagedSession:
+    """Post-open: return raw or wrap as ManagedSession; reject ``retention_ttl`` on raw sessions.
+
+    Shared by ``peer`` / ``client``.
+    """
     if not auto_reconnect:
         if retention_ttl is not None:
-            raise TypeError(
+            msg = (
                 f'{factory_name}(retention_ttl=...) requires auto_reconnect=True; '
                 'raw zenoh sessions have nowhere to stash a per-session '
                 'TTL fallback. Either set auto_reconnect=True or use '
                 'class-level Cls.RETENTION_TTL.'
             )
+            raise TypeError(msg)
         return raw
     managed = _wrap_managed(
-        raw, _open, label, initial_b, max_b, max_a, probe_interval,
+        raw,
+        _open,
+        label,
+        initial_b,
+        max_b,
+        max_a,
+        probe_interval,
     )
-    managed._gc_interval = gc_interval
+    managed._gc_interval = gc_interval  # noqa: SLF001
     if retention_ttl is not None:
-        managed._retention_ttl = retention_ttl
+        managed._retention_ttl = retention_ttl  # noqa: SLF001
     return managed
 
 
-def peer(
+def peer(  # noqa: PLR0913
     *,
-    connect: Optional[list] = None,
-    listen: Optional[list] = None,
-    config: Optional[SessionConfig] = None,
-    zenoh_config: Optional[zenoh.Config] = None,
+    connect: list | None = None,
+    listen: list | None = None,
+    config: SessionConfig | None = None,
+    zenoh_config: zenoh.Config | None = None,
     retry: object = _MISSING,
     initial_backoff: object = _MISSING,
     max_backoff: object = _MISSING,
@@ -194,8 +251,8 @@ def peer(
     probe_interval: float = 10.0,
     timestamping: bool = True,
     gc_interval: float = 60.0,
-    retention_ttl: Optional[float] = None,
-) -> 'Union[zenoh.Session, ManagedSession]':
+    retention_ttl: float | None = None,
+) -> zenoh.Session | ManagedSession:
     """Open a Zenoh peer-mode session.
 
     Peer nodes discover each other via scouting (multicast) or explicit
@@ -208,7 +265,11 @@ def peer(
     base_connect = list(config.connect) or None if config is not None else None
     base_listen = list(config.listen) or None if config is not None else None
     retry_b, initial_b, max_b, max_a = _resolve_retry_knobs(
-        config, retry, initial_backoff, max_backoff, max_attempts,
+        config,
+        retry,
+        initial_backoff,
+        max_backoff,
+        max_attempts,
     )
 
     if connect is not None:
@@ -218,33 +279,43 @@ def peer(
 
     label = f'peer(connect={base_connect or []}, listen={base_listen or []})'
 
-    def _open():
+    def _open() -> zenoh.Session:
         cfg = _build_config_for_peer(
-            base_connect, base_listen, zenoh_config,
+            base_connect,
+            base_listen,
+            zenoh_config,
             timestamping=timestamping,
         )
         return zenoh.open(cfg)
 
     raw = _open_with_retry(
         _open,
-        retry=retry_b, initial_backoff=initial_b,
-        max_backoff=max_b, max_attempts=max_a,
+        retry=retry_b,
+        initial_backoff=initial_b,
+        max_backoff=max_b,
+        max_attempts=max_a,
         endpoint_label=label,
     )
     return _finalise_session(
-        raw, _open, label,
-        auto_reconnect=auto_reconnect, retention_ttl=retention_ttl,
-        gc_interval=gc_interval, probe_interval=probe_interval,
-        initial_b=initial_b, max_b=max_b, max_a=max_a,
+        raw,
+        _open,
+        label,
+        auto_reconnect=auto_reconnect,
+        retention_ttl=retention_ttl,
+        gc_interval=gc_interval,
+        probe_interval=probe_interval,
+        initial_b=initial_b,
+        max_b=max_b,
+        max_a=max_a,
         factory_name='peer',
     )
 
 
-def client(
-    router: 'Optional[Union[str, list]]' = None,
+def client(  # noqa: PLR0913
+    router: str | list | None = None,
     *,
-    config: Optional[SessionConfig] = None,
-    zenoh_config: Optional[zenoh.Config] = None,
+    config: SessionConfig | None = None,
+    zenoh_config: zenoh.Config | None = None,
     retry: object = _MISSING,
     initial_backoff: object = _MISSING,
     max_backoff: object = _MISSING,
@@ -253,8 +324,8 @@ def client(
     probe_interval: float = 10.0,
     timestamping: bool = True,
     gc_interval: float = 60.0,
-    retention_ttl: Optional[float] = None,
-) -> 'Union[zenoh.Session, ManagedSession]':
+    retention_ttl: float | None = None,
+) -> zenoh.Session | ManagedSession:
     """Open a Zenoh client-mode session connected to one or more routers.
 
     Pass ``config=<Config>`` for a declarative base spec, then layer any
@@ -264,51 +335,63 @@ def client(
     if config is not None:
         endpoints = list(config.connect)
         if config.router:
-            endpoints = [config.router] + endpoints
+            endpoints = [config.router, *endpoints]
     else:
         endpoints = []
     retry_b, initial_b, max_b, max_a = _resolve_retry_knobs(
-        config, retry, initial_backoff, max_backoff, max_attempts,
+        config,
+        retry,
+        initial_backoff,
+        max_backoff,
+        max_attempts,
     )
 
     if router is not None:
         endpoints = [router] if isinstance(router, str) else list(router)
 
     if not endpoints:
-        raise TypeError(
-            'client(): need either router=<endpoint(s)> or '
-            'config=SessionConfig(... with connect/router)'
-        )
+        msg = 'client(): need either router=<endpoint(s)> or config=SessionConfig(... with connect/router)'
+        raise TypeError(msg)
 
     label = f'client(connect={endpoints})'
 
-    def _open():
+    def _open() -> zenoh.Session:
         cfg = _build_config_for_client(
-            endpoints, zenoh_config, timestamping=timestamping,
+            endpoints,
+            zenoh_config,
+            timestamping=timestamping,
         )
         return zenoh.open(cfg)
 
     raw = _open_with_retry(
         _open,
-        retry=retry_b, initial_backoff=initial_b,
-        max_backoff=max_b, max_attempts=max_a,
+        retry=retry_b,
+        initial_backoff=initial_b,
+        max_backoff=max_b,
+        max_attempts=max_a,
         endpoint_label=label,
     )
     return _finalise_session(
-        raw, _open, label,
-        auto_reconnect=auto_reconnect, retention_ttl=retention_ttl,
-        gc_interval=gc_interval, probe_interval=probe_interval,
-        initial_b=initial_b, max_b=max_b, max_a=max_a,
+        raw,
+        _open,
+        label,
+        auto_reconnect=auto_reconnect,
+        retention_ttl=retention_ttl,
+        gc_interval=gc_interval,
+        probe_interval=probe_interval,
+        initial_b=initial_b,
+        max_b=max_b,
+        max_a=max_a,
         factory_name='client',
     )
 
 
-def hub(
+def hub(  # noqa: PLR0913
     *,
-    listen: Optional[list] = None,
-    connect: Optional[list] = None,
-    config: Optional[SessionConfig] = None,
-    zenoh_config: Optional[zenoh.Config] = None,
+    listen: list | None = None,
+    connect: list | None = None,
+    config: SessionConfig | None = None,
+    zenoh_config: zenoh.Config | None = None,
     retry: object = _MISSING,
     initial_backoff: object = _MISSING,
     max_backoff: object = _MISSING,
@@ -340,7 +423,11 @@ def hub(
     base_listen = list(config.listen) or None if config is not None else None
     base_connect = list(config.connect) or None if config is not None else None
     retry_b, initial_b, max_b, max_a = _resolve_retry_knobs(
-        config, retry, initial_backoff, max_backoff, max_attempts,
+        config,
+        retry,
+        initial_backoff,
+        max_backoff,
+        max_attempts,
     )
     if listen is not None:
         base_listen = listen
@@ -351,16 +438,21 @@ def hub(
 
     label = f'hub(listen={base_listen}, connect={base_connect or []})'
 
-    def _open():
+    def _open() -> zenoh.Session:
         cfg = _build_config_for_router(
-            base_listen, base_connect, zenoh_config, timestamping=timestamping,
+            base_listen,
+            base_connect,
+            zenoh_config,
+            timestamping=timestamping,
         )
         return zenoh.open(cfg)
 
     return _open_with_retry(
         _open,
-        retry=retry_b, initial_backoff=initial_b,
-        max_backoff=max_b, max_attempts=max_a,
+        retry=retry_b,
+        initial_backoff=initial_b,
+        max_backoff=max_b,
+        max_attempts=max_a,
         endpoint_label=label,
     )
 
@@ -381,4 +473,5 @@ def open(cfg: SessionConfig) -> zenoh.Session:  # noqa: A001 — shadows builtin
         return cast('zenoh.Session', client(config=cfg))
     if cfg.mode is Mode.ROUTER:
         return hub(config=cfg)
-    raise ValueError(f'SessionConfig.mode unrecognised: {cfg.mode!r}')
+    msg = f'SessionConfig.mode unrecognised: {cfg.mode!r}'
+    raise ValueError(msg)

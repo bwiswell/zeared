@@ -6,12 +6,13 @@ End-to-end retention/tombstone coverage lives in ``test_retention.py``.
 This file confirms the descriptor's instance-vs-class dispatch and
 the RETAINED-required guard.
 """
+
 from __future__ import annotations
 
 import pytest
 
 import zeared as z
-from zeared.message._message_unretain import _UnretainDescriptor, _unretain_impl
+from zeared.message._message_unretain import _unretain_impl, _UnretainDescriptor
 
 
 class TestPublicSurface:

@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.2.10"
+version = "0.2.11"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -24,6 +24,7 @@ bench = ["marshmallow>=3.26,<5.0"]
 dev = [
     "prek",
     "pytest>=8.0,<9.0",
+    "ruff",
     "ty",
 ]
 
@@ -36,6 +37,86 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["zeared"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+indent-width = 4
+# Ruff formats Python code blocks inside Markdown. Off here: the docs align
+# field declarations into columns deliberately, and several ```python blocks
+# show *JSON* wire form, which the formatter rewrites to single quotes.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM",     # comma rules (formatter owns these)
+    "CPY",     # copyright notice at top of file
+    "FLY",     # str.join -> f-string (we join to avoid the {{}} brace footgun)
+    "D100",    # missing docstring in public module
+    "D101",    # missing docstring in public class
+    "D104",    # missing docstring in public package
+    "PLC0415", # allow intentional lazy imports
+    "TD",      # TODO formatting
+    "FIX002",  # disallow TODOs
+    "TRY003",  # long messages outside exception class
+    # --- zeared-specific deviations from the house list ---
+    # zeared is seven Pattern B subdirs (message/, presence/, queryable/,
+    # subscriber/, _managed_session/, _reconnect/, _template/) whose modules
+    # reach their siblings via `from ..x import`. seared is flat and never
+    # hits this; rewriting 91 imports to absolute would be pure churn.
+    "TID252",  # parent-relative imports are the subdir layout working
+    # `Any` *is* the wire boundary type here, exactly as in seared: codec
+    # pack/unpack, `REQUEST` / reply payloads, and the zenoh `target` /
+    # `consolidation` enums zeared passes through opaquely.
+    "ANN401",  # dynamically typed expressions at the wire boundary
+]
+# `×` (O(depth × matches)) and `–` are deliberate typography in docstrings
+# and comments, not confusable typos.
+allowed-confusables = ["×", "–"]
+fixable = ["ALL"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "single"
+
+[tool.ruff.lint.per-file-ignores]
+# `N` — tests alias field types to initials; `DTZ` — naive datetimes are
+# fixtures under test.
+# `PT012`: testing decorator-time validation means defining a class inside
+# the `pytest.raises` block — inherently more than one statement.
+"tests/**/*.py" = ["S", "SLF", "ANN", "D", "INP", "ARG", "PLR", "N", "DTZ", "PT012"]
+# `_M` (bound to Message) is deliberate on these classmethods. PYI019 would
+# rewrite it to `Self` — which inside a mixin is the *mixin*, not the
+# composed `Message` — breaking the generic return. (It only becomes
+# applicable after the UP rules normalize `Type[_M]` to `type[_M]`, so it
+# surfaces as a cascading fix rather than a standalone diagnostic.)
+# UP049 wants PEP 695 syntax for the private `_M` TypeVar, but its fix
+# renames the parameter without updating its uses, producing broken code.
+"zeared/queryable/_query_get.py" = ["UP047", "UP049"]
+"zeared/subscriber/_subscriber_retained_fetch.py" = ["UP047", "UP049"]
+"zeared/message/_message_query.py" = ["PYI019"]
+"zeared/message/_message_subscribe.py" = ["PYI019"]
+# The reconnect orchestrator exists to drive ManagedSession / Subscriber /
+# Queryable internals through a raw-session swap — SLF001 is aimed at
+# reaching into another *package*, not at a library's own machinery.
+"zeared/_reconnect/*.py" = ["SLF001"]
+# CLIs whose product *is* stdout.
+"zeared/doc/generate.py" = ["T201"]
+"zeared/doc/typescript.py" = ["T201"]
+# Repo-only benchmark scripts — excluded from the wheel, never imported by
+# library code. `INP001`: they are standalone scripts, not a package (unlike
+# seared, whose bench is a `python -m bench` package). `D`/`ANN`: comparator
+# schema boilerplate and throwaway timing helpers. Revisit if bench/ ever
+# becomes a package.
+"bench/**/*.py" = ["T201", "INP001", "D", "ANN", "S101", "ARG", "PLR", "ASYNC110"]
+
+[tool.ruff.format]
+docstring-code-format = true
+line-ending = "lf"
+quote-style = "single"
 
 [tool.ty.src]
 # The benches import the `[bench]` extra (marshmallow) that a default dev

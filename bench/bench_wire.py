@@ -29,20 +29,20 @@ publisher (zenoh session.put is already fast in Rust). The cache earns
 more on templated TOPICs with repeated concrete keys and on higher-
 frequency publishing — separate benches would need to showcase that.
 """
+
 from __future__ import annotations
 
 import threading
 import time
-from typing import Optional
 
 import zenoh
-from marshmallow import EXCLUDE, Schema, post_load
+from marshmallow import EXCLUDE, Schema
 from marshmallow.fields import Float as MFloat
-from marshmallow.fields import Integer, List as MList, Nested, String
+from marshmallow.fields import Integer, Nested, String
+from marshmallow.fields import List as MList
 
 import zeared as z
 from zeared import _codec as codec
-
 
 # ----------------------------------------------------------------------------
 # Schema definitions — one payload, three representations.
@@ -61,6 +61,7 @@ def _payload_dict() -> dict:
 
 
 # --- marshmallow ---
+
 
 class InnerSchema(Schema):
     class Meta:
@@ -85,11 +86,12 @@ _outer_schema = OuterSchema()
 
 # --- zeared ---
 
+
 @z.zeared
 class Inner(z.Zeared):
     x: int = z.Int(required=True)
     y: float = z.Float(required=True)
-    label: Optional[str] = z.Str()
+    label: str | None = z.Str()
 
 
 @z.zeared
@@ -115,7 +117,7 @@ class OuterMsgpack(z.Message):
 class OuterMsgpackNoCache(z.Message):
     TOPIC = 'bench/zeared/msgpack_nocache'
     ENCODING = 'msgpack'
-    PUBLISHER = False   # every send uses session.put() directly (0.0.1 behaviour)
+    PUBLISHER = False  # every send uses session.put() directly (0.0.1 behaviour)
     name: str = z.Str(required=True)
     items: list = z.T(Inner, many=True, required=True)
     tags: list = z.Str(many=True, missing=[])
@@ -124,6 +126,7 @@ class OuterMsgpackNoCache(z.Message):
 # ----------------------------------------------------------------------------
 # Benchmark harness.
 # ----------------------------------------------------------------------------
+
 
 def _peer_session() -> zenoh.Session:
     c = zenoh.Config()
@@ -138,7 +141,7 @@ def _run_zenoh_marshmallow(session: zenoh.Session, n: int) -> tuple[float, int]:
     done = threading.Event()
     count = [0]
 
-    def on_sample(sample):
+    def on_sample(sample) -> None:
         # Decode to ensure apples-to-apples comparison.
         _outer_schema.loads(bytes(sample.payload).decode('utf-8'))
         count[0] += 1
@@ -169,11 +172,11 @@ def _run_zeared(
     n: int,
     msg_cls,
 ) -> tuple[float, int]:
-    """zeared round-trip via Message.on_message + send."""
+    """Zeared round-trip via Message.on_message + send."""
     done = threading.Event()
     count = [0]
 
-    def on_msg(m):
+    def on_msg(m) -> None:
         count[0] += 1
         if count[0] >= n:
             done.set()

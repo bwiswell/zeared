@@ -1,5 +1,6 @@
 """Smoke tests for ``zeared/message/__init__.py`` — the namespace
 re-exports for the message Pattern B subdir."""
+
 from __future__ import annotations
 
 import zeared as z

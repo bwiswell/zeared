@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from typing import Optional
-
 import pytest
+from conftest import wait
 
 import zeared as z
 from zeared.subscriber import _wants_meta
-
-from conftest import wait
 
 
 class TestArityInspection:
@@ -20,19 +17,23 @@ class TestArityInspection:
     def test_named_two_args(self):
         def handler(msg, meta):  # pragma: no cover — only inspected
             pass
+
         assert _wants_meta(handler) is True
 
     def test_varargs_opts_into_meta(self):
         def handler(*a):  # pragma: no cover
             pass
+
         assert _wants_meta(handler) is True
 
     def test_bound_method(self):
         class C:
             def one(self, msg):  # pragma: no cover
                 pass
+
             def two(self, msg, meta):  # pragma: no cover
                 pass
+
         assert _wants_meta(C().one) is False
         assert _wants_meta(C().two) is True
 
@@ -172,11 +173,11 @@ class TestScopedOverride:
         sub_b = Msg.on_message(lambda m: got_b.append(m.val), session=session_b)
         wait()
 
-        z.session = session_a         # default = A
-        Msg(val=1).send()              # → A
+        z.session = session_a  # default = A
+        Msg(val=1).send()  # → A
         with z.session(session_b):
-            Msg(val=2).send()          # → B (scoped)
-        Msg(val=3).send()              # → A (back to default)
+            Msg(val=2).send()  # → B (scoped)
+        Msg(val=3).send()  # → A (back to default)
         wait()
 
         sub_a.close()
@@ -292,7 +293,8 @@ class TestSchemaStampingAndCheck:
         M(n=1, v='one').send()
         wait()
         cached = M.__dict__.get('_SCHEMA_ATTACHMENT_CACHE')
-        assert cached is not None and cached != b''
+        assert cached is not None
+        assert cached != b''
 
         # Second send reuses the same cache entry — no rebuild.
         M(n=2, v='two').send()
@@ -317,14 +319,14 @@ class TestSchemaMismatch:
         @z.zeared
         class SubM(z.Message):
             TOPIC = 'schema/pub/{n}'
-            SCHEMA = '2.0'                # mismatch
+            SCHEMA = '2.0'  # mismatch
             n: int = z.Int(required=True)
             v: str = z.Str(required=True)
 
         received = []
         errors: list = []
         sub = SubM.on_message(
-            lambda m: received.append(m),
+            received.append,
             on_error=lambda exc, raw: errors.append(exc),
             session=session_b,
         )
@@ -371,8 +373,7 @@ class TestSchemaMismatch:
 
         # Only ONE on_error fire, despite three mismatched samples.
         assert len(errors) == 1, (
-            f'warn-once cache regressed — got {len(errors)} errors '
-            'for the same (sender, schema) pair'
+            f'warn-once cache regressed — got {len(errors)} errors for the same (sender, schema) pair'
         )
 
     def test_matching_schema_dispatches_normally(self, connected_pair):
@@ -403,6 +404,7 @@ class TestSchemaMismatch:
         long-running subscribers exposed to many distinct misaligned
         senders. We poke the dispatch closure directly with synthetic
         samples to inject more pairs than fit in the cache."""
+
         @z.zeared
         class M(z.Message):
             TOPIC = 'schema/cap/{n}'
@@ -419,6 +421,7 @@ class TestSchemaMismatch:
 
             # Inject more pairs than fit in the cache.
             from zeared.subscriber import _SCHEMA_MISMATCH_CACHE_MAX
+
             n = _SCHEMA_MISMATCH_CACHE_MAX + 50
             for i in range(n):
                 # Direct dict insertion mimics what the dispatch closure
@@ -441,6 +444,7 @@ class TestSchemaMismatch:
         cache so a reconnected session (new peer zids) can re-warn on
         legitimately-new mismatches without being silenced by stale
         entries from the pre-reconnect lifetime."""
+
         @z.zeared
         class M(z.Message):
             TOPIC = 'schema/clear/{n}'
@@ -483,8 +487,7 @@ class TestSchemaMismatch:
         received = []
         seen_schema = []
         sub = SubM.on_message(
-            lambda m, meta: (received.append(m.v),
-                             seen_schema.append(meta.schema)),
+            lambda m, meta: (received.append(m.v), seen_schema.append(meta.schema)),
             session=session_b,
         )
         wait()
@@ -492,7 +495,7 @@ class TestSchemaMismatch:
         wait(0.3)
         sub.close()
 
-        assert received == ['hi']      # dispatched (no validation)
+        assert received == ['hi']  # dispatched (no validation)
         assert seen_schema == ['1.0']  # populated from wire
 
 
@@ -502,6 +505,7 @@ class TestIssuedAtPopulated:
 
     def test_issued_at_is_recent_utc_datetime(self, session):
         import datetime
+
         @z.zeared
         class M(z.Message):
             TOPIC = 'issued_at/{n}'
@@ -523,7 +527,7 @@ class TestIssuedAtPopulated:
         # the factory, so timestamping may or may not be enabled here.
         # Pin permissively: either a recent UTC datetime, or None.
         if ts is not None:
-            now = datetime.datetime.now(tz=datetime.timezone.utc)
+            now = datetime.datetime.now(tz=datetime.UTC)
             assert abs((now - ts).total_seconds()) < 60
 
 
@@ -551,6 +555,7 @@ class TestSubscriberGeneric:
         assert z.Subscriber is not None
         # Subclass relationship preserved.
         from zeared.subscriber import Subscriber as DirectSub
+
         assert z.Subscriber is DirectSub
 
 
@@ -570,9 +575,8 @@ class TestPerSubscriberDedupe:
             v: str = z.Str(required=True)
 
         z.session = session
-        sub = M.on_message(lambda m: None)        # no dedupe= kwarg
+        sub = M.on_message(lambda m: None)  # no dedupe= kwarg
         try:
-            from zeared.subscriber import _subscribers
             # Find the subscriber's dispatch closure to check dedupe state.
             # We can't introspect the closure directly; instead pin via
             # behavior — see the override tests below for stronger checks.
@@ -621,8 +625,8 @@ class TestPerSubscriberDedupe:
         # Per-sub dedupe=True engages — even though class default is False.
         sub = M.on_message(lambda m: None, dedupe=True)
         try:
-            assert sub is not None     # construction works; runtime would
-                                       # need timestamping to be effective.
+            assert sub is not None  # construction works; runtime would
+            # need timestamping to be effective.
         finally:
             sub.close()
 
@@ -667,7 +671,8 @@ class TestStructuredErrors:
         z.session = session
 
         def boom(m):
-            raise RuntimeError('user code blew up')
+            msg = 'user code blew up'
+            raise RuntimeError(msg)
 
         sub = Msg.on_message(
             boom,
@@ -702,7 +707,8 @@ class TestStructuredErrors:
                 kinds.append('other')
 
         def boom(m):
-            raise ValueError('boom')
+            msg = 'boom'
+            raise ValueError(msg)
 
         sub = Msg.on_message(boom, on_error=on_err)
         wait()
@@ -728,9 +734,7 @@ class TestMetaCaptures:
 
         received: list[tuple[dict, int]] = []
         z.session = session
-        sub = Telemetry.on_message(
-            lambda m, meta: received.append((meta.captures, m.id))
-        )
+        sub = Telemetry.on_message(lambda m, meta: received.append((meta.captures, m.id)))
         wait()
         Telemetry(id=42, x=1.5).send()
         wait()
@@ -738,11 +742,12 @@ class TestMetaCaptures:
 
         assert len(received) == 1
         captures, msg_id = received[0]
-        assert captures == {'id': '42'}    # string — raw capture
-        assert msg_id == 42                # coerced onto instance
+        assert captures == {'id': '42'}  # string — raw capture
+        assert msg_id == 42  # coerced onto instance
 
     def test_captures_populated_for_capture_only_slot(self, session):
         """corr_id is in the TOPIC but NOT a declared field."""
+
         @z.zeared
         class CliRequest(z.Message):
             TOPIC = 'cap/cli/request/{corr_id}'
@@ -750,16 +755,17 @@ class TestMetaCaptures:
 
         received: list[dict] = []
         z.session = session
-        sub = CliRequest.on_message(
-            lambda m, meta: received.append(meta.captures)
-        )
+        sub = CliRequest.on_message(lambda m, meta: received.append(meta.captures))
         wait()
         # Publish requires corr_id at render-time; simulate by sending via raw session
         # using the concrete topic with a specific corr_id.
         from zeared import _codec as codec
+
         raw = codec.pack({'cmd': 'ping'}, 'msgpack')
         session.put(
-            'cap/cli/request/abc123', raw, encoding='application/msgpack',
+            'cap/cli/request/abc123',
+            raw,
+            encoding='application/msgpack',
         )
         wait()
         sub.close()
@@ -774,9 +780,7 @@ class TestMetaCaptures:
 
         received: list[dict] = []
         z.session = session
-        sub = Alert.on_message(
-            lambda m, meta: received.append(meta.captures)
-        )
+        sub = Alert.on_message(lambda m, meta: received.append(meta.captures))
         wait()
         Alert(msg='x').send()
         wait()
@@ -796,15 +800,14 @@ class TestMultiWildcardSubscribe:
 
         received: list[tuple[str, str]] = []
         z.session = session
-        sub = AnyStatus.on_message(
-            lambda m, meta: received.append((meta.key_expr, m.status))
-        )
+        sub = AnyStatus.on_message(lambda m, meta: received.append((meta.key_expr, m.status)))
         wait()
 
         # Publish via canonical (publishable)
         AnyStatus(id=1, status='ok').send()
         # Publish under the wildcard (via raw session.put since it's subscribe-only)
         from zeared import _codec as codec
+
         raw = codec.pack({'status': 'degraded'}, 'msgpack')
         session.put('wild/vehicle/5/health', raw, encoding='application/msgpack')
         wait()
@@ -857,9 +860,7 @@ class TestMultiTopic:
 
         got: list[tuple[int, str]] = []
         z.session = session
-        sub = Status.on_message(
-            lambda m, meta: got.append((m.id, meta.key_expr))
-        )
+        sub = Status.on_message(lambda m, meta: got.append((m.id, meta.key_expr)))
         wait()
 
         Status(id=5, status='a').send()
@@ -1034,6 +1035,7 @@ class TestRetainedFetchOptOut:
         onto the handle (the reconnect path shares ``_fetch_retained``
         with the subscribe-time path, covered in
         ``test__subscriber_retained_fetch.py``)."""
+
         @z.zeared
         class Tele(z.Message):
             TOPIC = 'rf/flag/{id}'

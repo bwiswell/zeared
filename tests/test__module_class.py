@@ -2,6 +2,7 @@
 metaclass that intercepts ``zeared.session = sess`` assignments so the
 dual-role ``_SessionHandle`` keeps its identity while updating its
 default."""
+
 from __future__ import annotations
 
 import sys

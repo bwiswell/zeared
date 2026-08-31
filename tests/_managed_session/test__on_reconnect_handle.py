@@ -1,6 +1,7 @@
 """Tests for ``zeared/_managed_session/_on_reconnect_handle.py`` —
 the ``OnReconnectHandle`` cancel handle returned by
 ``ManagedSession.on_reconnect(cb)``."""
+
 from __future__ import annotations
 
 import threading
@@ -13,11 +14,14 @@ class TestPublicSurface:
         assert OnReconnectHandle is not None
 
     def test_uses_slots(self):
-        assert OnReconnectHandle.__slots__ == ('_managed', '_entry', '_cancelled')
+        # Order is incidental (ruff's RUF023 keeps __slots__ sorted); the
+        # pin is that slots are declared and name exactly these three.
+        assert set(OnReconnectHandle.__slots__) == {'_managed', '_entry', '_cancelled'}
 
 
 class _FakeManaged:
     """Minimal stand-in for ManagedSession."""
+
     def __init__(self):
         self._lock = threading.RLock()
         self._on_reconnect_callbacks = []

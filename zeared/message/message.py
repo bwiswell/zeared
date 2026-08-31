@@ -20,9 +20,10 @@ Plus ``_message_unretain.py`` for the ``_UnretainDescriptor`` and the
 shared ``_unretain_impl`` function (instance-vs-class ``unretain``
 dispatch).
 """
+
 from __future__ import annotations
 
-from typing import ClassVar, Literal, Optional, Self, Tuple, Union
+from typing import ClassVar, Literal, Self
 
 import seared as s
 
@@ -34,7 +35,6 @@ from ._message_subscribe import _MessageSubscribeMixin
 from ._message_topic import _MessageTopicMixin
 from ._message_unretain import _UnretainDescriptor
 from ._message_will import _MessageWillMixin
-
 
 Encoding = Literal['msgpack', 'json']
 
@@ -72,8 +72,8 @@ class Message(
 
     TOPIC: ClassVar[str]
     ENCODING: ClassVar[Encoding] = 'msgpack'
-    PUBLISHER: ClassVar[Union[bool, int]] = True
-    EXTRA_TOPICS: ClassVar[Tuple[str, ...]] = ()
+    PUBLISHER: ClassVar[bool | int] = True
+    EXTRA_TOPICS: ClassVar[tuple[str, ...]] = ()
     RETAINED: ClassVar[bool] = False
     LIVELINESS: ClassVar[bool] = False
     DEDUPE: ClassVar[bool] = True
@@ -86,14 +86,14 @@ class Message(
     # (i.e. when a subscriber issues a retained-fetch get). Topics
     # that never get queried may keep stale entries in the cache;
     # acceptable for typical use, documented as a limit.
-    RETENTION_TTL: ClassVar[Optional[float]] = None
+    RETENTION_TTL: ClassVar[float | None] = None
     # Optional request-payload class for ``on_query`` / ``query``. ``None``
     # (default) means query requests carry no typed body — the getter may
     # still pass ``params=`` (selector parameters) and the handler sees the
     # raw payload bytes on ``ctx.request``. Set to a ``@z.zeared`` class to
     # send a typed request: ``Cls.query(request=Req(...))`` packs it as the
     # query payload and the handler's ``ctx.request`` is a decoded ``Req``.
-    REQUEST: ClassVar[Optional[type]] = None
+    REQUEST: ClassVar[type | None] = None
     # Optional schema-version marker. ``None`` (default) opts the class
     # out of attachment-based schema stamping; any string value enables
     # it — the value rides as a Zenoh sample attachment (msgpack-encoded
@@ -101,7 +101,7 @@ class Message(
     # ``SCHEMA`` and route mismatches via ``on_error`` as
     # :class:`SchemaMismatchError`. zeared does not enforce a specific
     # shape — semver / hash / build-id all work.
-    SCHEMA: ClassVar[Optional[str]] = None
+    SCHEMA: ClassVar[str | None] = None
 
     # ``unretain`` dispatches on instance-vs-class access via _UnretainDescriptor.
     #   msg.unretain()                    → uses self's template fields
@@ -110,8 +110,11 @@ class Message(
 
     @classmethod
     def _decode(
-        cls, raw: bytes, key_expr: str, encoding: Encoding,
-    ) -> tuple['Self', dict[str, str]]:
+        cls,
+        raw: bytes,
+        key_expr: str,
+        encoding: Encoding,
+    ) -> tuple[Self, dict[str, str]]:
         """Reconstruct a message instance from wire bytes + key expression.
 
         Returns ``(instance, captures_dict)``: the decoded message plus the
@@ -123,18 +126,15 @@ class Message(
         """
         payload = codec.unpack(raw, encoding)
         if not isinstance(payload, dict):
-            raise ValueError(
-                f'{cls.__name__}: expected dict payload, got {type(payload).__name__}'
-            )
+            msg = f'{cls.__name__}: expected dict payload, got {type(payload).__name__}'
+            raise TypeError(msg)
         tpls = cls._templates()
         captured: dict[str, str] = {}
         if tpls.all:
             match = tpls.match(key_expr)
             if match is None:
-                raise ValueError(
-                    f'{cls.__name__}: key_expr {key_expr!r} does not match '
-                    f'any declared topic'
-                )
+                msg = f'{cls.__name__}: key_expr {key_expr!r} does not match any declared topic'
+                raise ValueError(msg)
             _, captured = match
             spec_by_attr = {attr: f for attr, _, f in cls.__seared_fields__}
             for name, raw_val in captured.items():
@@ -148,4 +148,4 @@ class Message(
         return cls.load(payload, format=encoding), captured
 
 
-__all__ = ['Message', 'Encoding']
+__all__ = ['Encoding', 'Message']

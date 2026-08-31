@@ -19,7 +19,8 @@ def pack(data: Any, encoding: Encoding) -> bytes:
         return msgpack.packb(data, use_bin_type=True)
     if encoding == 'json':
         return json.dumps(data).encode('utf-8')
-    raise ValueError(f'unknown encoding {encoding!r}')
+    msg = f'unknown encoding {encoding!r}'
+    raise ValueError(msg)
 
 
 def unpack(raw: bytes, encoding: Encoding) -> Any:
@@ -27,10 +28,11 @@ def unpack(raw: bytes, encoding: Encoding) -> Any:
         return msgpack.unpackb(raw, raw=False)
     if encoding == 'json':
         return json.loads(raw.decode('utf-8'))
-    raise ValueError(f'unknown encoding {encoding!r}')
+    msg = f'unknown encoding {encoding!r}'
+    raise ValueError(msg)
 
 
-def effective_encoding(cls_encoding: Encoding, debug: bool) -> Encoding:
+def effective_encoding(cls_encoding: Encoding, debug: bool) -> Encoding:  # noqa: FBT001
     """Debug flag forces JSON across the board; otherwise honour the class attribute."""
     if debug:
         return 'json'

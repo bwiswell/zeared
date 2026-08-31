@@ -1,14 +1,14 @@
 """Tests for ``Message.fetch_retained`` — the one-shot typed snapshot of a
 class's current retained set (the durable reconcile path)."""
+
 from __future__ import annotations
 
 import asyncio
 
 import pytest
+from conftest import wait
 
 import zeared as z
-
-from conftest import wait
 
 
 class TestFetchRetained:
@@ -51,7 +51,7 @@ class TestFetchRetained:
         assert {m.reader_id for m in got} == {2}
 
     def test_empty_when_nothing_retained(self, connected_pair):
-        session_a, session_b = connected_pair
+        _session_a, session_b = connected_pair
 
         @z.zeared
         class Reader(z.Message):

@@ -4,6 +4,7 @@ Re-exports the ``Queryable`` handle and ``QueryContext`` plus the
 registry helpers that ``z.release`` / ``release_all`` / the reconnect
 machinery walk.
 """
+
 from __future__ import annotations
 
 from ._query_context import QueryContext
@@ -17,10 +18,9 @@ from ._queryable_registry import (
 )
 from .queryable import Queryable
 
-
 __all__ = [
-    'Queryable',
     'QueryContext',
+    'Queryable',
     '_close_queryables_for',
     '_deregister_queryable',
     '_queryables',

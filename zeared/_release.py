@@ -4,25 +4,24 @@ Pulled out of ``__init__.py`` so the package init can stay a thin
 re-export-and-glue module under the 300-line cap. Public names are
 re-exported by ``__init__.py``.
 """
+
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from ._managed_session import ManagedSession
 
 if TYPE_CHECKING:
-    import zenoh
-
     from ._managed_session import SessionLike
 
 
 _log_connect = logging.getLogger('zeared.connect')
 
 
-def release(*, session: 'SessionLike') -> None:
-    """Walk every zeared-owned resource for ``session`` in the right order
-    and close the session itself.
+def release(*, session: SessionLike) -> None:
+    """Walk every zeared-owned resource for ``session`` in the right order and close the session itself.
 
     Order matters — step 5 (presence-state clear, which undeclares the
     liveliness token) MUST run before step 6 (``session.close()``) so the
@@ -43,7 +42,7 @@ def release(*, session: 'SessionLike') -> None:
     # If this is a ManagedSession, stop the probe BEFORE everything else:
     # we don't want a probe-detected death triggering reconnect mid-shutdown.
     if isinstance(session, ManagedSession):
-        session._teardown(call_close=False)
+        session._teardown(call_close=False)  # noqa: SLF001
 
     # 1. Close zeared subscribers on this session (cancels watchdogs,
     #    undeclares Zenoh subs, deregisters presence dispatchers).
@@ -70,14 +69,12 @@ def release(*, session: 'SessionLike') -> None:
     clear_presence_state(session=session)
 
     # 6. Close the Zenoh session itself.
-    try:
+    # Already closed (or otherwise unhealthy) — nothing useful we can do.
+    with contextlib.suppress(Exception):
         session.close()
-    except Exception:  # noqa: BLE001
-        # Already closed (or otherwise unhealthy) — nothing useful we can do.
-        pass
 
 
-def release_all() -> None:
+def release_all() -> None:  # noqa: C901
     """Release every zeared-managed session in this process.
 
     Walks the per-session registries (subscribers, publisher caches,
@@ -94,6 +91,8 @@ def release_all() -> None:
     from ._managed_session import _managed_sessions
     from .presence import (
         _observer_registry,
+    )
+    from .presence import (
         _registry as _presence_registry,
     )
     from .publisher import _registry as _publisher_registry
@@ -101,9 +100,9 @@ def release_all() -> None:
     from .retention import _registry as _retention_registry
     from .subscriber import _subscribers, _subscribers_lock
 
-    sessions: 'dict[int, SessionLike]' = {}   # id(session) → session ref
+    sessions: dict[int, SessionLike] = {}  # id(session) → session ref
 
-    def _add(sess: 'Optional[SessionLike]') -> None:
+    def _add(sess: SessionLike | None) -> None:
         if sess is None:
             return
         sessions.setdefault(id(sess), sess)
@@ -149,5 +148,7 @@ def release_all() -> None:
             release(session=sess)
         except Exception:  # noqa: BLE001
             _log_connect.warning(
-                'release_all: release(%r) raised', sess, exc_info=True,
+                'release_all: release(%r) raised',
+                sess,
+                exc_info=True,
             )

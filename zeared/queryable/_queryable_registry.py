@@ -1,38 +1,40 @@
-"""Module-level queryable registry — keyed on ``id(session)``. Hard refs
-(no weakref) since ``Queryable`` uses ``__slots__`` and we explicitly
-deregister on close. ``z.release(session=sess)`` walks this set; the
-reconnect machinery walks it to redeclare against a fresh raw.
+"""Module-level queryable registry — keyed on ``id(session)``.
+
+Hard refs (no weakref) since ``Queryable`` uses ``__slots__`` and we explicitly
+deregister on close. ``z.release(session=sess)`` walks this set; the reconnect machinery
+walks it to redeclare against a fresh raw.
 
 Sibling helper inside the ``queryable`` Pattern B subdir — mirrors
 ``subscriber/_subscriber_registry.py``.
 """
+
 from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .._managed_session import SessionLike
     import zenoh
 
+    from .._managed_session import SessionLike
     from .queryable import Queryable
 
 
 _log = logging.getLogger('zeared.queryable')
 
 
-_queryables: 'dict[int, set]' = {}
+_queryables: dict[int, set] = {}
 _queryables_lock = threading.Lock()
 
 
-def _register_queryable(session: 'zenoh.Session', qbl: 'Queryable') -> None:
+def _register_queryable(session: SessionLike, qbl: Queryable) -> None:
     sid = id(session)
     with _queryables_lock:
         _queryables.setdefault(sid, set()).add(qbl)
 
 
-def _deregister_queryable(session, qbl: 'Queryable') -> None:
+def _deregister_queryable(session: SessionLike, qbl: Queryable) -> None:
     if session is None:
         return
     sid = id(session)
@@ -45,9 +47,11 @@ def _deregister_queryable(session, qbl: 'Queryable') -> None:
             _queryables.pop(sid, None)
 
 
-def _close_queryables_for(session: 'SessionLike') -> None:
-    """Close every queryable registered against this session. Called by
-    ``z.release()`` right after subscribers are closed."""
+def _close_queryables_for(session: SessionLike) -> None:
+    """Close every queryable registered against this session.
+
+    Called by ``z.release()`` right after subscribers are closed.
+    """
     sid = id(session)
     with _queryables_lock:
         bucket = _queryables.pop(sid, None)
@@ -58,11 +62,12 @@ def _close_queryables_for(session: 'SessionLike') -> None:
             qbl.close()
         except Exception:  # noqa: BLE001
             _log.warning(
-                'queryable.close failed during release', exc_info=True,
+                'queryable.close failed during release',
+                exc_info=True,
             )
 
 
-def clear_queryable_cache(*, session: 'Optional[zenoh.Session]' = None) -> None:
+def clear_queryable_cache(*, session: zenoh.Session | None = None) -> None:
     """Undeclare user queryables and drop them from the registry.
 
     Without ``session=``, closes every registered queryable. With
@@ -82,5 +87,6 @@ def clear_queryable_cache(*, session: 'Optional[zenoh.Session]' = None) -> None:
                 qbl.close()
             except Exception:  # noqa: BLE001
                 _log.warning(
-                    'queryable.close failed during clear', exc_info=True,
+                    'queryable.close failed during clear',
+                    exc_info=True,
                 )

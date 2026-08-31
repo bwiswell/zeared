@@ -9,18 +9,26 @@ callback thread to asyncio via ``loop.call_soon_threadsafe`` feeding an
 Sync and async calls share state transparently — same ``Message`` class,
 same session, same ``z.batch()`` buffer (backed by ``contextvars``).
 """
+
 from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, AsyncIterator, Iterable, Optional
+from typing import TYPE_CHECKING, Any
 
 from .batch import batch as _batch_cm
 
 if TYPE_CHECKING:
+    import types
+    from collections.abc import AsyncIterator, Callable, Iterable
+
     import zenoh
 
+    from .batch import _BatchHandle
+    from .config import SessionConfig
     from .message import Message
+    from .meta import ZenohMeta
+    from .queryable import Queryable, QueryContext
 
 
 class _AsyncSessionContextManager:
@@ -43,43 +51,49 @@ class _AsyncSessionContextManager:
 
     Doesn't suppress exceptions; ``release()`` raises propagate.
     """
+
     __slots__ = ('_factory', '_kwargs', '_sess')
 
-    def __init__(self, factory, kwargs):
+    def __init__(self, factory: Callable[..., Any], kwargs: dict[str, Any]) -> None:
         self._factory = factory
         self._kwargs = kwargs
         self._sess = None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Any:
         self._sess = await asyncio.to_thread(
             lambda: self._factory(**self._kwargs),
         )
         return self._sess
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: types.TracebackType | None,
+    ) -> None:
         from . import release
+
         sess = self._sess
         self._sess = None
         if sess is not None:
             await asyncio.to_thread(release, session=sess)
-        return None
 
 
-def apeer(
+def apeer(  # noqa: PLR0913
     *,
-    connect: Optional[list[str]] = None,
-    listen: Optional[list[str]] = None,
-    config=None,
-    zenoh_config: Optional['zenoh.Config'] = None,
+    connect: list[str] | None = None,
+    listen: list[str] | None = None,
+    config: SessionConfig | None = None,
+    zenoh_config: zenoh.Config | None = None,
     retry: bool = False,
     initial_backoff: float = 0.1,
     max_backoff: float = 30.0,
-    max_attempts: Optional[int] = None,
+    max_attempts: int | None = None,
     auto_reconnect: bool = False,
     probe_interval: float = 10.0,
     timestamping: bool = True,
     gc_interval: float = 60.0,
-    retention_ttl: Optional[float] = None,
+    retention_ttl: float | None = None,
 ) -> _AsyncSessionContextManager:
     """Async-context-managed peer session.
 
@@ -88,42 +102,52 @@ def apeer(
     form from ≤0.0.14 is removed (pre-0.1.0 break).
     """
     from . import peer
+
     kwargs: dict = {
-        'timestamping': timestamping, 'gc_interval': gc_interval,
-        'auto_reconnect': auto_reconnect, 'probe_interval': probe_interval,
+        'timestamping': timestamping,
+        'gc_interval': gc_interval,
+        'auto_reconnect': auto_reconnect,
+        'probe_interval': probe_interval,
         'retention_ttl': retention_ttl,
     }
     if config is not None:
         kwargs['config'] = config
     else:
         kwargs.update(
-            connect=connect, listen=listen, zenoh_config=zenoh_config,
-            retry=retry, initial_backoff=initial_backoff,
-            max_backoff=max_backoff, max_attempts=max_attempts,
+            connect=connect,
+            listen=listen,
+            zenoh_config=zenoh_config,
+            retry=retry,
+            initial_backoff=initial_backoff,
+            max_backoff=max_backoff,
+            max_attempts=max_attempts,
         )
     return _AsyncSessionContextManager(peer, kwargs)
 
 
-def aclient(
-    router=None,
+def aclient(  # noqa: PLR0913
+    router: str | list[str] | None = None,
     *,
-    config=None,
-    zenoh_config: Optional['zenoh.Config'] = None,
+    config: SessionConfig | None = None,
+    zenoh_config: zenoh.Config | None = None,
     retry: bool = False,
     initial_backoff: float = 0.1,
     max_backoff: float = 30.0,
-    max_attempts: Optional[int] = None,
+    max_attempts: int | None = None,
     auto_reconnect: bool = False,
     probe_interval: float = 10.0,
     timestamping: bool = True,
     gc_interval: float = 60.0,
-    retention_ttl: Optional[float] = None,
+    retention_ttl: float | None = None,
 ) -> _AsyncSessionContextManager:
     """Async-context-managed client session. See :func:`apeer`."""
     from . import client
+
     kwargs: dict = {
-        'timestamping': timestamping, 'gc_interval': gc_interval,
-        'auto_reconnect': auto_reconnect, 'probe_interval': probe_interval,
+        'timestamping': timestamping,
+        'gc_interval': gc_interval,
+        'auto_reconnect': auto_reconnect,
+        'probe_interval': probe_interval,
         'retention_ttl': retention_ttl,
     }
     if router is not None:
@@ -133,53 +157,61 @@ def aclient(
     else:
         kwargs.update(
             zenoh_config=zenoh_config,
-            retry=retry, initial_backoff=initial_backoff,
-            max_backoff=max_backoff, max_attempts=max_attempts,
+            retry=retry,
+            initial_backoff=initial_backoff,
+            max_backoff=max_backoff,
+            max_attempts=max_attempts,
         )
     return _AsyncSessionContextManager(client, kwargs)
 
 
-def aopen(cfg) -> _AsyncSessionContextManager:
-    """Async-context-managed dispatch on :class:`SessionConfig`. See
-    :func:`apeer`."""
+def aopen(cfg: SessionConfig) -> _AsyncSessionContextManager:
+    """Async-context-managed dispatch on :class:`SessionConfig`. See :func:`apeer`."""
     from . import open as _open
+
     return _AsyncSessionContextManager(_open, {'cfg': cfg})
 
 
 async def asend(
-    msg: 'Message',
+    msg: Message,
     *,
-    session: Optional['zenoh.Session'] = None,
-    topic: Optional[str] = None,
-    retain: Optional[bool] = None,
+    session: zenoh.Session | None = None,
+    topic: str | None = None,
+    retain: bool | None = None,
 ) -> None:
     """Async variant of ``msg.send(...)``. Runs the sync send on a thread."""
     await asyncio.to_thread(
-        msg.send, session=session, topic=topic, retain=retain,
+        msg.send,
+        session=session,
+        topic=topic,
+        retain=retain,
     )
 
 
 async def asend_batch(
-    cls,
-    items: Iterable['Message'],
+    cls: type[Message],
+    items: Iterable[Message],
     *,
-    session: Optional['zenoh.Session'] = None,
-    topic: Optional[str] = None,
-    retain: Optional[bool] = None,
+    session: zenoh.Session | None = None,
+    topic: str | None = None,
+    retain: bool | None = None,
 ) -> None:
     """Async variant of ``Cls.send_batch(...)``."""
     await asyncio.to_thread(
-        cls.send_batch, list(items),
-        session=session, topic=topic, retain=retain,
+        cls.send_batch,
+        list(items),
+        session=session,
+        topic=topic,
+        retain=retain,
     )
 
 
 async def aunretain(
-    cls_or_msg,
+    cls_or_msg: Message | type[Message],
     *,
-    session: Optional['zenoh.Session'] = None,
-    topic: Optional[str] = None,
-    **key_fields,
+    session: zenoh.Session | None = None,
+    topic: str | None = None,
+    **key_fields: Any,
 ) -> None:
     """Async variant of ``msg.unretain()`` / ``Cls.unretain(**)``.
 
@@ -187,34 +219,40 @@ async def aunretain(
     ``Message`` subclass (key fields supplied as kwargs).
     """
     from .message import Message
+
     if isinstance(cls_or_msg, Message):
         await asyncio.to_thread(
-            cls_or_msg.unretain, session=session, topic=topic,
+            cls_or_msg.unretain,
+            session=session,
+            topic=topic,
         )
     else:
         await asyncio.to_thread(
             cls_or_msg.unretain,
-            session=session, topic=topic, **key_fields,
+            session=session,
+            topic=topic,
+            **key_fields,
         )
 
 
 async def afetch_retained(
-    cls,
+    cls: type[Message],
     *,
-    session: Optional['zenoh.Session'] = None,
-    on_error=None,
+    session: zenoh.Session | None = None,
+    on_error: Callable[[Exception, bytes], None] | None = None,
 ) -> list:
-    """Async variant of ``Cls.fetch_retained(...)``. Runs the sync fetch on
-    a thread (Zenoh's ``get`` is blocking)."""
+    """Async variant of ``Cls.fetch_retained(...)``. Runs the sync fetch on a thread (Zenoh's ``get`` is blocking)."""
     return await asyncio.to_thread(
-        cls.fetch_retained, session=session, on_error=on_error,
+        cls.fetch_retained,
+        session=session,
+        on_error=on_error,
     )
 
 
 async def alisten(
-    cls,
+    cls: type[Message],
     *,
-    session: Optional['zenoh.Session'] = None,
+    session: zenoh.Session | None = None,
     maxsize: int = 0,
     meta: bool = False,
 ) -> AsyncIterator:
@@ -236,10 +274,12 @@ async def alisten(
     loop = asyncio.get_running_loop()
 
     if meta:
-        def _cb(msg: 'Message', m) -> None:
+
+        def _cb(msg: Message, m: ZenohMeta) -> None:
             loop.call_soon_threadsafe(queue.put_nowait, (msg, m))
     else:
-        def _cb(msg: 'Message') -> None:
+
+        def _cb(msg: Message) -> None:
             loop.call_soon_threadsafe(queue.put_nowait, msg)
 
     sub = cls.on_message(_cb, session=session)
@@ -250,57 +290,64 @@ async def alisten(
         sub.close()
 
 
-async def aquery(
-    cls,
+async def aquery(  # noqa: PLR0913
+    cls: type[Message],
     *,
-    session: Optional['zenoh.Session'] = None,
-    params: Optional[dict] = None,
-    request=None,
-    timeout: Optional[float] = None,
-    target=None,
-    consolidation=None,
-    on_error=None,
-    **key_fields,
+    session: zenoh.Session | None = None,
+    params: dict | None = None,
+    request: Any = None,
+    # Mirrors the sync `Cls.query(timeout=...)` public API; swapping it for
+    # asyncio.timeout() at the call site would change the documented surface.
+    timeout: float | None = None,  # noqa: ASYNC109
+    target: Any = None,
+    consolidation: Any = None,
+    on_error: Callable[[Exception, bytes], None] | None = None,
+    **key_fields: Any,
 ) -> list:
-    """Async variant of ``Cls.query(...)``. Runs the blocking get on a
-    thread and returns the decoded reply list."""
+    """Async variant of ``Cls.query(...)``. Runs the blocking get on a thread and returns the decoded reply list."""
     return await asyncio.to_thread(
         lambda: cls.query(
-            session=session, params=params, request=request,
-            timeout=timeout, target=target, consolidation=consolidation,
-            on_error=on_error, **key_fields,
+            session=session,
+            params=params,
+            request=request,
+            timeout=timeout,
+            target=target,
+            consolidation=consolidation,
+            on_error=on_error,
+            **key_fields,
         ),
     )
 
 
-async def aquery_one(cls, **kwargs):
+async def aquery_one(cls: type[Message], **kwargs: Any) -> Message | None:
     """Async variant of ``Cls.query_one(...)``."""
     return await asyncio.to_thread(lambda: cls.query_one(**kwargs))
 
 
 async def aon_query(
-    cls,
-    handler,
+    cls: type[Message],
+    handler: Callable[[QueryContext], Any],
     *,
-    session: Optional['zenoh.Session'] = None,
-    on_error=None,
+    session: zenoh.Session | None = None,
+    on_error: Callable[[Exception, bytes], None] | None = None,
     auto_reconnect: bool = True,
-):
-    """Async entry point for ``Cls.on_query(...)`` — the natural way to
-    register an ``async def`` handler.
+) -> Queryable:
+    """Async entry point for ``Cls.on_query(...)`` — the natural way to register an ``async def`` handler.
 
     Declared inline on the calling event-loop thread (not offloaded) so an
     ``async def`` handler captures *this* loop for its replies. The declare
     itself is a fast Zenoh call. Returns the :class:`Queryable` handle.
     """
     return cls.on_query(
-        handler, session=session, on_error=on_error,
+        handler,
+        session=session,
+        on_error=on_error,
         auto_reconnect=auto_reconnect,
     )
 
 
 @asynccontextmanager
-async def abatch():
+async def abatch() -> AsyncIterator[_BatchHandle]:
     """Async version of :func:`zeared.batch`.
 
     Shares the same contextvar-backed buffer as ``z.batch()``. An

@@ -17,9 +17,10 @@ class TestTopicValidation:
 
     def test_template_slot_not_required_to_be_declared_field(self):
         """Undeclared template slots are allowed; they become capture-only."""
+
         @z.zeared
         class CaptureOnly(z.Message):
-            TOPIC = 'robot/{id}/telemetry'      # id is NOT a declared field
+            TOPIC = 'robot/{id}/telemetry'  # id is NOT a declared field
             x: int = z.Int(required=True)
 
         # Doesn't raise — id is valid as a capture-only slot.
@@ -34,7 +35,7 @@ class TestTopicValidation:
 
         z.session = session
         with pytest.raises(z.TopicError, match='missing field'):
-            CaptureOnly(x=1).send()   # render needs id, isn't in data
+            CaptureOnly(x=1).send()  # render needs id, isn't in data
 
     def test_valid_template_caches(self):
         @z.zeared
@@ -125,6 +126,7 @@ class TestExtraTopics:
 
     def test_slots_need_not_match_across_templates(self):
         """0.0.5: each template has an independent slot set."""
+
         @z.zeared
         class Status(z.Message):
             TOPIC = 'robot/{id}/status'
@@ -208,6 +210,7 @@ class TestSearedReExports:
 
     def test_decorator_renamed_to_zeared(self):
         import seared
+
         # The decorator is re-exported under a zeared-flavoured name.
         assert z.zeared is seared.seared
         # And not leaked under its original name.
@@ -215,19 +218,35 @@ class TestSearedReExports:
 
     def test_base_class_renamed_to_zeared(self):
         import seared
+
         assert z.Zeared is seared.Seared
         assert not hasattr(z, 'Seared')
 
     def test_field_types_reachable(self):
         import seared
+
         for name in (
-            'Bool', 'Bytes', 'Date', 'DateTime', 'Dict', 'Enum', 'Float',
-            'Int', 'NDArray', 'Str', 'T', 'Time', 'TimeDelta', 'Tuple', 'UUID',
+            'Bool',
+            'Bytes',
+            'Date',
+            'DateTime',
+            'Dict',
+            'Enum',
+            'Float',
+            'Int',
+            'NDArray',
+            'Str',
+            'T',
+            'Time',
+            'TimeDelta',
+            'Tuple',
+            'UUID',
         ):
             assert getattr(z, name) is getattr(seared, name), name
 
     def test_error_types_reachable(self):
         import seared
+
         assert z.SearedError is seared.SearedError
         assert z.ValidationError is seared.ValidationError
 
@@ -242,7 +261,8 @@ class TestSearedReExports:
             x: float = s.Float(required=True)
 
         obj = M.load({'id': 1, 'x': 2.5})
-        assert obj.id == 1 and obj.x == 2.5
+        assert obj.id == 1
+        assert obj.x == 2.5
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +272,7 @@ class TestSearedReExports:
 # ---------------------------------------------------------------------------
 
 
-from conftest import wait
+from conftest import wait  # noqa: E402  (after the fixture definitions above)
 
 
 @z.zeared
@@ -290,7 +310,8 @@ class TestTaggedDispatch:
         z.session = session
         ctrl = _UnionControl(action=_UnionStartAction(speed=10.0))
         assert _UnionControl.dump(ctrl) == {
-            'action': 'start', 'args': {'speed': 10.0},
+            'action': 'start',
+            'args': {'speed': 10.0},
         }
 
     def test_round_trip_all_variants(self, session):
@@ -308,7 +329,9 @@ class TestTaggedDispatch:
         assert len(received) == 3
         kinds = {type(a).__name__ for a in received}
         assert kinds == {
-            '_UnionStartAction', '_UnionStopAction', '_UnionConfigureAction',
+            '_UnionStartAction',
+            '_UnionStopAction',
+            '_UnionConfigureAction',
         }
 
     def test_match_dispatch(self, session):
@@ -351,14 +374,14 @@ class TestUnionWithFormatTopic:
                     'start': _UnionStartAction,
                     'stop': _UnionStopAction,
                 },
-                tag_key='action', payload_key='args', required=True,
+                tag_key='action',
+                payload_key='args',
+                required=True,
             )
 
         received: list[tuple[str, type]] = []
         z.session = session
-        sub = PeerControl.on_message(
-            lambda m: received.append((m.name, type(m.action)))
-        )
+        sub = PeerControl.on_message(lambda m: received.append((m.name, type(m.action))))
         wait()
         PeerControl(name='alice', action=_UnionStartAction(speed=9.0)).send()
         PeerControl(name='bob', action=_UnionStopAction()).send()

@@ -7,19 +7,19 @@ pub/sub, queries, and liveliness. Clients here have multicast off and no
 listen endpoints, so the hub is the *only* path between them — a received
 message is proof of relay.
 """
+
 from __future__ import annotations
 
 import socket
 import threading
 
 import zenoh
+from conftest import wait
 
 import zeared as z
 from zeared._factories import _build_config_for_router
 from zeared.config import SessionConfig
 from zeared.hubd import run
-
-from conftest import wait
 
 
 def _free_port() -> int:
@@ -56,7 +56,9 @@ class TestBuildRouterConfig:
 
     def test_connect_optional(self):
         cfg = _build_config_for_router(
-            ['tcp/0.0.0.0:7447'], ['tcp/other:7447'], None,
+            ['tcp/0.0.0.0:7447'],
+            ['tcp/other:7447'],
+            None,
         )
         assert 'other' in cfg.get_json('connect/endpoints')
 
@@ -107,20 +109,22 @@ class TestHubRelaysTransport:
         wait(0.4)
         kinds: list[str] = []
         lsub = b.liveliness().declare_subscriber(
-            'alive/**', lambda s: kinds.append(str(s.kind)),
+            'alive/**',
+            lambda s: kinds.append(str(s.kind)),
         )
         wait(0.2)
         tok = a.liveliness().declare_token('alive/nodeA')
-        assert tok is not None       # hold the token alive until a.close()
+        assert tok is not None  # hold the token alive until a.close()
         wait(0.3)
         saw_put = 'SampleKind.PUT' in kinds
-        a.close()                       # DELETE should propagate via hub
+        a.close()  # DELETE should propagate via hub
         wait(0.4)
         saw_delete = 'SampleKind.DELETE' in kinds
         lsub.undeclare()
         for s in (b, h):
             s.close()
-        assert saw_put and saw_delete
+        assert saw_put
+        assert saw_delete
 
 
 class TestHubRelaysZearedMessages:
@@ -170,10 +174,11 @@ class TestHubRelaysZearedMessages:
 
         received: list[tuple[str, str]] = []
         s = Status.on_message(
-            lambda m: received.append((m.name, m.state)), session=sub_sess,
+            lambda m: received.append((m.name, m.state)),
+            session=sub_sess,
         )
         wait(0.3)
-        pub.close()                     # will fires via hub-relayed liveliness DELETE
+        pub.close()  # will fires via hub-relayed liveliness DELETE
         wait(0.5)
         s.close()
         for sess in (sub_sess, h):
@@ -194,7 +199,7 @@ class TestHubDaemon:
 
         t = threading.Thread(
             target=run,
-            kwargs=dict(listen=[ep], stop=stop, on_ready=on_ready),
+            kwargs={'listen': [ep], 'stop': stop, 'on_ready': on_ready},
             daemon=True,
         )
         t.start()
@@ -220,11 +225,15 @@ class TestHubDaemon:
         monkeypatch.setattr('zeared.hubd.run', fake_run)
         from zeared.hubd import main
 
-        rc = main([
-            '--listen', 'tcp/0.0.0.0:9999',
-            '--connect', 'tcp/other:7447',
-            '--no-timestamping',
-        ])
+        rc = main(
+            [
+                '--listen',
+                'tcp/0.0.0.0:9999',
+                '--connect',
+                'tcp/other:7447',
+                '--no-timestamping',
+            ]
+        )
         assert rc == 0
         assert captured['listen'] == ['tcp/0.0.0.0:9999']
         assert captured['connect'] == ['tcp/other:7447']

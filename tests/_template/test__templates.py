@@ -5,11 +5,12 @@ Parser-level coverage of single-template behaviour lives in
 ``test__template.py``. This file targets the aggregate's build /
 match / publish-resolution behaviour.
 """
+
 from __future__ import annotations
 
 import pytest
 
-from zeared._template import Template, Templates
+from zeared._template import Templates
 from zeared.errors import TopicError
 
 

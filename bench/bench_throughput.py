@@ -29,22 +29,26 @@ Publish rate vs end-to-end rate gap is under 3% for every strategy — the
 in-process subscriber keeps up with the publisher, so these numbers reflect
 steady-state throughput (not queue drain). No messages dropped.
 """
+
 from __future__ import annotations
 
 import sys
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import TYPE_CHECKING
 
 import zenoh
 from marshmallow import EXCLUDE, Schema
 from marshmallow.fields import Float as MFloat
-from marshmallow.fields import Integer, List as MList, Nested, String
+from marshmallow.fields import Integer, Nested, String
+from marshmallow.fields import List as MList
 
 import zeared as z
 from zeared import _codec as codec
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # ----------------------------------------------------------------------------
 # Schemas (identical to bench_wire.py).
@@ -87,7 +91,7 @@ _outer_schema = OuterSchema()
 class Inner(z.Zeared):
     x: int = z.Int(required=True)
     y: float = z.Float(required=True)
-    label: Optional[str] = z.Str()
+    label: str | None = z.Str()
 
 
 @z.zeared
@@ -121,6 +125,7 @@ class OuterMsgpackNoCache(z.Message):
 # ----------------------------------------------------------------------------
 # Harness.
 # ----------------------------------------------------------------------------
+
 
 @dataclass
 class Result:
@@ -161,13 +166,13 @@ def _run(
     wire_bytes: int,
 ) -> Result:
     received = [0]
-    done_event = threading.Event()
+    threading.Event()
 
-    def on_each():
+    def on_each() -> None:
         received[0] += 1
 
     sub = subscribe(on_each)
-    time.sleep(0.15)   # let subscriber settle
+    time.sleep(0.15)  # let subscriber settle
 
     t_start = time.perf_counter()
     deadline = t_start + duration_s
@@ -206,27 +211,32 @@ def _run(
 # Strategy wrappers.
 # ----------------------------------------------------------------------------
 
+
 def _strat_marshmallow(session, duration_s):
     topic = 'bench/throughput/marshmallow'
     payload = _payload_dict()
     raw = _outer_schema.dumps(payload).encode('utf-8')
 
-    def publish():
+    def publish() -> None:
         session.put(topic, raw, encoding='application/json')
 
     def subscribe(on_each):
-        def handler(sample):
+        def handler(sample) -> None:
             _outer_schema.loads(bytes(sample.payload).decode('utf-8'))
             on_each()
+
         return session.declare_subscriber(topic, handler)
 
-    def undeclare(sub):
+    def undeclare(sub) -> None:
         sub.undeclare()
 
     return _run(
         'zenoh + marshmallow (json)',
-        session, duration_s,
-        publish, subscribe, undeclare,
+        session,
+        duration_s,
+        publish,
+        subscribe,
+        undeclare,
         wire_bytes=len(raw),
     )
 
@@ -238,13 +248,13 @@ def _strat_zeared(session, duration_s, msg_cls, label):
     data = msg_cls.dump(instance)
     wire = len(codec.pack(data, effective))
 
-    def publish():
+    def publish() -> None:
         instance.send()
 
     def subscribe(on_each):
         return msg_cls.on_message(lambda m: on_each())
 
-    def undeclare(sub):
+    def undeclare(sub) -> None:
         sub.close()
 
     return _run(label, session, duration_s, publish, subscribe, undeclare, wire)
@@ -265,8 +275,7 @@ def run(duration_s: float = 5.0) -> None:
             _strat_marshmallow(session, duration_s),
             _strat_zeared(session, duration_s, OuterJson, 'zenoh + zeared (json, cached)'),
             _strat_zeared(session, duration_s, OuterMsgpack, 'zenoh + zeared (msgpack, cached)'),
-            _strat_zeared(session, duration_s, OuterMsgpackNoCache,
-                          'zenoh + zeared (msgpack, PUBLISHER=False)'),
+            _strat_zeared(session, duration_s, OuterMsgpackNoCache, 'zenoh + zeared (msgpack, PUBLISHER=False)'),
         ]
 
         # Report.

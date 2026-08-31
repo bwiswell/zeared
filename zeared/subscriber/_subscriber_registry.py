@@ -1,11 +1,12 @@
-"""Module-level subscriber registry — keyed on ``id(session)``. Hard
-refs (no weakref) since ``Subscriber`` uses ``__slots__`` and we
-explicitly deregister on close. ``z.release(session=sess)`` walks this
-set.
+"""Module-level subscriber registry — keyed on ``id(session)``.
+
+Hard refs (no weakref) since ``Subscriber`` uses ``__slots__`` and we explicitly
+deregister on close. ``z.release(session=sess)`` walks this set.
 
 Sibling helper inside the ``subscriber`` Pattern B subdir. Pulled out
 of ``subscriber.py`` to keep the class file under the 300-line cap.
 """
+
 from __future__ import annotations
 
 import logging
@@ -14,8 +15,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .._managed_session import SessionLike
-    import zenoh
-
     from .subscriber import Subscriber
 
 
@@ -29,17 +28,17 @@ _log = logging.getLogger('zeared.subscriber')
 _SCHEMA_MISMATCH_CACHE_MAX = 1024
 
 
-_subscribers: 'dict[int, set]' = {}
+_subscribers: dict[int, set] = {}
 _subscribers_lock = threading.Lock()
 
 
-def _register_subscriber(session: 'zenoh.Session', sub: 'Subscriber') -> None:
+def _register_subscriber(session: SessionLike, sub: Subscriber) -> None:
     sid = id(session)
     with _subscribers_lock:
         _subscribers.setdefault(sid, set()).add(sub)
 
 
-def _deregister_subscriber(session, sub: 'Subscriber') -> None:
+def _deregister_subscriber(session: SessionLike, sub: Subscriber) -> None:
     if session is None:
         return
     sid = id(session)
@@ -52,9 +51,11 @@ def _deregister_subscriber(session, sub: 'Subscriber') -> None:
             _subscribers.pop(sid, None)
 
 
-def _close_subscribers_for(session: 'SessionLike') -> None:
-    """Close every subscriber registered against this session. Called by
-    ``z.release()`` as the first step of shutdown."""
+def _close_subscribers_for(session: SessionLike) -> None:
+    """Close every subscriber registered against this session.
+
+    Called by ``z.release()`` as the first step of shutdown.
+    """
     sid = id(session)
     with _subscribers_lock:
         bucket = _subscribers.pop(sid, None)
@@ -65,5 +66,6 @@ def _close_subscribers_for(session: 'SessionLike') -> None:
             sub.close()
         except Exception:  # noqa: BLE001
             _log.warning(
-                'subscriber.close failed during release', exc_info=True,
+                'subscriber.close failed during release',
+                exc_info=True,
             )

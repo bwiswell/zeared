@@ -19,20 +19,25 @@ clusters extracted via mixin (per the variant codified in
 
 See ``_reconnect/`` for the detection + restoration logic.
 """
+
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import logging
 import threading
-from typing import Callable, List, Optional, Tuple
-
-import zenoh
+from typing import TYPE_CHECKING, Any, Self
 
 from ..errors import SessionDeadError
 from ._helpers import _is_dead, _managed_sessions
 from ._on_reconnect_mixin import _OnReconnectMixin
 from ._zenoh_api_mixin import _ZenohApiMixin
 
+if TYPE_CHECKING:
+    import asyncio
+    import types
+    from collections.abc import Callable
+
+    import zenoh
 
 _log = logging.getLogger('zeared.session')
 
@@ -53,20 +58,29 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
       DEAD          — reconnect terminally failed (max_attempts exhausted).
                       All ops raise ``SessionDeadError``.
     """
+
     __slots__ = (
-        '_raw', '_lock', '_state',
-        '_open_fn', '_endpoint_label',
-        '_probe_thread', '_probe_cancel', '_probe_interval',
-        '_initial_backoff', '_max_backoff', '_max_attempts',
-        '_on_reconnect',                # legacy single-callback test hook
-        '_on_reconnect_callbacks',      # public list — registered via on_reconnect()
-        '_reconnect_thread', '_reconnect_signal',
-        '_gc_interval',                 # presence-observer GC sweep period
-        '_retention_ttl',               # session-wide retention TTL fallback
-        '__weakref__',                  # required for WeakSet membership
+        '__weakref__',  # required for WeakSet membership
+        '_endpoint_label',
+        '_gc_interval',  # presence-observer GC sweep period
+        '_initial_backoff',
+        '_lock',
+        '_max_attempts',
+        '_max_backoff',
+        '_on_reconnect',  # legacy single-callback test hook
+        '_on_reconnect_callbacks',  # public list — registered via on_reconnect()
+        '_open_fn',
+        '_probe_cancel',
+        '_probe_interval',
+        '_probe_thread',
+        '_raw',
+        '_reconnect_signal',
+        '_reconnect_thread',
+        '_retention_ttl',  # session-wide retention TTL fallback
+        '_state',
     )
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         raw: zenoh.Session,
         open_fn: Callable[[], zenoh.Session],
@@ -75,27 +89,27 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         probe_interval: float,
         initial_backoff: float,
         max_backoff: float,
-        max_attempts: Optional[int],
-    ):
+        max_attempts: int | None,
+    ) -> None:
         self._raw = raw
         self._lock = threading.RLock()
         self._state = 'IDLE'
         self._open_fn = open_fn
         self._endpoint_label = endpoint_label
-        self._probe_thread: Optional[threading.Thread] = None
+        self._probe_thread: threading.Thread | None = None
         self._probe_cancel = threading.Event()
         self._probe_interval = probe_interval
         self._initial_backoff = initial_backoff
         self._max_backoff = max_backoff
         self._max_attempts = max_attempts
-        self._on_reconnect: Optional[Callable[['ManagedSession'], None]] = None
+        self._on_reconnect: Callable[[ManagedSession], None] | None = None
         # (cb, loop) entries — loop is None for sync callbacks, the
         # captured running loop for coroutine callbacks.
-        self._on_reconnect_callbacks: List[
-            Tuple[Callable[['ManagedSession'], object], Optional[asyncio.AbstractEventLoop]]
+        self._on_reconnect_callbacks: list[
+            tuple[Callable[[ManagedSession], object], asyncio.AbstractEventLoop | None]
         ] = []
         # Single long-lived reconnect worker per ManagedSession.
-        self._reconnect_thread: Optional[threading.Thread] = None
+        self._reconnect_thread: threading.Thread | None = None
         self._reconnect_signal = threading.Event()
         # GC sweep period for the per-session presence observer. Factory
         # callers override via ``peer(gc_interval=...)``; default mirrors
@@ -104,7 +118,7 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         # Session-wide retention TTL fallback. ``None`` (default) means
         # no session-level fallback — class-level ``RETENTION_TTL`` is
         # the only knob. Factory ``peer(retention_ttl=N)`` overrides.
-        self._retention_ttl: Optional[float] = None
+        self._retention_ttl: float | None = None
         # Register in the module-level WeakSet so ``release_all`` can
         # find this wrapper even when no zeared-level state has been
         # registered against it.
@@ -128,7 +142,7 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         with self._lock:
             return self._state
 
-    def close(self):
+    def close(self) -> None:
         """Stop the probe thread and close the current raw session.
 
         Idempotent. Distinct from ``z.release(session=)`` which also tears
@@ -139,7 +153,7 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
 
     # -- context-manager protocol --------------------------------------------
 
-    def __enter__(self) -> 'ManagedSession':
+    def __enter__(self) -> Self:
         """Enter the context manager — returns the wrapper itself.
 
         Holding the wrapper across the block is the whole point — code
@@ -149,15 +163,22 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         """
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
-        """Exit — runs ``z.release(session=self)``: cancels the probe +
-        reconnect worker threads, walks per-session registries
-        (subscribers, retention, presence), then closes the raw session.
-        Doesn't suppress exceptions; ``release()`` raises propagate.
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: types.TracebackType | None,
+    ) -> None:
+        """Exit the context manager, releasing the session.
+
+        Exit — runs ``z.release(session=self)``: cancels the probe + reconnect worker
+        threads, walks per-session registries (subscribers, retention, presence), then
+        closes the raw session. Doesn't suppress exceptions; ``release()`` raises
+        propagate.
         """
         from .. import release
+
         release(session=self)
-        return None
 
     # -- reconnect plumbing (used by _reconnect/) -----------------------------
 
@@ -177,21 +198,18 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         with self._lock:
             state = self._state
         if state == 'RECONNECTING':
-            raise SessionDeadError(
-                f'session {self._endpoint_label} is reconnecting; '
-                'retry the operation after the reconnect window'
-            )
+            msg = f'session {self._endpoint_label} is reconnecting; retry the operation after the reconnect window'
+            raise SessionDeadError(msg)
         if state == 'DEAD':
-            raise SessionDeadError(
-                f'session {self._endpoint_label} terminally failed reconnect '
-                'and is no longer usable'
-            )
+            msg = f'session {self._endpoint_label} terminally failed reconnect and is no longer usable'
+            raise SessionDeadError(msg)
 
-    def _note_failure(self, exc: BaseException) -> None:
-        """Lazy-detection hook: if a put/get/delete fails on the raw, mark
-        the session as needing a reconnect (the probe loop will pick it up
-        on the next tick, or the next call will trigger eagerly via
-        ``_maybe_reconnect``).
+    def _note_failure(self, exc: BaseException) -> None:  # noqa: ARG002  (kept for call-site symmetry)
+        """Mark the session as needing a reconnect after a failed op.
+
+        Lazy-detection hook: if a put/get/delete fails on the raw, mark the session as
+        needing a reconnect (the probe loop will pick it up on the next tick, or the
+        next call will trigger eagerly via ``_maybe_reconnect``).
 
         Conservative: we don't try to classify the exception. Any failure
         on the raw session is treated as "might be dead" — the probe will
@@ -199,11 +217,11 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         """
         if _is_dead(self._raw):
             from .._reconnect import _trigger_reconnect
+
             _trigger_reconnect(self)
 
     def _teardown(self, *, call_close: bool) -> None:
-        """Cancel the probe + reconnect worker threads, close the raw
-        session. Idempotent."""
+        """Cancel the probe + reconnect worker threads, close the raw session. Idempotent."""
         self._probe_cancel.set()
         # Wake the reconnect worker so it sees the cancel and exits.
         self._reconnect_signal.set()
@@ -217,20 +235,15 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         if worker is not None and worker.is_alive():
             worker.join(timeout=1.0)
         if call_close:
-            try:
+            with contextlib.suppress(Exception):
                 self._raw.close()
-            except Exception:  # noqa: BLE001
-                pass
 
     # -- catch-all delegation -------------------------------------------------
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> Any:
         # Called only if the attribute isn't found via normal lookup
         # (i.e. not in __slots__ and not a method defined here).
         return getattr(self._raw, name)
 
     def __repr__(self) -> str:
-        return (
-            f'<ManagedSession state={self.state} '
-            f'endpoint={self._endpoint_label!r}>'
-        )
+        return f'<ManagedSession state={self.state} endpoint={self._endpoint_label!r}>'

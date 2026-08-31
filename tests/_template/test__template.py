@@ -122,7 +122,7 @@ class TestMultiWildcard:
         t = Template.parse('robot/{id}/**')
         assert t.match('robot/7/status') == {'id': '7'}
         assert t.match('robot/7/a/b/c') == {'id': '7'}
-        assert t.match('robot/7') is None   # no trailing segment for **
+        assert t.match('robot/7') is None  # no trailing segment for **
 
     def test_subscribe_only_template_rejects_render(self):
         t = Template.parse('robot/**')

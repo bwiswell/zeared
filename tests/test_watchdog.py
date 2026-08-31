@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import threading
 import time
 
 import pytest
-
-import zeared as z
-
 from conftest import wait
 
+import zeared as z
 
 # ---------------------------------------------------------------------------
 # Unit-ish tests of the watchdog primitive directly
@@ -41,8 +37,8 @@ class TestSubscriberWatchdogPrimitive:
             on_quiet=lambda: events.append('quiet'),
             on_active=lambda: events.append('active'),
         )
-        wd.ping()                  # establish cadence
-        time.sleep(0.3)            # well past interval
+        wd.ping()  # establish cadence
+        time.sleep(0.3)  # well past interval
         wd.cancel()
         assert 'quiet' in events
         # Active wasn't ever reset → no on_active fired.
@@ -58,8 +54,8 @@ class TestSubscriberWatchdogPrimitive:
             on_active=lambda: events.append('active'),
         )
         wd.ping()
-        time.sleep(0.25)           # quiet should fire
-        wd.ping()                  # resume → active
+        time.sleep(0.25)  # quiet should fire
+        wd.ping()  # resume → active
         time.sleep(0.05)
         wd.cancel()
         assert events == ['quiet', 'active']
@@ -77,7 +73,7 @@ class TestSubscriberWatchdogPrimitive:
         # Cancel before the interval expires.
         time.sleep(0.05)
         wd.cancel()
-        time.sleep(0.6)            # past the original interval
+        time.sleep(0.6)  # past the original interval
         assert events == []
 
     def test_async_callbacks_dispatched(self):
@@ -92,7 +88,9 @@ class TestSubscriberWatchdogPrimitive:
             results.append('active')
 
         wd = _SubscriberWatchdog(
-            interval=0.1, on_quiet=quiet_cb, on_active=active_cb,
+            interval=0.1,
+            on_quiet=quiet_cb,
+            on_active=active_cb,
         )
         wd.ping()
         time.sleep(0.3)
@@ -105,7 +103,7 @@ class TestSubscriberWatchdogPrimitive:
     def test_zero_interval_rejected(self):
         from zeared.watchdog import _SubscriberWatchdog
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='interval'):
             _SubscriberWatchdog(interval=0, on_quiet=None, on_active=None)
 
 
@@ -115,12 +113,12 @@ class TestStartupGrace:
 
         events: list[str] = []
         wd = _SubscriberWatchdog(
-            interval=10.0,        # long, so we know on_quiet came from grace
+            interval=10.0,  # long, so we know on_quiet came from grace
             on_quiet=lambda: events.append('quiet'),
             on_active=None,
             startup_grace=0.1,
         )
-        time.sleep(0.3)            # past grace
+        time.sleep(0.3)  # past grace
         wd.cancel()
         assert events == ['quiet']
 
@@ -137,9 +135,9 @@ class TestStartupGrace:
         # Ping before grace expires.
         time.sleep(0.05)
         wd.ping()
-        time.sleep(0.6)            # past original grace
+        time.sleep(0.6)  # past original grace
         wd.cancel()
-        assert events == []        # grace was satisfied
+        assert events == []  # grace was satisfied
 
     def test_grace_then_resume_uses_interval(self):
         from zeared.watchdog import _SubscriberWatchdog
@@ -160,15 +158,17 @@ class TestStartupGrace:
         time.sleep(0.2)
         wd.cancel()
 
-        assert events.count('quiet') >= 2     # initial grace + interval
+        assert events.count('quiet') >= 2  # initial grace + interval
         assert events.count('active') == 1
 
     def test_zero_grace_rejected(self):
         from zeared.watchdog import _SubscriberWatchdog
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='startup_grace'):
             _SubscriberWatchdog(
-                interval=1.0, on_quiet=None, on_active=None,
+                interval=1.0,
+                on_quiet=None,
+                on_active=None,
                 startup_grace=0,
             )
 
@@ -199,7 +199,7 @@ class TestWatchdogViaOnMessage:
         Tick(n=1).send()
         wait(0.05)
         Tick(n=2).send()
-        wait(0.5)                  # past interval
+        wait(0.5)  # past interval
 
         # Resume.
         Tick(n=3).send()
@@ -227,23 +227,25 @@ class TestWatchdogViaOnMessage:
         wait(0.1)
         # Close BEFORE the watchdog's interval would expire.
         sub.close()
-        wait(0.6)                  # past the original interval
+        wait(0.6)  # past the original interval
         assert fired == []
 
     def test_no_watchdog_when_interval_unset(self, session):
         """Default behaviour unchanged when expected_interval is None."""
+
         @z.zeared
         class Tick(z.Message):
             TOPIC = 'wd/none/{n}'
             n: int = z.Int(required=True)
 
         z.session = session
-        sub = Tick.on_message(lambda m: None)   # no interval kwarg
+        sub = Tick.on_message(lambda m: None)  # no interval kwarg
         # Just verify no AttributeError on close, no thread leak.
         sub.close()
 
     def test_startup_grace_via_on_message(self, session):
         """Subscriber that gets no producer fires on_quiet after grace."""
+
         @z.zeared
         class Tick(z.Message):
             TOPIC = 'wd/grace/{n}'
@@ -253,11 +255,11 @@ class TestWatchdogViaOnMessage:
         z.session = session
         sub = Tick.on_message(
             lambda m: None,
-            expected_interval=10.0,         # long, so on_quiet must come from grace
+            expected_interval=10.0,  # long, so on_quiet must come from grace
             startup_grace=0.2,
             on_quiet=lambda: events.append('quiet'),
         )
-        wait(0.5)                           # past grace, no Tick ever sent
+        wait(0.5)  # past grace, no Tick ever sent
         sub.close()
 
         assert 'quiet' in events
@@ -282,7 +284,9 @@ class TestWatchdogOriginGating:
             v: int = z.Int(required=True)
 
         return Gate, _build_dispatch(
-            Gate, None, lambda m: None,
+            Gate,
+            None,
+            lambda m: None,
             wants_meta=False,
             dedupe_active=False,
             expected_schema=None,
@@ -297,6 +301,7 @@ class TestWatchdogOriginGating:
         from zeared.presence._presence_synthesized_sample import (
             _SynthesizedSample,
         )
+
         return _SynthesizedSample(
             key_expr='wdg/gate',
             payload=codec.pack({'v': 1}, 'msgpack'),
@@ -307,13 +312,14 @@ class TestWatchdogOriginGating:
     def test_live_pings_replay_and_will_do_not(self):
         class StubWatchdog:
             pings = 0
+
             def ping(self):
                 self.pings += 1
 
         wd = StubWatchdog()
         _cls, dispatch = self._build(wd)
 
-        dispatch(self._sample())                            # default LIVE
+        dispatch(self._sample())  # default LIVE
         assert wd.pings == 1
         dispatch(self._sample(), origin=z.Origin.REPLAY)
         assert wd.pings == 1

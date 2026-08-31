@@ -1,19 +1,24 @@
-"""``_MessageQueryMixin`` — the query/queryable surface on :class:`Message`
-(``on_query`` serving side + ``query`` / ``query_one`` getting side).
+"""The query / queryable surface on :class:`Message`.
+
+``_MessageQueryMixin`` — the query/queryable surface on :class:`Message` (``on_query``
+serving side + ``query`` / ``query_one`` getting side).
 
 Mixin — contributes no instance state. ``Message`` composes this via MRO.
 The serving side is the compute-analogue of ``RETAINED`` (which serves a
 *cached* value); the getting side is the typed sibling of ``send`` +
 retained-fetch.
 """
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import zenoh
 
-    from ..queryable import QueryContext, Queryable
+    from ..queryable import Queryable, QueryContext
     from .message import Message
 
 
@@ -22,19 +27,19 @@ _M = TypeVar('_M', bound='Message')
 
 class _MessageQueryMixin:
     """Query / queryable surface on :class:`Message`."""
+
     __slots__ = ()
 
     @classmethod
     def on_query(
-        cls: 'Type[_M]',
-        handler: 'Callable[[QueryContext], Any]',
+        cls: type[_M],
+        handler: Callable[[QueryContext], Any],
         *,
-        session: Optional['zenoh.Session'] = None,
-        on_error: Optional[Callable[[Exception, bytes], None]] = None,
+        session: zenoh.Session | None = None,
+        on_error: Callable[[Exception, bytes], None] | None = None,
         auto_reconnect: bool = True,
-    ) -> "'Queryable[_M]'":
-        """Declare a queryable answering ``session.get()`` on this class's
-        topic(s) — all declared templates.
+    ) -> Queryable[_M]:
+        """Declare a queryable answering ``session.get()`` on this class's topic(s) — all declared templates.
 
         ``handler`` receives a :class:`QueryContext` (the request key,
         parsed selector params, template captures, and optional decoded
@@ -54,28 +59,32 @@ class _MessageQueryMixin:
         context manager. Survives reconnect when ``auto_reconnect`` (the
         default) and the session is managed.
         """
-        from ..queryable import Queryable
-
         import zeared as z
 
+        from ..queryable import Queryable
+
         sess = z.session.resolve(session)
-        return Queryable._declare(
-            cls, sess, handler, on_error, auto_reconnect=auto_reconnect,
+        return Queryable._declare(  # noqa: SLF001
+            cls,
+            sess,
+            handler,
+            on_error,
+            auto_reconnect=auto_reconnect,
         )
 
     @classmethod
-    def query(
-        cls: 'Type[_M]',
+    def query(  # noqa: PLR0913
+        cls: type[_M],
         *,
-        session: Optional['zenoh.Session'] = None,
-        params: Optional[dict] = None,
-        request: Optional['Message'] = None,
-        timeout: Optional[float] = None,
+        session: zenoh.Session | None = None,
+        params: dict | None = None,
+        request: Message | None = None,
+        timeout: float | None = None,
         target: Any = None,
         consolidation: Any = None,
-        on_error: Optional[Callable[[Exception, bytes], None]] = None,
+        on_error: Callable[[Exception, bytes], None] | None = None,
         **key_fields: Any,
-    ) -> 'List[_M]':
+    ) -> list[_M]:
         """Query peer queryables for this class and return decoded replies.
 
         ``key_fields`` fill the canonical template's slots; omitted slots
@@ -92,25 +101,29 @@ class _MessageQueryMixin:
         (``on_error(exc, raw)``) when supplied, else log; the returned list
         contains only successfully decoded instances (possibly empty).
         """
-        from ..queryable._query_get import _run_query
-
         import zeared as z
+
+        from ..queryable._query_get import _run_query
 
         sess = z.session.resolve(session)
         return _run_query(
-            sess, cls, key_fields,
-            params=params, request=request,
-            timeout=timeout, target=target, consolidation=consolidation,
+            sess,
+            cls,
+            key_fields,
+            params=params,
+            request=request,
+            timeout=timeout,
+            target=target,
+            consolidation=consolidation,
             on_error=on_error,
         )
 
     @classmethod
     def query_one(
-        cls: 'Type[_M]',
+        cls: type[_M],
         **kwargs: Any,
-    ) -> 'Optional[_M]':
-        """``query`` convenience returning the first reply (arrival order)
-        or ``None`` when nobody answered.
+    ) -> _M | None:
+        """``query`` convenience returning the first reply (arrival order) or ``None`` when nobody answered.
 
         Non-deterministic when several queryables answer — the first
         decoded reply wins. Accepts every ``query`` keyword.

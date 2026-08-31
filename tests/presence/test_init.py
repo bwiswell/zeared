@@ -1,23 +1,23 @@
 """Smoke tests for ``zeared/presence/__init__.py`` — verifies the
 public surface of the namespace re-exports.
 """
+
 from __future__ import annotations
 
-import zeared as z
 from zeared.presence import (
     ALIVE_PREFIX,
-    Dispatcher,
     WILL_PREFIX,
-    _PresenceObserver,
-    _SessionPresence,
-    _SynthesizedSample,
-    _WillEnvelope,
+    Dispatcher,
     _envelope_encoding,
     _observer_registry,
+    _PresenceObserver,
     _registry,
     _registry_lock,
     _resolve_gc_interval,
+    _SessionPresence,
     _slug,
+    _SynthesizedSample,
+    _WillEnvelope,
     clear_observer,
     clear_presence_state,
     get_observer,

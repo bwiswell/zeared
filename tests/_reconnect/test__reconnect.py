@@ -6,22 +6,19 @@ controlled ``open_fn`` so reconnect orchestration is observable without
 relying on Zenoh's reconnect timing; the integration test at the end
 exercises a real session-close + probe-driven recovery.
 """
+
 from __future__ import annotations
 
+import contextlib
 import threading
-import time
-from unittest import mock
 
 import pytest
-import zenoh
+from conftest import _peer_session, wait
 
 import zeared as z
-from zeared._managed_session import ManagedSession, _is_dead, resolve_raw
-from zeared._reconnect import _trigger_reconnect, start_probe  # noqa: F401
+from zeared._managed_session import ManagedSession, resolve_raw
+from zeared._reconnect import _trigger_reconnect, start_probe
 from zeared.errors import SessionDeadError
-
-from conftest import wait, _peer_session
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -31,7 +28,8 @@ from conftest import wait, _peer_session
 def _make_managed(raw, *, probe_interval=0.05, max_attempts=None) -> ManagedSession:
     """Wrap ``raw`` without starting the probe — tests start it explicitly."""
     return ManagedSession(
-        raw, lambda: _peer_session(),
+        raw,
+        _peer_session,
         endpoint_label='test',
         probe_interval=probe_interval,
         initial_backoff=0.01,
@@ -124,28 +122,22 @@ class TestDeclareHandleWarning:
         m = _make_managed(session)
         with pytest.warns(RuntimeWarning, match='does NOT survive reconnect'):
             pub = m.declare_publisher('warn/pub')
-        try:
+        with contextlib.suppress(Exception):
             pub.undeclare()
-        except Exception:
-            pass
 
     def test_declare_subscriber_warns(self, session):
         m = _make_managed(session)
         with pytest.warns(RuntimeWarning, match='does NOT survive reconnect'):
             sub = m.declare_subscriber('warn/sub/**', lambda s: None)
-        try:
+        with contextlib.suppress(Exception):
             sub.undeclare()
-        except Exception:
-            pass
 
     def test_declare_queryable_warns(self, session):
         m = _make_managed(session)
         with pytest.warns(RuntimeWarning, match='does NOT survive reconnect'):
             q = m.declare_queryable('warn/q/**', lambda q: None)
-        try:
+        with contextlib.suppress(Exception):
             q.undeclare()
-        except Exception:
-            pass
 
     def test_internal_zeared_machinery_does_not_warn(self, session):
         """Pin: ``Cls.on_message``, ``msg.send()``, retention queryables
@@ -169,8 +161,7 @@ class TestDeclareHandleWarning:
             sub.close()
         rt_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
         assert not rt_warnings, (
-            f'unexpected RuntimeWarning(s) from zeared internals: '
-            f'{[str(w.message) for w in rt_warnings]}'
+            f'unexpected RuntimeWarning(s) from zeared internals: {[str(w.message) for w in rt_warnings]}'
         )
 
 
@@ -194,9 +185,10 @@ class TestReconnectOrchestration:
         new_raw = _peer_session()
         try:
             m = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='swap-test',
-                probe_interval=0,            # disable probe
+                probe_interval=0,  # disable probe
                 initial_backoff=0.001,
                 max_backoff=0.01,
                 max_attempts=None,
@@ -211,10 +203,8 @@ class TestReconnectOrchestration:
             assert m.raw() is new_raw
             assert m.state == 'IDLE'
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
     def test_max_attempts_exhausted_to_dead(self, session):
         """All open_fn attempts fail → state DEAD, no further activity."""
@@ -222,10 +212,12 @@ class TestReconnectOrchestration:
 
         def failing_open():
             attempts[0] += 1
-            raise RuntimeError('still down')
+            msg = 'still down'
+            raise RuntimeError(msg)
 
         m = ManagedSession(
-            session, failing_open,
+            session,
+            failing_open,
             endpoint_label='dead-test',
             probe_interval=0,
             initial_backoff=0.001,
@@ -235,6 +227,7 @@ class TestReconnectOrchestration:
 
         # Synchronous reconnect via the inner helper to avoid timing flakes.
         from zeared._reconnect import _reconnect
+
         _reconnect(m)
 
         assert m.state == 'DEAD'
@@ -249,7 +242,8 @@ class TestProbeDetectsClose:
         new_raw = _peer_session()
         try:
             m = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='probe-test',
                 probe_interval=0.05,
                 initial_backoff=0.001,
@@ -267,10 +261,8 @@ class TestProbeDetectsClose:
             finally:
                 m._teardown(call_close=False)
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +273,7 @@ class TestProbeDetectsClose:
 class TestSubscriberRedeclared:
     def test_subscriber_redeclared_against_new_raw(self, session):
         """After reconnect, the user's Subscriber handle keeps delivering."""
+
         @z.zeared
         class Pulse(z.Message):
             TOPIC = 'reco/sub/{n}'
@@ -289,7 +282,8 @@ class TestSubscriberRedeclared:
         new_raw = _peer_session()
         try:
             m = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='sub-reco',
                 probe_interval=0,
                 initial_backoff=0.001,
@@ -310,26 +304,23 @@ class TestSubscriberRedeclared:
             wait(0.2)
 
             # Publish on the new raw — subscriber should still receive.
-            new_raw.put('reco/sub/42', b'\x91*')   # msgpack [42]? doesn't matter; decode might fail
+            new_raw.put('reco/sub/42', b'\x91*')  # msgpack [42]? doesn't matter; decode might fail
             wait(0.3)
 
             sub.close()
             # Just verify the redeclare didn't blow up — the redeclared
             # zenoh.Subscriber is bound to new_raw.
-            assert sub._zenoh_subs   # tuple is non-empty
+            assert sub._zenoh_subs  # tuple is non-empty
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
     def test_on_remove_survives_reconnect(self, session):
         """The tombstone feed (on_remove) is baked into the dispatch closure,
         which redeclare reuses — so it keeps firing after reconnect."""
+
         @z.zeared
         class Reader(z.Message):
             TOPIC = 'reco/rm/{reader_id}'
@@ -338,7 +329,8 @@ class TestSubscriberRedeclared:
         new_raw = _peer_session()
         try:
             m = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='rm-reco',
                 probe_interval=0,
                 initial_backoff=0.001,
@@ -361,7 +353,7 @@ class TestSubscriberRedeclared:
             assert done.wait(timeout=3.0)
             wait(0.2)
 
-            assert sub._dispatch is dispatch_before   # reused, on_remove intact
+            assert sub._dispatch is dispatch_before  # reused, on_remove intact
 
             # A DELETE on the reconnected raw must reach on_remove.
             new_raw.delete('reco/rm/7')
@@ -370,17 +362,14 @@ class TestSubscriberRedeclared:
 
             assert removed == [{'reader_id': '7'}]
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
     def test_auto_reconnect_false_subscriber_skipped(self, session):
         """A subscriber opted out of auto_reconnect is NOT redeclared."""
+
         @z.zeared
         class Pulse(z.Message):
             TOPIC = 'reco/optout/{n}'
@@ -389,7 +378,8 @@ class TestSubscriberRedeclared:
         new_raw = _peer_session()
         try:
             m = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='optout',
                 probe_interval=0,
                 initial_backoff=0.001,
@@ -414,14 +404,10 @@ class TestSubscriberRedeclared:
             assert sub._zenoh_subs is old_subs
             sub.close()
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
 
 # ---------------------------------------------------------------------------
@@ -435,13 +421,14 @@ class TestWillReplay:
         class Status(z.Message):
             TOPIC = 'reco/will/{name}'
             LIVELINESS = True
-            name:  str = z.Str(required=True)
+            name: str = z.Str(required=True)
             state: str = z.Str(required=True)
 
         new_raw = _peer_session()
         try:
             m = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='will-replay',
                 probe_interval=0,
                 initial_backoff=0.001,
@@ -464,6 +451,7 @@ class TestWillReplay:
             # The new presence state should have a will registered under
             # the NEW zid; the envelope's source_zid is updated.
             from zeared.presence import _registry
+
             new_state = None
             for state in _registry.values():
                 if state.session is m:
@@ -475,14 +463,10 @@ class TestWillReplay:
             assert envelopes[0].source_zid == new_zid
             assert envelopes[0].target_key_expr == 'reco/will/alice'
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
 
 # ---------------------------------------------------------------------------
@@ -495,7 +479,8 @@ class TestReleaseCleansUp:
         m = _make_managed(session, probe_interval=0.05)
         start_probe(m)
         thread = m._probe_thread
-        assert thread is not None and thread.is_alive()
+        assert thread is not None
+        assert thread.is_alive()
 
         z.release(session=m)
         # Probe thread should exit promptly (cancel event + 1s join).
@@ -531,14 +516,10 @@ class TestOnReconnectHook:
             _trigger_reconnect(m)
             assert fired.wait(timeout=3.0)
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
     def test_multiple_callbacks_fire_in_registration_order(self, session):
         new_raw = _peer_session()
@@ -559,14 +540,10 @@ class TestOnReconnectHook:
 
             assert order == ['first', 'second', 'third']
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
     def test_callback_exception_logs_and_continues(self, session):
         new_raw = _peer_session()
@@ -575,7 +552,8 @@ class TestOnReconnectHook:
             second_fired = threading.Event()
 
             def boom(mgr):
-                raise RuntimeError('first cb blew up')
+                msg = 'first cb blew up'
+                raise RuntimeError(msg)
 
             def quiet(mgr):
                 second_fired.set()
@@ -587,18 +565,13 @@ class TestOnReconnectHook:
             start_probe(m)
             _trigger_reconnect(m)
             assert second_fired.wait(timeout=3.0), (
-                'second callback did not fire — first cb exception '
-                'short-circuited the loop'
+                'second callback did not fire — first cb exception short-circuited the loop'
             )
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
     def test_cancel_handle_deregisters(self, session):
         new_raw = _peer_session()
@@ -622,14 +595,10 @@ class TestOnReconnectHook:
             handle.cancel()
             handle.cancel()
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
     def test_async_callback_without_loop_raises_at_registration(self, session):
         m = _make_managed(session, probe_interval=0)
@@ -645,6 +614,7 @@ class TestOnReconnectHook:
         """Register an async callback from an event loop, force a
         reconnect, verify the coroutine ran on the captured loop."""
         import asyncio
+
         new_raw = _peer_session()
 
         async def main():
@@ -667,10 +637,8 @@ class TestOnReconnectHook:
         try:
             asyncio.run(main())
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
 
 class TestReconnectWorkerSingleton:
@@ -683,7 +651,8 @@ class TestReconnectWorkerSingleton:
         try:
             iterator = iter(new_raws)
             m = ManagedSession(
-                session, lambda: next(iterator),
+                session,
+                lambda: next(iterator),
                 endpoint_label='worker-test',
                 probe_interval=0.05,
                 initial_backoff=0.001,
@@ -692,9 +661,10 @@ class TestReconnectWorkerSingleton:
             )
             start_probe(m)
             worker = m._reconnect_thread
-            assert worker is not None and worker.is_alive()
+            assert worker is not None
+            assert worker.is_alive()
 
-            for i in range(3):
+            for _i in range(3):
                 done = threading.Event()
                 m._on_reconnect = lambda mgr, ev=done: ev.set()
                 start_probe(m)
@@ -708,10 +678,8 @@ class TestReconnectWorkerSingleton:
             assert not worker.is_alive()
         finally:
             for r in new_raws:
-                try:
+                with contextlib.suppress(Exception):
                     r.close()
-                except Exception:
-                    pass
 
 
 class TestSubscriberRedeclareNoWarn:
@@ -733,7 +701,8 @@ class TestSubscriberRedeclareNoWarn:
         new_raw = _peer_session()
         try:
             m = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='symmetry',
                 probe_interval=0,
                 initial_backoff=0.001,
@@ -750,31 +719,22 @@ class TestSubscriberRedeclareNoWarn:
                 _trigger_reconnect(m)
                 assert done.wait(timeout=3.0)
 
-            rt_warnings = [
-                w for w in caught if issubclass(w.category, RuntimeWarning)
-            ]
+            rt_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
             # Internal declare-handle warnings should NOT fire from
             # the redeclare path — Subscriber._redeclare uses the
             # raw session passed in by _restore_subscribers, not the
             # wrapper.
-            handle_warnings = [
-                w for w in rt_warnings
-                if 'does NOT survive reconnect' in str(w.message)
-            ]
+            handle_warnings = [w for w in rt_warnings if 'does NOT survive reconnect' in str(w.message)]
             assert not handle_warnings, (
                 f'redeclare path emitted user-facing declare-handle '
                 f'warnings: {[str(w.message) for w in handle_warnings]}'
             )
             sub.close()
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
 
 class TestContextManagerSync:
@@ -793,7 +753,8 @@ class TestContextManagerSync:
     def test_exit_releases_session(self):
         sess = z.peer(auto_reconnect=True, probe_interval=0)
         thread = sess._reconnect_thread
-        assert thread is not None and thread.is_alive()
+        assert thread is not None
+        assert thread.is_alive()
 
         with sess:
             pass
@@ -807,9 +768,9 @@ class TestContextManagerSync:
         class _Boom(RuntimeError):
             pass
 
-        with pytest.raises(_Boom):
-            with sess:
-                raise _Boom('block raised')
+        with pytest.raises(_Boom), sess:
+            msg = 'block raised'
+            raise _Boom(msg)
         # Release happened despite the exception.
         thread = sess._reconnect_thread
         if thread is not None:
@@ -818,13 +779,14 @@ class TestContextManagerSync:
     def test_exit_during_reconnect_in_flight_cleans_up(self):
         """Pin: exiting the ``with`` block while a reconnect is in
         progress — the worker's open-with-backoff sees the cancel via
-        ``_probe_cancel`` and raises ``_ReconnectAborted``, the wrapper
+        ``_probe_cancel`` and raises ``_ReconnectAbortedError``, the wrapper
         ends in ``DEAD`` state, no orphan thread."""
         attempts = [0]
 
         def slow_open():
             attempts[0] += 1
-            raise RuntimeError('always fails — forces backoff')
+            msg = 'always fails — forces backoff'
+            raise RuntimeError(msg)
 
         sess = z.peer(auto_reconnect=True, probe_interval=0)
         sess._open_fn = slow_open
@@ -835,7 +797,7 @@ class TestContextManagerSync:
             _trigger_reconnect(sess)
             # Tiny pause to ensure the worker is in the backoff sleep.
             wait(0.1)
-        # Block exited mid-flight. _ReconnectAborted should have fired
+        # Block exited mid-flight. _ReconnectAbortedError should have fired
         # and released cleanly.
         thread = sess._reconnect_thread
         if thread is not None:
@@ -873,13 +835,14 @@ class TestRetentionRebuild:
         class Reg(z.Message):
             TOPIC = 'reco/rebuild/{name}'
             RETAINED = True
-            name:  str = z.Str(required=True)
+            name: str = z.Str(required=True)
             state: str = z.Str(required=True)
 
         new_raw = _peer_session()
         try:
             ma = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='rebuild',
                 probe_interval=0,
                 initial_backoff=0.001,
@@ -894,13 +857,14 @@ class TestRetentionRebuild:
             wait(0.2)
 
             from zeared.retention import _registry as _rr
+
             caches = [c for c in _rr.values() if c._session is ma]
             assert len(caches) == 1
             cache = caches[0]
             old_queryables = list(cache._queryables)
             old_cache_snapshot = dict(cache._cache)
             assert len(old_queryables) >= 1
-            assert old_cache_snapshot   # non-empty
+            assert old_cache_snapshot  # non-empty
 
             # Force reconnect.
             done = threading.Event()
@@ -916,20 +880,13 @@ class TestRetentionRebuild:
             # Queryables are NEW objects bound to the new raw.
             new_queryables = list(cache._queryables)
             assert len(new_queryables) == len(old_queryables)
-            for old, new in zip(old_queryables, new_queryables):
-                assert new is not old, (
-                    'retention queryable identity unchanged across reconnect '
-                    '— rebuild did not run'
-                )
+            for old, new in zip(old_queryables, new_queryables, strict=False):
+                assert new is not old, 'retention queryable identity unchanged across reconnect — rebuild did not run'
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 ma._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
     def test_same_process_retained_fetch_after_reconnect(self, session):
         """Pins retention-first ordering. A subscriber's reconnect-triggered
@@ -937,18 +894,20 @@ class TestRetentionRebuild:
         the retained value, the publisher-side queryable on the SAME wrapper
         must already be redeclared. If subscriber rebuild ran first, the
         queryable would still be dead when the get fires."""
+
         @z.zeared
         class Reg(z.Message):
             TOPIC = 'reco/same/{name}'
             RETAINED = True
-            DEDUPE = False           # don't suppress the post-reconnect replay
-            name:  str = z.Str(required=True)
+            DEDUPE = False  # don't suppress the post-reconnect replay
+            name: str = z.Str(required=True)
             state: str = z.Str(required=True)
 
         new_raw = _peer_session()
         try:
             ma = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='same-proc',
                 probe_interval=0,
                 initial_backoff=0.001,
@@ -970,8 +929,7 @@ class TestRetentionRebuild:
             )
             wait(0.4)
             assert ('alice', 'online') in received, (
-                'sanity: pre-reconnect retained-fetch should pick up '
-                'the value via the local queryable'
+                'sanity: pre-reconnect retained-fetch should pick up the value via the local queryable'
             )
             received.clear()
 
@@ -994,14 +952,10 @@ class TestRetentionRebuild:
                 'the queryable was dead during the fetch)'
             )
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 ma._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
 
 class TestBatchSurvivesReconnect:
@@ -1010,6 +964,7 @@ class TestBatchSurvivesReconnect:
         flushes buffered samples on whatever raw is current at flush time.
         Doesn't make a strong correctness claim about samples crossing the
         reconnect — just that the buffer doesn't crash."""
+
         @z.zeared
         class Note(z.Message):
             TOPIC = 'reco/batch/{n}'
@@ -1018,7 +973,8 @@ class TestBatchSurvivesReconnect:
         new_raw = _peer_session()
         try:
             m = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='batch-reco',
                 probe_interval=0,
                 initial_backoff=0.001,
@@ -1038,11 +994,7 @@ class TestBatchSurvivesReconnect:
                 # since we're back to IDLE.
             assert m.state == 'IDLE'
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass

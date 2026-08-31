@@ -14,18 +14,23 @@ header for the exact wire-shape contract these types assume.
 
 CLI: ``python -m zeared.doc.typescript <module-or-package> [-o out.ts] [--check]``.
 """
+
 from __future__ import annotations
 
 import argparse
 import re
 import sys
-from enum import Enum
-from typing import Any, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from seared import Seared
 from seared.doc import collect
 
 from .introspect import introspect_message, is_message_class
+
+if TYPE_CHECKING:
+    from enum import Enum
+
+    from seared import Seared
 
 # Strip Sphinx/RST role prefixes so docstrings read as plain JSDoc text:
 # ``:class:`Ping``` → ```Ping```. Mirrors ``seared.doc``'s cleaning.
@@ -46,7 +51,7 @@ _SCALAR: dict[str, str] = {
     'DateTime': 'string',
     'Time': 'string',
     'TimeDelta': 'string',
-    'Bytes': 'string',          # base64 on the JSON wire
+    'Bytes': 'string',  # base64 on the JSON wire
     'Dict': 'Record<string, unknown>',
     'NDArray': 'unknown',
     'PandasFrame': 'unknown',
@@ -110,7 +115,7 @@ def ts_type(f: Any) -> str:
     elif hasattr(f, 'variants') and getattr(f, 'variants', None):
         base = _union_type(f)
     elif getattr(f, 'schema', None) is not None:
-        base = f.schema.__name__                       # nested T(schema)
+        base = f.schema.__name__  # nested T(schema)
     elif hasattr(f, 'tuple_fields'):
         base = '[' + ', '.join(ts_type(sub) for sub in f.tuple_fields) + ']'
     elif type(f).__name__ == 'Decimal':
@@ -125,7 +130,7 @@ def ts_type(f: Any) -> str:
     return base
 
 
-def _member(attr: str, wire_key: str, f: Any) -> list[str]:
+def _member(attr: str, wire_key: str, f: Any) -> list[str]:  # noqa: ARG001  (attr kept for call-site symmetry)
     """Emit the interface member line(s) for one field (with JSDoc)."""
     required = bool(f.required)
     has_factory = getattr(f, 'default_factory', None) is not None
@@ -146,16 +151,19 @@ def _member(attr: str, wire_key: str, f: Any) -> list[str]:
     return lines
 
 
-def _real_docstring(cls: 'type[Seared]') -> str:
-    """The class's own docstring, or '' if it's the dataclass-generated
-    signature (``Name(field: T = ...)``) that stands in when none was written."""
+def _real_docstring(cls: type[Seared]) -> str:
+    """The class's own docstring, or '' if it is the generated one.
+
+    The class's own docstring, or '' if it's the dataclass-generated signature
+    (``Name(field: T = ...)``) that stands in when none was written.
+    """
     doc = (cls.__doc__ or '').strip()
     if not doc or doc.startswith(f'{cls.__name__}('):
         return ''
     return doc
 
 
-def _interface_jsdoc(cls: 'type[Seared]') -> list[str]:
+def _interface_jsdoc(cls: type[Seared]) -> list[str]:
     """Leading JSDoc block for an interface — wire contract for a Message."""
     lines: list[str] = []
     doc = _real_docstring(cls).splitlines()
@@ -166,8 +174,7 @@ def _interface_jsdoc(cls: 'type[Seared]') -> list[str]:
     if is_message_class(cls):
         md = introspect_message(cls)
         body.append(f'@topic {md.topic}' if md.topic else '')
-        for extra in md.extra_topics:
-            body.append(f'@extraTopic {extra}')
+        body.extend(f'@extraTopic {extra}' for extra in md.extra_topics)
         if md.schema_version is not None:
             body.append(f'@schemaVersion {md.schema_version}')
         body.append(f'@encoding {md.encoding}')
@@ -180,7 +187,7 @@ def _interface_jsdoc(cls: 'type[Seared]') -> list[str]:
     return lines
 
 
-def render_interface(cls: 'type[Seared]') -> str:
+def render_interface(cls: type[Seared]) -> str:
     """Render one ``export interface`` for a seared/message class."""
     out: list[str] = []
     out.extend(_interface_jsdoc(cls))
@@ -188,7 +195,7 @@ def render_interface(cls: 'type[Seared]') -> str:
     members = [
         line
         for attr, wire, f in cls.__seared_fields__
-        if getattr(f, 'dump', True)                    # skip load-only fields
+        if getattr(f, 'dump', True)  # skip load-only fields
         for line in _member(attr, wire, f)
     ]
     if members:
@@ -197,9 +204,9 @@ def render_interface(cls: 'type[Seared]') -> str:
     return '\n'.join(out)
 
 
-def _collect_enums(classes: 'list[type[Seared]]') -> 'list[type[Enum]]':
+def _collect_enums(classes: list[type[Seared]]) -> list[type[Enum]]:
     """Gather every Enum class referenced by any field, deduped by identity."""
-    seen: 'dict[int, type[Enum]]' = {}
+    seen: dict[int, type[Enum]] = {}
     for cls in classes:
         for _attr, _wire, f in cls.__seared_fields__:
             e = getattr(f, 'enum', None)
@@ -208,28 +215,31 @@ def _collect_enums(classes: 'list[type[Seared]]') -> 'list[type[Enum]]':
     return sorted(seen.values(), key=lambda e: e.__name__)
 
 
-def render_enum(enum_cls: 'type[Enum]') -> str:
+def render_enum(enum_cls: type[Enum]) -> str:
     """Render an Enum as a TS union-of-literals type alias (wire values)."""
     literals = ' | '.join(_ts_literal(m.value) for m in enum_cls)
     return f'export type {enum_cls.__name__} = {literals};'
 
 
-def _expand(classes: 'list[type[Seared]]') -> 'list[type[Seared]]':
-    """Full set to emit: every input class plus the transitive closure of its
-    field references (nested ``T`` targets, ``Union`` variants) and its
-    ``REQUEST`` payload closure. Deduped, then sorted ``(module, name)`` so
-    output is deterministic regardless of input order (stable ``--check``)."""
+def _expand(classes: list[type[Seared]]) -> list[type[Seared]]:
+    """Full set of classes to emit, including referenced ones.
+
+    Full set to emit: every input class plus the transitive closure of its field
+    references (nested ``T`` targets, ``Union`` variants) and its ``REQUEST`` payload
+    closure. Deduped, then sorted ``(module, name)`` so output is deterministic
+    regardless of input order (stable ``--check``).
+    """
     from seared.doc import introspect as _introspect
 
-    found: 'dict[int, type[Seared]]' = {}
+    found: dict[int, type[Seared]] = {}
 
-    def walk(c: 'type[Seared]') -> None:
+    def walk(c: type[Seared]) -> None:
         if id(c) in found or not getattr(c, '__seared_fields__', None):
             return
         found[id(c)] = c
         for ref in _introspect(c).references:
             walk(ref)
-        req = getattr(c, 'REQUEST', None)          # not a field ref — pull it in
+        req = getattr(c, 'REQUEST', None)  # not a field ref — pull it in
         if req is not None:
             walk(req)
 
@@ -238,9 +248,8 @@ def _expand(classes: 'list[type[Seared]]') -> 'list[type[Seared]]':
     return sorted(found.values(), key=lambda c: (c.__module__, c.__name__))
 
 
-def emit(classes: 'list[type[Seared]]') -> str:
-    """Render a full ``.ts`` module for the given seared/message classes and
-    everything they reference."""
+def emit(classes: list[type[Seared]]) -> str:
+    """Render a full ``.ts`` module for the given seared/message classes and everything they reference."""
     classes = _expand(classes)
     blocks: list[str] = [_HEADER.rstrip()]
     enums = _collect_enums(classes)
@@ -251,22 +260,25 @@ def emit(classes: 'list[type[Seared]]') -> str:
 
 
 def generate(target: str) -> str:
-    """Discover every ``@zeared``/``@seared`` class under ``target`` and emit
-    a single TypeScript module."""
+    """Discover every ``@zeared``/``@seared`` class under ``target`` and emit a single TypeScript module."""
     return emit(collect(target))
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for ``python -m zeared.doc.typescript``."""
     parser = argparse.ArgumentParser(
         prog='python -m zeared.doc.typescript',
         description='Generate TypeScript types for @zeared message classes.',
     )
     parser.add_argument('target', help='module or package to introspect')
     parser.add_argument(
-        '-o', '--output', help='write to this .ts file (default: stdout)',
+        '-o',
+        '--output',
+        help='write to this .ts file (default: stdout)',
     )
     parser.add_argument(
-        '--check', action='store_true',
+        '--check',
+        action='store_true',
         help='exit non-zero if --output is missing or stale (CI guard)',
     )
     args = parser.parse_args(argv)
@@ -277,7 +289,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not args.output:
             parser.error('--check requires --output')
         try:
-            with open(args.output, encoding='utf-8') as fh:
+            with Path(args.output).open(encoding='utf-8') as fh:
                 existing = fh.read()
         except FileNotFoundError:
             print(f'{args.output}: missing (run without --check)', file=sys.stderr)
@@ -288,7 +300,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     if args.output:
-        with open(args.output, 'w', encoding='utf-8') as fh:
+        with Path(args.output).open('w', encoding='utf-8') as fh:
             fh.write(content)
     else:
         sys.stdout.write(content)

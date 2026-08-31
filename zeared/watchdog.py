@@ -25,22 +25,27 @@ running an event loop, register the watchdog from inside the loop so the
 adapter captures it once and routes via ``run_coroutine_threadsafe`` (the
 cheap path). See ``docs/watchdog.md`` for the full caveat.
 """
+
 from __future__ import annotations
 
 import asyncio
 import inspect
 import logging
 import threading
-from typing import Callable, Optional
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _log = logging.getLogger('zeared.watchdog')
 
 
-def _adapt_maybe_async(cb: Optional[Callable]) -> Optional[Callable]:
-    """Like ``subscriber._adapt_async_callback`` but without the running-loop
-    requirement: if there's no loop at adaptation time, dispatch via a
-    short-lived ``asyncio.run`` per call.
+def _adapt_maybe_async(cb: Callable | None) -> Callable | None:
+    """Adapt an async callback without requiring a running loop.
+
+    Like ``subscriber._adapt_async_callback`` but without the running-loop requirement:
+    if there's no loop at adaptation time, dispatch via a short-lived ``asyncio.run``
+    per call.
 
     Watchdog callbacks fire on a non-loop thread, so we typically don't
     have a running loop. ``asyncio.run`` per fire is acceptable for the
@@ -57,26 +62,28 @@ def _adapt_maybe_async(cb: Optional[Callable]) -> Optional[Callable]:
     # If a running loop is available at adaptation time, schedule on it.
     try:
         loop = asyncio.get_running_loop()
-
-        def _from_loop():
-            asyncio.run_coroutine_threadsafe(inner(), loop)
-
-        return _from_loop
     except RuntimeError:
         # No running loop — start one per fire.
-        def _bare():
+        def _bare() -> None:
             try:
                 asyncio.run(inner())
             except Exception:  # noqa: BLE001
                 _log.exception('watchdog async callback raised')
 
         return _bare
+    else:
+
+        def _from_loop() -> None:
+            asyncio.run_coroutine_threadsafe(inner(), loop)
+
+        return _from_loop
 
 
 class _SubscriberWatchdog:
-    """One long-running thread doing ``event.wait(timeout=N)`` /
-    ``event.clear()``. ``ping()`` sets the event from the Zenoh delivery
-    thread; ``cancel()`` tears the thread down.
+    """One long-running thread doing ``event.wait(timeout=N)`` / ``event.clear()``.
+
+    ``ping()`` sets the event from the Zenoh delivery thread; ``cancel()`` tears the
+    thread down.
 
     Two startup modes:
 
@@ -91,32 +98,38 @@ class _SubscriberWatchdog:
     """
 
     __slots__ = (
-        '_interval', '_startup_grace',
-        '_on_quiet', '_on_active',
-        '_ping', '_cancel', '_thread',
-        '_quiet', '_msg_seen', '_lock',
+        '_cancel',
+        '_interval',
+        '_lock',
+        '_msg_seen',
+        '_on_active',
+        '_on_quiet',
+        '_ping',
+        '_quiet',
+        '_startup_grace',
+        '_thread',
     )
 
     def __init__(
         self,
         interval: float,
-        on_quiet: Optional[Callable],
-        on_active: Optional[Callable],
-        startup_grace: Optional[float] = None,
-    ):
+        on_quiet: Callable | None,
+        on_active: Callable | None,
+        startup_grace: float | None = None,
+    ) -> None:
         if interval <= 0:
-            raise ValueError(f'expected_interval must be > 0, got {interval}')
+            msg = f'expected_interval must be > 0, got {interval}'
+            raise ValueError(msg)
         if startup_grace is not None and startup_grace <= 0:
-            raise ValueError(
-                f'startup_grace must be > 0 or None, got {startup_grace}'
-            )
+            msg = f'startup_grace must be > 0 or None, got {startup_grace}'
+            raise ValueError(msg)
         self._interval = interval
         self._startup_grace = startup_grace
         self._on_quiet = _adapt_maybe_async(on_quiet)
         self._on_active = _adapt_maybe_async(on_active)
         self._ping = threading.Event()
         self._cancel = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._quiet = False
         self._msg_seen = False
         self._lock = threading.Lock()
@@ -129,7 +142,9 @@ class _SubscriberWatchdog:
         if self._thread is not None:
             return
         self._thread = threading.Thread(
-            target=self._loop, name='zeared-watchdog', daemon=True,
+            target=self._loop,
+            name='zeared-watchdog',
+            daemon=True,
         )
         self._thread.start()
 
@@ -161,19 +176,17 @@ class _SubscriberWatchdog:
             self._ping.clear()
             # Use startup_grace as the very first wait if set AND we
             # haven't seen any message yet. Subsequent waits use interval.
-            if not self._msg_seen and self._startup_grace is not None:
-                timeout = self._startup_grace
-            else:
-                timeout = self._interval
+            timeout = self._startup_grace if not self._msg_seen and self._startup_grace is not None else self._interval
             fired = self._ping.wait(timeout=timeout)
             if self._cancel.is_set():
                 return
-            if not fired:
-                # Wait timed out without a ping.
-                if not self._quiet:
-                    self._quiet = True
-                    if self._on_quiet is not None:
-                        try:
-                            self._on_quiet()
-                        except Exception:  # noqa: BLE001
-                            _log.exception('watchdog on_quiet raised')
+            # `on_quiet` is edge-triggered: it fires on the transition into
+            # quiet, not on every timeout while already quiet. The nesting is
+            # load-bearing, hence the SIM102 suppression.
+            if not fired and not self._quiet:
+                self._quiet = True
+                if self._on_quiet is not None:
+                    try:
+                        self._on_quiet()
+                    except Exception:  # noqa: BLE001
+                        _log.exception('watchdog on_quiet raised')

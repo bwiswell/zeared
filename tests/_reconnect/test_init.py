@@ -1,13 +1,14 @@
 """Smoke tests for ``zeared/_reconnect/__init__.py`` — the namespace
 re-exports for the reconnect orchestration Pattern B subdir."""
+
 from __future__ import annotations
 
 from zeared._reconnect import (
-    _ReconnectAborted,
     _open_with_backoff,
     _probe_loop,
     _reconnect,
     _reconnect_worker,
+    _ReconnectAbortedError,
     _restore_retention,
     _restore_subscribers,
     _restore_wills,
@@ -31,4 +32,4 @@ class TestReExports:
         assert callable(_restore_wills)
 
     def test_reconnect_aborted_is_exception(self):
-        assert issubclass(_ReconnectAborted, Exception)
+        assert issubclass(_ReconnectAbortedError, Exception)

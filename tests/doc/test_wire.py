@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from doc.wire_models import Ping, PingRequest
-
 from zeared.doc import (
     build_docs,
     document,
@@ -37,7 +36,8 @@ class TestIntrospectMessage:
     def test_slots_flag_inherited_field(self):
         # `source` is inherited from _CmdBase; `reader_id` is declared here.
         assert [(s.name, s.is_field) for s in self.md.slots] == [
-            ('source', True), ('reader_id', True),
+            ('source', True),
+            ('reader_id', True),
         ]
 
 

@@ -2,13 +2,16 @@
 
 Mixin — contributes no instance state. ``Message`` composes this via MRO.
 """
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterable, Optional
+from typing import TYPE_CHECKING
 
 from .. import _codec as codec
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     import zenoh
 
     from .message import Message
@@ -16,14 +19,15 @@ if TYPE_CHECKING:
 
 class _MessageSendMixin:
     """Sync publish surface for :class:`Message`."""
+
     __slots__ = ()
 
     def send(
-        self: 'Message',
+        self: Message,
         *,
-        session: Optional['zenoh.Session'] = None,
-        topic: Optional[str] = None,
-        retain: Optional[bool] = None,
+        session: zenoh.Session | None = None,
+        topic: str | None = None,
+        retain: bool | None = None,
     ) -> None:
         """Serialize and publish this message on the resolved session.
 
@@ -54,52 +58,64 @@ class _MessageSendMixin:
         # fields emit native bytes (no base64 overhead) for the msgpack
         # packer to consume directly. JSON path is unchanged.
         data = type(self).dump(self, format=encoding)
-        template = type(self)._templates().resolve_publish_topic(topic)
+        template = type(self)._templates().resolve_publish_topic(topic)  # noqa: SLF001
         concrete_topic = template.render(data)
 
         # Strip template fields from the payload — they live in the key.
-        payload_dict = {
-            k: v for k, v in data.items() if k not in template.field_names
-        }
+        payload_dict = {k: v for k, v in data.items() if k not in template.field_names}
         raw = codec.pack(payload_dict, encoding)
 
         retain_mode = 'retain' if retain_flag else 'none'
-        attachment = type(self)._schema_attachment_bytes()
+        attachment = type(self)._schema_attachment_bytes()  # noqa: SLF001
 
         buffer = current_buffer()
         if buffer is not None:
-            buffer.append((
-                type(self), sess, concrete_topic, raw, encoding,
-                retain_mode, attachment,
-            ))
+            buffer.append(
+                (
+                    type(self),
+                    sess,
+                    concrete_topic,
+                    raw,
+                    encoding,
+                    retain_mode,
+                    attachment,
+                )
+            )
             return
 
         if retain_flag:
             get_retention_cache(type(self), sess).store(
-                concrete_topic, raw, encoding, attachment=attachment,
+                concrete_topic,
+                raw,
+                encoding,
+                attachment=attachment,
             )
         get_cache(type(self), sess).put(
-            concrete_topic, raw, encoding, attachment=attachment,
+            concrete_topic,
+            raw,
+            encoding,
+            attachment=attachment,
         )
 
     @classmethod
     def send_batch(
         cls,
-        items: Iterable['Message'],
+        items: Iterable[Message],
         *,
-        session: Optional['zenoh.Session'] = None,
-        topic: Optional[str] = None,
-        retain: Optional[bool] = None,
+        session: zenoh.Session | None = None,
+        topic: str | None = None,
+        retain: bool | None = None,
     ) -> None:
-        """Publish a homogeneous batch. Wraps the loop in ``z.batch()`` and
-        propagates ``session=`` / ``topic=`` / ``retain=`` to every message."""
+        """Publish a homogeneous batch.
+
+        Wraps the loop in ``z.batch()`` and propagates ``session=`` / ``topic=`` /
+        ``retain=`` to every message.
+        """
         from ..batch import batch as _batch_cm
 
         with _batch_cm():
             for m in items:
                 if not isinstance(m, cls):
-                    raise TypeError(
-                        f'{cls.__name__}.send_batch: expected {cls.__name__} '
-                        f'instance, got {type(m).__name__}'
-                    )
+                    msg = f'{cls.__name__}.send_batch: expected {cls.__name__} instance, got {type(m).__name__}'
+                    raise TypeError(msg)
                 m.send(session=session, topic=topic, retain=retain)

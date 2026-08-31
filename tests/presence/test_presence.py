@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import time
-
 import pytest
+from conftest import wait
 
 import zeared as z
 from zeared.presence import (
@@ -13,9 +12,6 @@ from zeared.presence import (
     get_observer,
     get_presence,
 )
-
-from conftest import wait
-
 
 # ---------------------------------------------------------------------------
 # Unit-ish: presence state internals
@@ -71,6 +67,7 @@ class TestRegisterWillPublishesRetainedEnvelope:
         assert len(replies) >= 1
         # Check the envelope decodes and points at the right target.
         from zeared import _codec as codec
+
         found = False
         for r in replies:
             ok = getattr(r, 'ok', None)
@@ -103,7 +100,9 @@ class TestRegisterWillPublishesRetainedEnvelope:
             seen.append(str(sample.key_expr))
 
         sub = session.liveliness().declare_subscriber(
-            f'{ALIVE_PREFIX}/**', on_alive, history=True,
+            f'{ALIVE_PREFIX}/**',
+            on_alive,
+            history=True,
         )
         wait()
         sub.undeclare()
@@ -262,12 +261,13 @@ class TestWillBucketDelete:
     API yet, so we exercise the path by directly poking at the
     observer's _on_will.)
     """
+
     def test_delete_drops_only_matching_slug(self, session):
         @z.zeared
         class Status(z.Message):
             TOPIC = 'pres/bucket/{name}'
             LIVELINESS = True
-            name:  str = z.Str(required=True)
+            name: str = z.Str(required=True)
             state: str = z.Str(required=True)
 
         z.session = session
@@ -279,17 +279,19 @@ class TestWillBucketDelete:
         # Force the observer to start (LIVELINESS subscriber would do
         # this automatically; for the unit-style test we instantiate the
         # observer directly).
-        from zeared.presence import _slug, get_observer
+        from zeared.presence import _slug
+
         observer = get_observer(session)
         observer.start()
-        wait(0.3)   # initial fetch background thread populates the bucket
+        wait(0.3)  # initial fetch background thread populates the bucket
 
         peer_zid = str(session.zid())
-        bucket = observer._wills_by_zid.get(peer_zid, {})
+        observer._wills_by_zid.get(peer_zid, {})
         # The local session's own wills get filtered out via _self_zid
         # check in _on_will. So we manually inject from the perspective
         # of a remote peer to test bucket drop.
         from zeared.presence import _WillEnvelope
+
         slug_a = _slug('Status', 'pres/bucket/alice')
         slug_b = _slug('Status', 'pres/bucket/bob')
 
@@ -329,8 +331,9 @@ class TestOrphanedWillGC:
     Verifies the periodic sweep — without it, a missed liveliness DELETE
     (e.g. during a brief partition) would leak the entry forever.
     """
+
     def test_gc_drops_orphan(self, session):
-        from zeared.presence import _WillEnvelope, get_observer
+        from zeared.presence import _WillEnvelope
 
         observer = get_observer(session)
         # Tighten interval to keep the test fast.
@@ -356,7 +359,7 @@ class TestOrphanedWillGC:
                     payload=b'',
                 ),
             }
-            wait(0.3)   # let GC sweep at least once
+            wait(0.3)  # let GC sweep at least once
 
             assert 'ghost_peer' not in observer._wills_by_zid
             assert 'alive_peer' in observer._wills_by_zid
@@ -367,6 +370,7 @@ class TestOrphanedWillGC:
 class TestEnvelopeEncodingHonorsDebug:
     """Pin: when ``z.debug`` is True the will envelope wire encoding is JSON,
     and the subscriber decodes it correctly off ``sample.encoding``."""
+
     def test_envelope_is_json_under_debug(self, session):
         from zeared import _codec as codec
 
@@ -374,7 +378,7 @@ class TestEnvelopeEncodingHonorsDebug:
         class Status(z.Message):
             TOPIC = 'pres/debug/{name}'
             LIVELINESS = True
-            name:  str = z.Str(required=True)
+            name: str = z.Str(required=True)
             state: str = z.Str(required=True)
 
         z.session = session
@@ -504,9 +508,7 @@ class TestWillSchemaAttachment:
 
         # The will fired and was NOT dropped as a schema mismatch.
         assert ('alice', 'offline') in received
-        assert not any(
-            isinstance(e, z.SchemaMismatchError) for e in errors
-        ), errors
+        assert not any(isinstance(e, z.SchemaMismatchError) for e in errors), errors
         # The synthesised sample re-stamped the class SCHEMA.
         assert '1' in schemas
 

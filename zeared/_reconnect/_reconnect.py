@@ -24,21 +24,22 @@ Primary file of the ``_reconnect`` Pattern B subdir. The four
 ``_restore_*`` helpers + the cancellable ``_open_with_backoff`` loop
 live in the sibling ``_restore.py``.
 """
+
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 
 from .._managed_session import ManagedSession, _is_dead
 from ._restore import (
-    _ReconnectAborted,
     _open_with_backoff,
+    _ReconnectAbortedError,
     _restore_queryables,
     _restore_retention,
     _restore_subscribers,
     _restore_wills,
 )
-
 
 _log = logging.getLogger('zeared.reconnect')
 
@@ -64,20 +65,23 @@ def start_probe(managed: ManagedSession) -> None:
 
     if managed._reconnect_thread is None:
         worker = threading.Thread(
-            target=_reconnect_worker, args=(managed,),
-            daemon=True, name=f'zeared-reconnect-{id(managed):x}',
+            target=_reconnect_worker,
+            args=(managed,),
+            daemon=True,
+            name=f'zeared-reconnect-{id(managed):x}',
         )
         managed._reconnect_thread = worker
         worker.start()
 
-    if managed._probe_interval and managed._probe_interval > 0:
-        if managed._probe_thread is None:
-            t = threading.Thread(
-                target=_probe_loop, args=(managed,),
-                daemon=True, name=f'zeared-probe-{id(managed):x}',
-            )
-            managed._probe_thread = t
-            t.start()
+    if managed._probe_interval and managed._probe_interval > 0 and managed._probe_thread is None:
+        t = threading.Thread(
+            target=_probe_loop,
+            args=(managed,),
+            daemon=True,
+            name=f'zeared-probe-{id(managed):x}',
+        )
+        managed._probe_thread = t
+        t.start()
 
 
 def _probe_loop(managed: ManagedSession) -> None:
@@ -137,8 +141,9 @@ def _trigger_reconnect(managed: ManagedSession) -> None:
 
 
 def _reconnect(managed: ManagedSession) -> None:
-    """Open a fresh raw session with backoff; atomically swap; restore
-    subscribers + wills. Sets state = DEAD on terminal failure.
+    """Open a fresh raw session with backoff; atomically swap; restore subscribers + wills.
+
+    Sets state = DEAD on terminal failure.
     """
     label = managed._endpoint_label
     try:
@@ -150,7 +155,7 @@ def _reconnect(managed: ManagedSession) -> None:
             label=label,
             cancel=managed._probe_cancel,
         )
-    except _ReconnectAborted:
+    except _ReconnectAbortedError:
         # The wrapper was torn down mid-reconnect (z.release).
         managed._set_state('DEAD')
         return
@@ -181,10 +186,8 @@ def _reconnect(managed: ManagedSession) -> None:
     _restore_wills(managed)
 
     # Quietly close the old raw — best effort.
-    try:
+    with contextlib.suppress(Exception):
         old_raw.close()
-    except Exception:  # noqa: BLE001
-        pass
 
     # Legacy single-callback test hook (kept for tests).
     cb = managed._on_reconnect

@@ -3,11 +3,10 @@ from __future__ import annotations
 import threading
 
 import pytest
+from conftest import wait
 
 import zeared as z
 from zeared.batch import _buffer_stack, current_buffer
-
-from conftest import wait
 
 
 @pytest.fixture(autouse=True)
@@ -66,11 +65,11 @@ class TestDiscardOnException:
         sub = M.on_message(lambda m: received.append(m.v))
         wait()
 
-        with pytest.raises(RuntimeError, match='boom'):
-            with z.batch():
-                M(v=1).send()
-                M(v=2).send()
-                raise RuntimeError('boom')
+        with pytest.raises(RuntimeError, match='boom'), z.batch():
+            M(v=1).send()
+            M(v=2).send()
+            msg = 'boom'
+            raise RuntimeError(msg)
         wait()
         sub.close()
 
@@ -138,12 +137,12 @@ class TestFlatNesting:
         sub = M.on_message(lambda m: received.append(m.v))
         wait()
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(RuntimeError), z.batch():
+            M(v=1).send()
             with z.batch():
-                M(v=1).send()
-                with z.batch():
-                    M(v=2).send()
-                    raise RuntimeError('boom')
+                M(v=2).send()
+                msg = 'boom'
+                raise RuntimeError(msg)
         wait()
         sub.close()
 

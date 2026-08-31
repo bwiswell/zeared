@@ -1,5 +1,6 @@
 """Smoke tests for ``zeared/subscriber/_subscriber_registry.py`` — the
 module-level subscriber registry walked by ``z.release(session=)``."""
+
 from __future__ import annotations
 
 from zeared.subscriber._subscriber_registry import (
@@ -31,10 +32,12 @@ class TestRegistryHelpers:
         # Calling against a session id that's not registered is a no-op.
         class _Sentinel:
             pass
+
         _close_subscribers_for(_Sentinel())
 
     def test_deregister_with_none_session_no_op(self):
         # Deregistering against ``None`` short-circuits.
         class _Sentinel:
             pass
+
         _deregister_subscriber(None, _Sentinel())
