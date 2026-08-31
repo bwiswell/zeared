@@ -15,14 +15,14 @@ the `zenoh_config=` factory kwarg.
 ```python
 @z.zeared
 class SessionConfig(z.Zeared):
-    mode:            z.Mode        = z.Enum(enum=z.Mode, required=True)
-    router:          Optional[str] = z.Str()                # client shortcut
-    connect:         list          = z.Str(many=True, missing=[])
-    listen:          list          = z.Str(many=True, missing=[])
-    retry:           bool          = z.Bool(missing=False)
-    initial_backoff: float         = z.Float(missing=0.1)
-    max_backoff:     float         = z.Float(missing=30.0)
-    max_attempts:    Optional[int] = z.Int()
+    mode:            z.Mode     = z.Enum(enum=z.Mode, required=True)
+    router:          str | None = z.Str(default=None)      # client shortcut
+    connect:         list       = z.Str(many=True, default_factory=list)
+    listen:          list       = z.Str(many=True, default_factory=list)
+    retry:           bool       = z.Bool(default=False)
+    initial_backoff: float      = z.Float(default=0.1)
+    max_backoff:     float      = z.Float(default=30.0)
+    max_attempts:    int | None = z.Int(default=None)
 ```
 
 `mode` is a `z.Mode` enum (`Mode.PEER` / `Mode.CLIENT`). Strings still

@@ -19,7 +19,7 @@ class _MessageSendMixin:
     __slots__ = ()
 
     def send(
-        self,
+        self: 'Message',
         *,
         session: Optional['zenoh.Session'] = None,
         topic: Optional[str] = None,
@@ -53,7 +53,11 @@ class _MessageSendMixin:
         # hint. Under ``format='msgpack'`` ``Bytes`` and ``NDArray``
         # fields emit native bytes (no base64 overhead) for the msgpack
         # packer to consume directly. JSON path is unchanged.
-        data = type(self).dump(self, format=encoding)
+        # seared's ``Seared.load`` / ``Seared.dump`` base stubs omit the
+        # ``format=`` carrier hint the decorator-attached implementations
+        # actually take. Correct call, wrong stub — drop the suppression
+        # once seared widens them.
+        data = type(self).dump(self, format=encoding)  # ty: ignore[unknown-argument]
         template = type(self)._templates().resolve_publish_topic(topic)
         concrete_topic = template.render(data)
 

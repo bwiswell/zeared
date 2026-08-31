@@ -125,7 +125,7 @@ class _MessageSubscribeMixin:
         )
 
     @classmethod
-    def coerce_captures(cls, captures: dict) -> dict:
+    def coerce_captures(cls: 'type[Message]', captures: dict) -> dict:
         """Coerce raw string template captures through their declared fields.
 
         ``on_remove`` (and ``meta.captures`` generally) hands back template

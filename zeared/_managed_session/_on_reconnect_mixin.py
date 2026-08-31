@@ -11,9 +11,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from ._on_reconnect_handle import OnReconnectHandle
+
+if TYPE_CHECKING:
+    from ._managed_session import ManagedSession
 
 
 _log = logging.getLogger('zeared.session')
@@ -29,8 +32,8 @@ class _OnReconnectMixin:
     __slots__ = ()
 
     def on_reconnect(
-        self,
-        cb: Callable[['ManagedSession'], object],   # noqa: F821
+        self: 'ManagedSession',
+        cb: Callable[['ManagedSession'], object],
     ) -> OnReconnectHandle:
         """Register ``cb`` to fire after every successful reconnect.
 
@@ -67,7 +70,7 @@ class _OnReconnectMixin:
             self._on_reconnect_callbacks.append(entry)
         return OnReconnectHandle(self, entry)
 
-    def _fire_reconnect_callbacks(self) -> None:
+    def _fire_reconnect_callbacks(self: 'ManagedSession') -> None:
         """Invoke every registered on_reconnect callback. Called by
         ``_reconnect`` after restoration."""
         with self._lock:

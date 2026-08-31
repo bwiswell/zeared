@@ -7,18 +7,20 @@ re-exported by ``__init__.py``.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Optional
 
 from ._managed_session import ManagedSession
 
 if TYPE_CHECKING:
     import zenoh
 
+    from ._managed_session import SessionLike
+
 
 _log_connect = logging.getLogger('zeared.connect')
 
 
-def release(*, session: 'Union[zenoh.Session, ManagedSession]') -> None:
+def release(*, session: 'SessionLike') -> None:
     """Walk every zeared-owned resource for ``session`` in the right order
     and close the session itself.
 
@@ -99,9 +101,9 @@ def release_all() -> None:
     from .retention import _registry as _retention_registry
     from .subscriber import _subscribers, _subscribers_lock
 
-    sessions: 'dict[int, object]' = {}     # id(session) → session ref
+    sessions: 'dict[int, SessionLike]' = {}   # id(session) → session ref
 
-    def _add(sess):
+    def _add(sess: 'Optional[SessionLike]') -> None:
         if sess is None:
             return
         sessions.setdefault(id(sess), sess)

@@ -10,7 +10,12 @@ Pattern B (codified in ``CLAUDE.local.md``).
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ._helpers import _warn_declare_handle
+
+if TYPE_CHECKING:
+    from ._helpers import _ManagedSessionProto
 
 
 class _ZenohApiMixin:
@@ -23,7 +28,10 @@ class _ZenohApiMixin:
     one-shot ``RuntimeWarning`` because the returned handle is bound
     to the current raw and won't survive reconnect.
 
-    No instance state of its own — ``__slots__ = ()``.
+    No instance state of its own — ``__slots__ = ()``. Every method
+    annotates ``self`` with ``_ManagedSessionProto`` — the mixin is only
+    ever reached through a concrete ``ManagedSession``, and spelling that
+    out lets the delegators type-check in isolation.
     """
     __slots__ = ()
 
@@ -32,20 +40,20 @@ class _ZenohApiMixin:
     # Methods that callers might stash a result from get wrapped explicitly
     # so the result never points at an old raw session.
 
-    def zid(self):
+    def zid(self: '_ManagedSessionProto'):
         self._guard_alive()
         return self.raw().zid()
 
-    def liveliness(self):
+    def liveliness(self: '_ManagedSessionProto'):
         self._guard_alive()
         return self.raw().liveliness()
 
     @property
-    def info(self):
+    def info(self: '_ManagedSessionProto'):
         self._guard_alive()
         return self.raw().info
 
-    def put(self, *args, **kwargs):
+    def put(self: '_ManagedSessionProto', *args, **kwargs):
         self._guard_alive()
         try:
             return self.raw().put(*args, **kwargs)
@@ -53,7 +61,7 @@ class _ZenohApiMixin:
             self._note_failure(exc)
             raise
 
-    def get(self, *args, **kwargs):
+    def get(self: '_ManagedSessionProto', *args, **kwargs):
         self._guard_alive()
         try:
             return self.raw().get(*args, **kwargs)
@@ -61,7 +69,7 @@ class _ZenohApiMixin:
             self._note_failure(exc)
             raise
 
-    def delete(self, *args, **kwargs):
+    def delete(self: '_ManagedSessionProto', *args, **kwargs):
         self._guard_alive()
         try:
             return self.raw().delete(*args, **kwargs)
@@ -69,17 +77,17 @@ class _ZenohApiMixin:
             self._note_failure(exc)
             raise
 
-    def declare_publisher(self, *args, **kwargs):
+    def declare_publisher(self: '_ManagedSessionProto', *args, **kwargs):
         self._guard_alive()
         _warn_declare_handle('declare_publisher')
         return self.raw().declare_publisher(*args, **kwargs)
 
-    def declare_subscriber(self, *args, **kwargs):
+    def declare_subscriber(self: '_ManagedSessionProto', *args, **kwargs):
         self._guard_alive()
         _warn_declare_handle('declare_subscriber')
         return self.raw().declare_subscriber(*args, **kwargs)
 
-    def declare_queryable(self, *args, **kwargs):
+    def declare_queryable(self: '_ManagedSessionProto', *args, **kwargs):
         self._guard_alive()
         _warn_declare_handle('declare_queryable')
         return self.raw().declare_queryable(*args, **kwargs)

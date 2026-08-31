@@ -88,9 +88,11 @@ def _unretain_impl(
 
     buffer = current_buffer()
     if buffer is not None:
-        # Encoding unused for tombstones — keep '' to satisfy the tuple shape.
+        # Encoding is unread on the tombstone path (``_flush`` short-
+        # circuits on retain_mode) — carry the class's own so the slot
+        # holds a valid ``Encoding`` rather than a sentinel ''.
         buffer.append((
-            cls, sess, concrete_topic, b'', '', 'tombstone', None,
+            cls, sess, concrete_topic, b'', cls.ENCODING, 'tombstone', None,
         ))
         return
 

@@ -13,6 +13,7 @@ import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .._managed_session import SessionLike
     import zenoh
 
     from .subscriber import Subscriber
@@ -51,7 +52,7 @@ def _deregister_subscriber(session, sub: 'Subscriber') -> None:
             _subscribers.pop(sid, None)
 
 
-def _close_subscribers_for(session: 'zenoh.Session') -> None:
+def _close_subscribers_for(session: 'SessionLike') -> None:
     """Close every subscriber registered against this session. Called by
     ``z.release()`` as the first step of shutdown."""
     sid = id(session)

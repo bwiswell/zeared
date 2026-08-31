@@ -19,6 +19,8 @@ Other helpers:
 Public surface unchanged: callers continue to write
 ``from zeared._managed_session import ManagedSession``.
 """
+from typing import TYPE_CHECKING
+
 from ._helpers import (
     _DECLARE_HANDLE_WARNING,
     _DEFAULT_PROBE_INTERVAL,
@@ -30,9 +32,13 @@ from ._helpers import (
 from ._managed_session import ManagedSession
 from ._on_reconnect_handle import OnReconnectHandle
 
+if TYPE_CHECKING:
+    from ._helpers import SessionLike
+
 
 __all__ = [
     'ManagedSession',
+    'SessionLike',
     'OnReconnectHandle',
     '_DECLARE_HANDLE_WARNING',
     '_DEFAULT_PROBE_INTERVAL',

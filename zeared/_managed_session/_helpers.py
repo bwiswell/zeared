@@ -13,7 +13,41 @@ from typing import TYPE_CHECKING
 import zenoh
 
 if TYPE_CHECKING:
+    import asyncio
+    import threading
+    from typing import Callable, List, Optional, Protocol, Tuple, Union
+
     from ._managed_session import ManagedSession
+
+    # Anything zeared accepts where a session is wanted. ``ManagedSession``
+    # deliberately duck-types ``zenoh.Session`` rather than subclassing it,
+    # so the union — not ``zenoh.Session`` — is the honest annotation for
+    # every helper that runs ``resolve_raw`` or keys a registry on identity.
+    SessionLike = Union[zenoh.Session, 'ManagedSession']
+
+    _ReconnectEntry = Tuple[
+        'Callable[[ManagedSession], object]',
+        Optional['asyncio.AbstractEventLoop'],
+    ]
+
+    class _ManagedSessionProto(Protocol):
+        """The slice of ``ManagedSession`` the extracted mixins rely on.
+
+        ``_ZenohApiMixin`` and ``_OnReconnectMixin`` are never instantiated
+        on their own — they hold no state (``__slots__ = ()``) and reach
+        for attributes the concrete ``ManagedSession`` provides. Annotating
+        their ``self`` with this Protocol states that contract explicitly,
+        and makes ty verify the composed class actually satisfies it.
+
+        Typing-only: the class body never executes at runtime.
+        """
+
+        _lock: 'threading.RLock'
+        _on_reconnect_callbacks: 'List[_ReconnectEntry]'
+
+        def raw(self) -> zenoh.Session: ...
+        def _guard_alive(self) -> None: ...
+        def _note_failure(self, exc: BaseException) -> None: ...
 
 
 # Module-level registry of every live ``ManagedSession``. Walked by
@@ -67,7 +101,7 @@ def _is_dead(raw: zenoh.Session) -> bool:
         return True
 
 
-def resolve_raw(session) -> zenoh.Session:
+def resolve_raw(session: 'SessionLike') -> zenoh.Session:
     """Return the underlying raw ``zenoh.Session`` for ``session``.
 
     Accepts either a raw ``zenoh.Session`` or a ``ManagedSession`` wrapper.

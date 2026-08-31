@@ -12,10 +12,12 @@ Sibling helper inside the ``queryable`` Pattern B subdir.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, TypeVar
 
 from .. import _codec as codec
 from ..errors import QueryError
+
+_M = TypeVar('_M', bound='Message')
 
 if TYPE_CHECKING:
     import zenoh
@@ -26,7 +28,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger('zeared.queryable')
 
 
-def _build_selector(msg_cls: type, key_fields: dict,
+def _build_selector(msg_cls: 'type[Message]', key_fields: dict,
                     params: Optional[dict]) -> str:
     """Render a selector from the canonical template + key fields + params.
 
@@ -41,8 +43,8 @@ def _build_selector(msg_cls: type, key_fields: dict,
     return key
 
 
-def _pick_reply_encoding(sample: 'zenoh.Sample', cls_encoding: str,
-                         debug: bool) -> str:
+def _pick_reply_encoding(sample: 'zenoh.Sample', cls_encoding: codec.Encoding,
+                         debug: bool) -> codec.Encoding:
     """Encoding to decode a reply sample with — honour its declared hint,
     else the class default (debug forces JSON outbound only)."""
     declared = str(sample.encoding) if sample.encoding is not None else ''
@@ -50,12 +52,12 @@ def _pick_reply_encoding(sample: 'zenoh.Sample', cls_encoding: str,
         return 'json'
     if 'msgpack' in declared:
         return 'msgpack'
-    return codec.effective_encoding(cls_encoding, debug)  # type: ignore[arg-type]
+    return codec.effective_encoding(cls_encoding, debug)
 
 
 def _run_query(
     session: 'zenoh.Session',
-    msg_cls: type,
+    msg_cls: 'type[_M]',
     key_fields: dict,
     *,
     params: Optional[dict],
@@ -64,7 +66,7 @@ def _run_query(
     target: Any,
     consolidation: Any,
     on_error: Optional[Callable[[Exception, bytes], None]],
-) -> 'List[Message]':
+) -> 'List[_M]':
     """Issue the get, decode OK replies, return typed instances."""
     import zeared as z
 
@@ -95,7 +97,7 @@ def _run_query(
 
     replies = session.get(selector, **kwargs)
 
-    out: 'List[Message]' = []
+    out: 'List[_M]' = []
     for reply in replies:
         ok = reply.ok if hasattr(reply, 'ok') else None
         if ok is None:
@@ -124,7 +126,7 @@ def _run_query(
     return out
 
 
-def _route_error_reply(reply, msg_cls: type, selector: str,
+def _route_error_reply(reply, msg_cls: 'type[Message]', selector: str,
                        on_error: Optional[Callable]) -> None:
     """Surface a remote error reply (``query.reply_err``) via ``on_error``
     or logging."""

@@ -4,11 +4,14 @@ from contextlib import AbstractContextManager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
+from ._codec import Encoding
 from . import publisher as _pub
 from . import retention as _ret
 
 if TYPE_CHECKING:
     import zenoh
+
+    from .message import Message
 
 
 # A pending send:
@@ -24,7 +27,8 @@ if TYPE_CHECKING:
 # ``None`` for classes without ``SCHEMA``, and always ``None`` for
 # tombstones — DELETE samples don't carry attachments).
 BufferedSend = Tuple[
-    type, 'zenoh.Session', str, bytes, str, str, Optional[bytes],
+    'type[Message]', 'zenoh.Session', str, bytes, Encoding, str,
+    Optional[bytes],
 ]
 
 
@@ -142,7 +146,8 @@ class _BatchContext(AbstractContextManager):
             _buffer_stack.reset(self._token)
         if exc_type is not None:
             return  # exception → discard
-        _flush(self._buffer)
+        if self._buffer is not None:
+            _flush(self._buffer)
 
 
 def batch() -> _BatchContext:

@@ -22,7 +22,7 @@ dispatch).
 """
 from __future__ import annotations
 
-from typing import ClassVar, Literal, Optional, Tuple, Union
+from typing import ClassVar, Literal, Optional, Self, Tuple, Union
 
 import seared as s
 
@@ -111,7 +111,7 @@ class Message(
     @classmethod
     def _decode(
         cls, raw: bytes, key_expr: str, encoding: Encoding,
-    ) -> tuple['Message', dict[str, str]]:
+    ) -> tuple['Self', dict[str, str]]:
         """Reconstruct a message instance from wire bytes + key expression.
 
         Returns ``(instance, captures_dict)``: the decoded message plus the
@@ -145,7 +145,11 @@ class Message(
         # Thread ``format=`` into seared's load so native-bytes payloads
         # from msgpack carriers decode through ``Bytes.deserialize``'s
         # native-bytes path. JSON path unchanged.
-        return cls.load(payload, format=encoding), captured
+        # seared's ``Seared.load`` / ``Seared.dump`` base stubs omit the
+        # ``format=`` carrier hint the decorator-attached implementations
+        # actually take. Correct call, wrong stub — drop the suppression
+        # once seared widens them.
+        return cls.load(payload, format=encoding), captured  # ty: ignore[unknown-argument]
 
 
 __all__ = ['Message', 'Encoding']

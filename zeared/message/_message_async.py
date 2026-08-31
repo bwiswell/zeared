@@ -18,7 +18,7 @@ class _MessageAsyncMixin:
     __slots__ = ()
 
     async def asend(
-        self,
+        self: 'Message',
         *,
         session: Optional['zenoh.Session'] = None,
         topic: Optional[str] = None,
@@ -46,7 +46,7 @@ class _MessageAsyncMixin:
         )
 
     async def aunretain(
-        self,
+        self: 'Message',
         *,
         session: Optional['zenoh.Session'] = None,
         topic: Optional[str] = None,

@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.2.9"
+version = "0.2.10"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -15,9 +15,16 @@ dependencies = [
 [project.scripts]
 zeared-doc = "zeared.doc.generate:main"
 
+[project.optional-dependencies]
+# Comparator library for the repo-only benches (`uv run python
+# bench/bench_wire.py`); never a runtime dependency.
+bench = ["marshmallow>=3.26,<5.0"]
+
 [dependency-groups]
 dev = [
+    "prek",
     "pytest>=8.0,<9.0",
+    "ty",
 ]
 
 [tool.uv.sources]
@@ -29,6 +36,17 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["zeared"]
+
+[tool.ty.src]
+# The benches import the `[bench]` extra (marshmallow) that a default dev
+# sync doesn't install; ty skips just those files. Named individually so a
+# future bench that needs no comparator stays checked.
+exclude = [
+    "tests",
+    "bench/bench_async.py",
+    "bench/bench_throughput.py",
+    "bench/bench_wire.py",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["tests"]

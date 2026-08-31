@@ -26,6 +26,7 @@ from ..errors import QueryableError
 from ._query_context import QueryContext
 
 if TYPE_CHECKING:
+    from ..message import Message
     import asyncio
 
     import zenoh
@@ -68,7 +69,7 @@ def _reply_result(ctx: QueryContext, result, msg_cls: type,
 
 
 def _build_query_dispatch(
-    msg_cls: type,
+    msg_cls: 'type[Message]',
     handler: Callable,
     on_error: Optional[Callable[[Exception, bytes], None]],
     *,

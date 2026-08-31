@@ -13,13 +13,15 @@ from ..errors import TopicError
 if TYPE_CHECKING:
     import zenoh
 
+    from .message import Message
+
 
 class _MessageWillMixin:
     """LWT registration surface on :class:`Message`."""
     __slots__ = ()
 
     def register_will(
-        self,
+        self: 'Message',
         *,
         session: Optional['zenoh.Session'] = None,
         topic: Optional[str] = None,
@@ -49,7 +51,10 @@ class _MessageWillMixin:
         encoding = codec.effective_encoding(self.ENCODING, z.debug)
         # Thread ``format=`` into seared's dump so binary fields use
         # native bytes under msgpack — same logic as ``send``.
-        data = type(self).dump(self, format=encoding)
+        # seared's ``Seared.dump`` base stub omits the ``format=`` carrier
+        # hint the decorator-attached implementation actually takes.
+        # Correct call, wrong stub — drop once seared widens it.
+        data = type(self).dump(self, format=encoding)  # ty: ignore[unknown-argument]
         template = type(self)._templates().resolve_publish_topic(topic)
         concrete_topic = template.render(data)
         payload_dict = {
