@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.2.13"
+version = "0.2.14"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -16,9 +16,14 @@ dependencies = [
 zeared-doc = "zeared.doc.generate:main"
 
 [project.optional-dependencies]
-# Comparator library for the repo-only benches (`uv run python
-# bench/bench_wire.py`); never a runtime dependency.
-bench = ["marshmallow>=3.26,<5.0"]
+# Comparator libraries for the repo-only bench (`uv run python -m bench`);
+# never runtime dependencies. `pydantic` + `paho-mqtt` back the stack
+# comparison suite (the other realistic stack: Pydantic over MQTT).
+bench = [
+    "marshmallow>=3.26,<5.0",
+    "paho-mqtt>=2.1,<3.0",
+    "pydantic>=2.11,<3.0",
+]
 
 [dependency-groups]
 dev = [
@@ -126,6 +131,8 @@ quote-style = "single"
 # name. Naming it keeps `bench/` in scope (its imports still get checked
 # against the extra) instead of excluding it wholesale.
 marshmallow = ["marshmallow"]
+paho-mqtt = ["paho"]
+pydantic = ["pydantic"]
 
 [tool.deptry.per_rule_ignores]
 # `rusted` is seared's optional compiled accelerator. Following seared, zeared
@@ -147,6 +154,7 @@ exclude = [
     # `marshmallow` comparator (behind the `bench` extra) and `rusted`.
     "bench/baseline.py",
     "bench/suite_rusted.py",
+    "bench/suite_stacks.py",
 ]
 
 [tool.pytest.ini_options]

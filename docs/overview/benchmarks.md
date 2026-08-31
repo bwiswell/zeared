@@ -28,10 +28,12 @@ question and contributes rows to the same artifact.
 | `suite_rusted` | Fixed N | What does the optional compiled accelerator buy? |
 | `suite_throughput` | 5 s publish window | What sustained sync rate holds when pushed flat out? |
 | `suite_async` | 5 s publish window | What does each sync/async delivery combination cost? |
+| `suite_stacks` | Fixed N (5,000 messages) | Pydantic over MQTT, or zeared? (starts its own broker) |
 
 Suites needing a package a default dev sync doesn't install skip with a note
 rather than failing the run: `marshmallow` (behind the `[bench]` extra) and
-`rusted` (see [Accelerated](#accelerated-seared--rusted)).
+`rusted` (see [Accelerated](#accelerated-seared--rusted)). `suite_stacks`
+additionally needs a `mosquitto` binary on `PATH` and skips without one.
 
 ## Configurations
 
@@ -121,6 +123,100 @@ changes how bytes are produced, not what they are.
 ship, the accelerated suite runs only where it is already installed, and
 skips with a note everywhere else. These numbers were taken against
 `rusted 0.1.2`; the artifact records the exact versions behind every row.
+
+## Pydantic + MQTT, or zeared?
+
+The most common question about zeared is whether it beats the other realistic
+stack for typed Python pub/sub: Pydantic models over MQTT. `suite_stacks`
+answers it — and deliberately refuses to answer it with one number.
+
+**The comparison spans two independent axes.** Pydantic vs seared is a
+*codec* question: pydantic-core is compiled Rust, pure-Python seared is not.
+MQTT vs Zenoh is a *transport* question: broker-mediated store-and-forward
+against a peer-to-peer mesh. A single headline conflates them — and would
+conflate them in zeared's favour, since the rest of this page runs an
+in-process Zenoh peer with no broker at all while any MQTT number pays a hop
+through a broker process.
+
+So this suite holds one axis fixed at a time. Every row is JSON on the wire
+except the two labelled `msgpack default`, so encoding doesn't confound the
+deltas. The Zenoh rows run through a **router** — a broker-equivalent hop —
+except where marked `peer`. `mosquitto` is started by the bench itself.
+
+5,000 messages per row:
+
+| Row | e2e/s | wire (B) |
+|-----|------:|---------:|
+| pydantic + MQTT (QoS 0) | 8,407 | 670 |
+| pydantic + MQTT (QoS 1) | 2,871 | 670 |
+| seared + MQTT (QoS 0) | 5,130 | 796 |
+| seared + MQTT (QoS 1) | 2,521 | 796 |
+| pydantic + Zenoh (router, raw) | 26,447 | 670 |
+| seared + Zenoh (router, raw) | 7,657 | 796 |
+| zeared + Zenoh (router) | 6,976 | 796 |
+| zeared + Zenoh (peer) | 7,311 | 796 |
+| zeared + Zenoh (peer, msgpack default) | 8,055 | 533 |
+| zeared + `rusted` + Zenoh (peer, JSON) | 12,519 | 796 |
+| zeared + `rusted` + Zenoh (peer, msgpack default) | 13,954 | 533 |
+
+> **Read these on end-to-end rate, not publish rate.** `paho`'s `publish()`
+> hands off to a network thread and returns, so the MQTT rows' publish-side
+> figures measure *client-side enqueue*, not transmission — they look ~2x the
+> rate the subscriber actually saw. Zenoh's `put` does the work inline, so its
+> two rates track each other. `results.json` records both; only e2e is
+> comparable across transports.
+
+### What each pair says
+
+| Comparison | Result |
+|------------|--------|
+| **Codec**, same raw Zenoh transport | pydantic **3.45x** faster than seared |
+| **Codec**, same MQTT transport (QoS 0) | pydantic **1.64x** faster |
+| **Transport**, same pydantic codec | Zenoh **3.15x** faster than MQTT |
+| zeared's `Message` wrapper over raw seared + Zenoh | **9%** cost |
+| Zenoh peer vs router topology | **5%** faster |
+| msgpack vs JSON on the same path | **10%** faster, **33%** smaller |
+| `rusted` accelerator on the native stack | **1.73x** |
+
+**pydantic wins the codec axis, and by a lot.** That is the expected result,
+not a surprise: its core is compiled and seared's is not — seared's own
+benchmarks already record pydantic-core as several times faster on the dict
+path. The codec gap is narrower over MQTT (1.64x) simply because the
+transport dominates there and there is less headroom to win.
+
+### The answer
+
+Against the stack as usually deployed:
+
+| zeared config | vs pydantic + MQTT QoS 0 | vs QoS 1 |
+|---------------|-------------------------:|---------:|
+| default (msgpack, peer) | **0.96x** | **2.81x** |
+| with `rusted` | **1.66x** | **4.86x** |
+
+At default configuration against QoS 0, it is **a dead heat** — pydantic's
+codec advantage very nearly cancels Zenoh's transport advantage. Anyone
+choosing between the two on raw throughput alone, at this payload size, is
+choosing between equals.
+
+Two things move it:
+
+- **QoS 1** — at-least-once delivery, which is what most production MQTT
+  fleets actually run — costs MQTT roughly 3x. Against that baseline zeared
+  is 2.8x ahead before any accelerator.
+- **`rusted`** closes the codec gap, and the transport advantage stops being
+  cancelled: 1.66x against QoS 0, 4.86x against QoS 1.
+
+### Caveats
+
+- One payload shape, one machine, loopback for both brokers. No real network
+  hop, where MQTT's broker round-trip and Zenoh's peer routing would diverge
+  much further.
+- The raw rows (`pydantic + …`, `seared + … raw`) publish bytes directly with
+  no `Message` class — no topic templating, publisher cache, or schema
+  attachment. They exist to isolate an axis, not as a usage recommendation.
+- Throughput is one axis of a stack choice. Retained messages, liveliness,
+  queryables, and the peer topology itself are zeared features with no MQTT
+  equivalent, and they don't appear in any of these numbers.
 
 ## Why zeared beats `marshmallow` + Zenoh
 
