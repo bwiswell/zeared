@@ -126,11 +126,7 @@ class QueryContext:
         import zeared as z
 
         enc = codec.effective_encoding(instance.ENCODING, z.debug)
-        # seared's ``Seared.load`` / ``Seared.dump`` base stubs omit the
-        # ``format=`` carrier hint the decorator-attached implementations
-        # actually take. Correct call, wrong stub — drop the suppression
-        # once seared widens them.
-        data = type(instance).dump(instance, format=enc)  # ty: ignore[unknown-argument]
+        data = type(instance).dump(instance, format=enc)
         # Render on the template the query matched (so the reply key
         # intersects the query key-expr); fall back to the canonical topic
         # for a same-class instance when nothing matched (e.g. a wildcard

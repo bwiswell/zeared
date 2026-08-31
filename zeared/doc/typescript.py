@@ -228,10 +228,7 @@ def _expand(classes: 'list[type[Seared]]') -> 'list[type[Seared]]':
             return
         found[id(c)] = c
         for ref in _introspect(c).references:
-            # ``SchemaDoc.references`` is ``tuple[type, ...]`` upstream —
-            # still bare in seared 0.2.8. Every entry is a seared class by
-            # construction (they come from T targets / Union variants).
-            walk(ref)  # ty: ignore[invalid-argument-type]
+            walk(ref)
         req = getattr(c, 'REQUEST', None)          # not a field ref — pull it in
         if req is not None:
             walk(req)
@@ -256,10 +253,7 @@ def emit(classes: 'list[type[Seared]]') -> str:
 def generate(target: str) -> str:
     """Discover every ``@zeared``/``@seared`` class under ``target`` and emit
     a single TypeScript module."""
-    # seared 0.2.3 (the pinned rev) declares ``collect() -> list[type]``;
-    # 0.2.5+ narrowed it to ``list[type[Seared]]``. Drop this suppression
-    # when the pin advances.
-    return emit(collect(target))  # ty: ignore[invalid-argument-type]
+    return emit(collect(target))
 
 
 def main(argv: Optional[list[str]] = None) -> int:

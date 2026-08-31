@@ -145,11 +145,7 @@ class Message(
         # Thread ``format=`` into seared's load so native-bytes payloads
         # from msgpack carriers decode through ``Bytes.deserialize``'s
         # native-bytes path. JSON path unchanged.
-        # seared's ``Seared.load`` / ``Seared.dump`` base stubs omit the
-        # ``format=`` carrier hint the decorator-attached implementations
-        # actually take. Correct call, wrong stub — drop the suppression
-        # once seared widens them.
-        return cls.load(payload, format=encoding), captured  # ty: ignore[unknown-argument]
+        return cls.load(payload, format=encoding), captured
 
 
 __all__ = ['Message', 'Encoding']

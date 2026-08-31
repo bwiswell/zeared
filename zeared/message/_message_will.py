@@ -51,10 +51,7 @@ class _MessageWillMixin:
         encoding = codec.effective_encoding(self.ENCODING, z.debug)
         # Thread ``format=`` into seared's dump so binary fields use
         # native bytes under msgpack — same logic as ``send``.
-        # seared's ``Seared.dump`` base stub omits the ``format=`` carrier
-        # hint the decorator-attached implementation actually takes.
-        # Correct call, wrong stub — drop once seared widens it.
-        data = type(self).dump(self, format=encoding)  # ty: ignore[unknown-argument]
+        data = type(self).dump(self, format=encoding)
         template = type(self)._templates().resolve_publish_topic(topic)
         concrete_topic = template.render(data)
         payload_dict = {

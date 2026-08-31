@@ -9,6 +9,7 @@ from typing import Callable
 
 from seared.doc import render_enums, render_fields_table, render_variants
 
+from ..message import Message
 from .introspect import MessageDoc, introspect_message
 
 LinkFor = Callable[[type], str]
@@ -49,7 +50,7 @@ def render_wire(md: MessageDoc, link_for: LinkFor = _default_link) -> str:
     return ' · '.join(bits)
 
 
-def render_message(cls: type, link_for: LinkFor = _default_link) -> str:
+def render_message(cls: 'type[Message]', link_for: LinkFor = _default_link) -> str:
     """Render the full wire-aware Markdown page for a ``@zeared`` Message."""
     md = introspect_message(cls)
     s = md.schema

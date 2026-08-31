@@ -7,6 +7,7 @@ payload) falls back to seared's core renderer.
 """
 from __future__ import annotations
 
+from seared import Seared
 from seared.doc import document as _seared_document
 from seared.doc import introspect as _seared_introspect
 from seared.doc.generate import build_docs as _seared_build_docs
@@ -16,18 +17,18 @@ from .introspect import introspect_message, is_message_class
 from .render import LinkFor, _default_link, render_message
 
 
-def render_one(cls: type, link_for: LinkFor) -> str:
+def render_one(cls: 'type[Seared]', link_for: LinkFor) -> str:
     if is_message_class(cls):
         return render_message(cls, link_for)
     return _seared_document(cls, link_for=link_for)
 
 
-def document(cls: type, *, link_for: LinkFor = _default_link) -> str:
+def document(cls: 'type[Seared]', *, link_for: LinkFor = _default_link) -> str:
     """Markdown for one class — wire-aware for a Message, core for anything else."""
     return render_one(cls, link_for)
 
 
-def introspect(cls: type):
+def introspect(cls: 'type[Seared]'):
     """``MessageDoc`` for a Message, else seared's ``SchemaDoc``."""
     return introspect_message(cls) if is_message_class(cls) else _seared_introspect(cls)
 

@@ -140,8 +140,8 @@ wheels = [
 
 [[package]]
 name = "seared"
-version = "0.2.3"
-source = { git = "https://github.com/bwiswell/seared#41872455e9c6af5b27a597985e301b133f644ea2" }
+version = "0.2.9"
+source = { git = "https://github.com/bwiswell/seared#35caf3f65dc5b76eefe8e7b5eb8dd076c24c55bb" }
 
 [[package]]
 name = "ty"
