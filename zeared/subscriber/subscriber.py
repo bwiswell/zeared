@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import contextlib
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from .._managed_session import resolve_raw
 from ..errors import SubscriptionError
@@ -106,7 +106,9 @@ class Subscriber[M: 'Message']:
         cls,
         msg_cls: type[Message],
         session: SessionLike,
-        cb: Callable[..., None],
+        # `Any` return: an `async def` callback hands back a coroutine, which
+        # `_adapt_async_callback` schedules. See `MessageCallback`.
+        cb: Callable[..., Any],
         on_error: Callable[[Exception, bytes], None] | None,
         expected_interval: float | None = None,
         on_quiet: Callable | None = None,

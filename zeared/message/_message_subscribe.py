@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     import zenoh
 
@@ -21,6 +21,16 @@ if TYPE_CHECKING:
 
 
 _M = TypeVar('_M', bound='Message')
+
+#: A subscriber callback: one- or two-argument, sync or ``async def``.
+#: The dispatch layer adapts coroutine functions (see
+#: ``subscriber._adapt_async_callback``), so all four forms are accepted.
+type MessageCallback[M] = (
+    Callable[[M], None]
+    | Callable[[M, ZenohMeta], None]
+    | Callable[[M], Awaitable[None]]
+    | Callable[[M, ZenohMeta], Awaitable[None]]
+)
 
 
 class _MessageSubscribeMixin:
@@ -54,7 +64,7 @@ class _MessageSubscribeMixin:
     @classmethod
     def on_message(  # noqa: PLR0913
         cls: type[_M],
-        cb: Callable[[_M], None] | Callable[[_M, ZenohMeta], None],
+        cb: MessageCallback[_M],
         *,
         session: zenoh.Session | None = None,
         on_error: Callable[[Exception, bytes], None] | None = None,
