@@ -1,5 +1,6 @@
 """Tests for ``zeared/_mode.py`` — the ``Mode`` enum used by
 ``SessionConfig`` and the ``open()`` dispatcher."""
+
 from __future__ import annotations
 
 from enum import Enum

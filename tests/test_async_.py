@@ -3,15 +3,14 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
-import zeared as z
-
 from conftest import wait
 
+import zeared as z
 
 # ---------------------------------------------------------------------------
 # asend / alisten
 # ---------------------------------------------------------------------------
+
 
 class TestAsend:
     def test_asend_roundtrip(self, session):
@@ -120,6 +119,7 @@ class TestAlisten:
 # Coroutine callback detection in on_message
 # ---------------------------------------------------------------------------
 
+
 class TestCoroutineCallback:
     def test_async_callback_scheduled_on_loop(self, session):
         @z.zeared
@@ -166,6 +166,7 @@ class TestCoroutineCallback:
 # abatch
 # ---------------------------------------------------------------------------
 
+
 class TestAbatch:
     def test_abatch_flushes_on_exit(self, session):
         @z.zeared
@@ -206,7 +207,8 @@ class TestAbatch:
                 async with z.abatch():
                     await M(v=1).asend()
                     await M(v=2).asend()
-                    raise RuntimeError('boom')
+                    msg = 'boom'
+                    raise RuntimeError(msg)  # noqa: TRY301
             except RuntimeError:
                 pass
 
@@ -219,6 +221,7 @@ class TestAbatch:
 class TestTaskIsolation:
     def test_contextvar_isolates_per_task(self, session):
         """Two asyncio tasks in the same thread should have independent batches."""
+
         @z.zeared
         class M(z.Message):
             TOPIC = 'aio/task/isol'
@@ -245,6 +248,7 @@ class TestTaskIsolation:
                 await started_a.wait()
                 # Task A is inside a batch; task B must NOT see that buffer.
                 from zeared.batch import current_buffer
+
                 assert current_buffer() is None
                 # B sends outside any batch — should flush immediately.
                 await M(v=99).asend()
@@ -295,7 +299,8 @@ class TestApeerAclient:
         async def main():
             with pytest.raises(_Boom):
                 async with z.apeer(auto_reconnect=True, probe_interval=0):
-                    raise _Boom('block raised')
+                    msg = 'block raised'
+                    raise _Boom(msg)
 
         asyncio.run(main())
 
@@ -313,6 +318,7 @@ class TestApeerAclient:
 # Mixed sync + async
 # ---------------------------------------------------------------------------
 
+
 class TestRetentionAsync:
     def test_asend_with_retain(self, session):
         @z.zeared
@@ -328,11 +334,12 @@ class TestRetentionAsync:
             await Tele(id=2, v=20).asend(retain=False)
 
             from zeared.retention import get_retention_cache
+
             cache = get_retention_cache(Tele, session)
             return cache.size
 
         size = asyncio.run(main())
-        assert size == 1   # id=1 cached; id=2 live-only
+        assert size == 1  # id=1 cached; id=2 live-only
 
     def test_aunretain_removes_cache_entry(self, session):
         @z.zeared
@@ -346,9 +353,10 @@ class TestRetentionAsync:
             z.session = session
             await Tele(id=1, v=1).asend()
             await Tele(id=2, v=2).asend()
-            await Tele(id=1, v=1).aunretain()       # instance form
-            await z.aunretain(Tele, id=2)            # class form via helper
+            await Tele(id=1, v=1).aunretain()  # instance form
+            await z.aunretain(Tele, id=2)  # class form via helper
             from zeared.retention import get_retention_cache
+
             return get_retention_cache(Tele, session).size
 
         assert asyncio.run(main()) == 0
@@ -400,6 +408,7 @@ class TestAsendInsideSyncBatch:
     ``threading.Thread``-spawned worker threads — that's documented as a
     known sharp edge in batch.md.
     """
+
     def test_asend_inside_sync_batch_buffers_and_flushes(self, session):
         @z.zeared
         class M(z.Message):
@@ -498,7 +507,8 @@ class TestAlistenMeta:
 
             async def consumer():
                 async for msg, meta in Tele.alisten(
-                    session=session_b, meta=True,
+                    session=session_b,
+                    meta=True,
                 ):
                     seen.append((msg.v, meta.origin))
                     break

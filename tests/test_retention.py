@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import contextlib
+
 import pytest
+from conftest import wait
 
 import zeared as z
 from zeared.retention import (
@@ -10,39 +13,42 @@ from zeared.retention import (
     get_retention_cache,
 )
 
-from conftest import wait
-
 
 class TestEffectiveRetain:
     def test_none_uses_class_default(self):
         class R:
             RETAINED = True
+
         assert effective_retain(R, None) is True
 
         class NR:
             RETAINED = False
+
         assert effective_retain(NR, None) is False
 
     def test_explicit_false_always_allowed(self):
         class R:
             RETAINED = True
-        assert effective_retain(R, False) is False
+
+        assert effective_retain(R, False) is False  # noqa: FBT003
 
         class NR:
             RETAINED = False
-        assert effective_retain(NR, False) is False
+
+        assert effective_retain(NR, False) is False  # noqa: FBT003
 
     def test_retain_true_on_non_retained_raises(self):
         class NR:
             RETAINED = False
 
         with pytest.raises(z.TopicError, match='requires RETAINED = True'):
-            effective_retain(NR, True)
+            effective_retain(NR, True)  # noqa: FBT003
 
     def test_retain_true_on_retained_ok(self):
         class R:
             RETAINED = True
-        assert effective_retain(R, True) is True
+
+        assert effective_retain(R, True) is True  # noqa: FBT003
 
 
 class TestSendRoutesRetainedIntoCache:
@@ -57,7 +63,7 @@ class TestSendRoutesRetainedIntoCache:
         z.session = session
         Tele(id=1, v=10).send()
         Tele(id=2, v=20).send()
-        Tele(id=1, v=11).send()       # overwrites id=1
+        Tele(id=1, v=11).send()  # overwrites id=1
 
         cache = get_retention_cache(Tele, session)
         assert cache.size == 2
@@ -118,7 +124,7 @@ class TestQueryableDeclaredLazily:
         assert cache._queryables == []
 
         Tele(id=1, v=1).send()
-        assert len(cache._queryables) == 1   # one template
+        assert len(cache._queryables) == 1  # one template
 
     def test_queryable_count_equals_template_count(self, session):
         @z.zeared
@@ -133,7 +139,7 @@ class TestQueryableDeclaredLazily:
         Status(id=1, v=1).send()
 
         cache = get_retention_cache(Status, session)
-        assert len(cache._queryables) == 2   # canonical + one extra
+        assert len(cache._queryables) == 2  # canonical + one extra
 
 
 class TestRetentionTTL:
@@ -169,7 +175,7 @@ class TestRetentionTTL:
         class M(z.Message):
             TOPIC = 'ttl/exp/{n}'
             RETAINED = True
-            RETENTION_TTL = 0.05      # 50 ms
+            RETENTION_TTL = 0.05  # 50 ms
             n: int = z.Int(required=True)
             v: str = z.Str(required=True)
 
@@ -186,9 +192,7 @@ class TestRetentionTTL:
         # Expired entry was pruned — cache no longer holds it.
         assert 'ttl/exp/1' not in cache._cache
         # No payload-bearing replies for the pruned topic.
-        ok_keys = [
-            str(r.ok.key_expr) for r in replies if hasattr(r, 'ok') and r.ok
-        ]
+        ok_keys = [str(r.ok.key_expr) for r in replies if hasattr(r, 'ok') and r.ok]
         assert 'ttl/exp/1' not in ok_keys
 
     def test_ttl_keeps_fresh_entries(self, session):
@@ -198,7 +202,7 @@ class TestRetentionTTL:
         class M(z.Message):
             TOPIC = 'ttl/fresh/{n}'
             RETAINED = True
-            RETENTION_TTL = 5.0       # 5 seconds — well past any test runtime
+            RETENTION_TTL = 5.0  # 5 seconds — well past any test runtime
             n: int = z.Int(required=True)
             v: str = z.Str(required=True)
 
@@ -220,7 +224,8 @@ class TestSessionRetentionTTL:
 
     def test_factory_kwarg_stashed_on_managed(self):
         sess = z.peer(
-            auto_reconnect=True, probe_interval=0,
+            auto_reconnect=True,
+            probe_interval=0,
             retention_ttl=42.0,
         )
         try:
@@ -237,7 +242,7 @@ class TestSessionRetentionTTL:
 
     def test_factory_kwarg_on_raw_session_raises_typeerror(self):
         with pytest.raises(TypeError, match='retention_ttl'):
-            z.peer(retention_ttl=10.0)            # auto_reconnect=False (default)
+            z.peer(retention_ttl=10.0)  # auto_reconnect=False (default)
 
     def test_resolve_class_wins_over_session(self):
         from zeared.retention import _resolve_retention_ttl
@@ -289,6 +294,7 @@ class TestSessionRetentionTTL:
 
         sess = z.peer(auto_reconnect=True, probe_interval=0, retention_ttl=10.0)
         try:
+
             @z.zeared
             class Cls(z.Message):
                 TOPIC = 'res/runtime/{n}'
@@ -316,7 +322,8 @@ class TestSessionRetentionTTL:
             v: str = z.Str(required=True)
 
         sess = z.peer(
-            auto_reconnect=True, probe_interval=0,
+            auto_reconnect=True,
+            probe_interval=0,
             retention_ttl=0.05,
         )
         try:
@@ -359,10 +366,8 @@ class TestRedeclareRaceFlag:
         # short-circuit (queryables non-empty) doesn't fire and we
         # exercise the _redeclaring guard directly.
         for q in cache._queryables:
-            try:
+            with contextlib.suppress(Exception):
                 q.undeclare()
-            except Exception:
-                pass
         cache._queryables = []
 
         # _ensure_queryables should NOT redeclare while flag is set.
@@ -403,16 +408,18 @@ class TestRedeclareRaceFlag:
 
         class _BoomSess:
             def declare_queryable(self, *a, **kw):
-                raise RuntimeError('simulated declare failure')
+                msg = 'simulated declare failure'
+                raise RuntimeError(msg)
 
-        with patch('zeared.retention.resolve_raw', return_value=_BoomSess()):
-            with pytest.raises(Exception):
-                cache._redeclare_queryables()
+        with (
+            patch('zeared.retention.resolve_raw', return_value=_BoomSess()),
+            pytest.raises(z.ZearedError, match='simulated declare failure'),
+        ):
+            cache._redeclare_queryables()
 
         # Flag must be cleared despite the raise.
         assert cache._redeclaring is False, (
-            '_redeclaring flag stuck on after redeclare exception — '
-            'try/finally regression'
+            '_redeclaring flag stuck on after redeclare exception — try/finally regression'
         )
 
 
@@ -657,7 +664,8 @@ class TestLateSubscribeFetch:
 
         Status(id=1, status='robot-a').send(session=session_a)
         Status(id=2, status='veh-a').send(
-            session=session_a, topic='ret/multi/vehicle/{id}/status',
+            session=session_a,
+            topic='ret/multi/vehicle/{id}/status',
         )
         wait()
 
@@ -701,11 +709,11 @@ class TestBatchWithRetention:
             v: int = z.Int(required=True)
 
         z.session = session
-        with pytest.raises(RuntimeError):
-            with z.batch():
-                Tele(id=1, v=1).send()
-                Tele(id=2, v=2).send()
-                raise RuntimeError('boom')
+        with pytest.raises(RuntimeError), z.batch():
+            Tele(id=1, v=1).send()
+            Tele(id=2, v=2).send()
+            msg = 'boom'
+            raise RuntimeError(msg)
 
         # No queryable should have been declared either.
         assert (Tele, id(session)) not in _registry
@@ -731,7 +739,7 @@ class TestSchemaAttachmentSurvivesRetention:
 
         cache = get_retention_cache(Alert, session)
         _raw, _enc, attachment, _inserted = cache._cache['ret/schema/1']
-        assert attachment is not None      # schema attachment captured
+        assert attachment is not None  # schema attachment captured
         assert attachment == Alert._schema_attachment_bytes()
 
     def test_none_schema_caches_no_attachment(self, session):
@@ -777,9 +785,7 @@ class TestSchemaAttachmentSurvivesRetention:
         sub.close()
 
         assert received == [(1, 42)]
-        assert not any(
-            isinstance(e, z.SchemaMismatchError) for e in errors
-        ), errors
+        assert not any(isinstance(e, z.SchemaMismatchError) for e in errors), errors
 
     def test_fetch_retained_decodes_schema_stamped_snapshot(self, connected_pair):
         session_a, session_b = connected_pair
@@ -798,13 +804,15 @@ class TestSchemaAttachmentSurvivesRetention:
 
         errors: list = []
         got = Alert.fetch_retained(
-            session=session_b, on_error=lambda exc, raw: errors.append(exc),
+            session=session_b,
+            on_error=lambda exc, raw: errors.append(exc),
         )
         assert {(m.id, m.v) for m in got} == {(1, 7), (2, 9)}
         assert errors == []
 
     def test_retained_snapshot_schema_survives_via_batch(self, session):
         """The batch flush path must thread the attachment into store() too."""
+
         @z.zeared
         class Alert(z.Message):
             TOPIC = 'ret/schema/batch/{id}'

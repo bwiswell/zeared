@@ -4,13 +4,13 @@ and ``query`` / ``query_one`` (getting).
 Queryable + get run on the same loopback peer session, exactly as
 retention's queryable answers a same-session retained-fetch.
 """
+
 from __future__ import annotations
 
 import pytest
+from conftest import wait
 
 import zeared as z
-
-from conftest import wait
 
 
 class TestRoundTrip:
@@ -45,7 +45,8 @@ class TestRoundTrip:
             wait()
             one = TagState.query_one(epc='AAA', timeout=2.0)
         assert one is not None
-        assert one.epc == 'AAA' and one.x == 2.0
+        assert one.epc == 'AAA'
+        assert one.x == 2.0
 
     def test_query_one_none_when_no_answer(self, session):
         @z.zeared
@@ -104,7 +105,7 @@ class TestRoundTrip:
             # Reply explicitly, twice, then return None.
             for v in (10, 20):
                 ctx.reply(Multi(id=ctx.captures['id'], v=v))
-            return None
+            return
 
         z.session = session
         with Multi.on_query(handler):
@@ -154,7 +155,8 @@ class TestParamsAndRequest:
         with Resp.on_query(handler):
             wait()
             res = Resp.query(id='z', request=Req(algo='ml'), timeout=2.0)
-        assert res and res[0].algo_echo == 'ml'
+        assert res
+        assert res[0].algo_echo == 'ml'
 
 
 class TestErrorsAndConflicts:
@@ -169,8 +171,7 @@ class TestErrorsAndConflicts:
         with Q.on_query(lambda ctx: ctx.reply_err('boom')):
             wait()
             errs = []
-            res = Q.query(id='a', timeout=2.0,
-                          on_error=lambda e, raw: errs.append((e, raw)))
+            res = Q.query(id='a', timeout=2.0, on_error=lambda e, raw: errs.append((e, raw)))
         assert res == []
         assert len(errs) == 1
         assert isinstance(errs[0][0], z.QueryError)
@@ -184,16 +185,17 @@ class TestErrorsAndConflicts:
             v: int = z.Int(default=0)
 
         def boom(ctx):
-            raise RuntimeError('kaboom')
+            msg = 'kaboom'
+            raise RuntimeError(msg)
 
         z.session = session
         with Q.on_query(boom):
             wait()
             errs = []
-            res = Q.query(id='a', timeout=2.0,
-                          on_error=lambda e, raw: errs.append(e))
+            res = Q.query(id='a', timeout=2.0, on_error=lambda e, raw: errs.append(e))
         assert res == []
-        assert errs and isinstance(errs[0], z.QueryError)
+        assert errs
+        assert isinstance(errs[0], z.QueryError)
 
     def test_retained_class_rejects_on_query(self, session):
         @z.zeared
@@ -220,7 +222,8 @@ class TestEncodingAndSchema:
         with J.on_query(lambda ctx: J(id=ctx.captures['id'], v=7)):
             wait()
             res = J.query(id='a', timeout=2.0)
-        assert res and res[0].v == 7
+        assert res
+        assert res[0].v == 7
 
     def test_schema_stamped_and_matched(self, session):
         @z.zeared
@@ -234,7 +237,8 @@ class TestEncodingAndSchema:
         with S.on_query(lambda ctx: S(id=ctx.captures['id'], v=5)):
             wait()
             res = S.query(id='a', timeout=2.0)
-        assert res and res[0].v == 5
+        assert res
+        assert res[0].v == 5
 
 
 class TestExtraTopics:
@@ -272,5 +276,5 @@ class TestHandleLifecycle:
         z.session = session
         qbl = Q.on_query(lambda ctx: None)
         qbl.close()
-        qbl.close()   # no raise
+        qbl.close()  # no raise
         assert qbl._closed

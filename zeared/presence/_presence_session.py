@@ -5,17 +5,17 @@ and ``clear_presence_state``. Lazy-declares the liveliness token + will
 queryable on the first ``register_will()`` call so publishers that never
 register anything pay zero presence overhead.
 """
+
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
-from typing import Dict, Optional
-
-import zenoh
-
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import zenoh
+
     from .._managed_session import SessionLike
 
 from .. import _codec as codec
@@ -24,11 +24,10 @@ from .._prefix_index import _PrefixIndex
 from .presence import (
     ALIVE_PREFIX,
     WILL_PREFIX,
-    _WillEnvelope,
     _envelope_encoding,
     _slug,
+    _WillEnvelope,
 )
-
 
 _log = logging.getLogger('zeared.presence')
 
@@ -42,18 +41,23 @@ class _SessionPresence:
     """
 
     __slots__ = (
-        'session', 'zid', '_token', '_queryable',
-        '_wills', '_index', '_lock',
+        '_index',
+        '_lock',
+        '_queryable',
         '_registered',
+        '_token',
+        '_wills',
+        'session',
+        'zid',
     )
 
-    def __init__(self, session: zenoh.Session):
+    def __init__(self, session: SessionLike) -> None:
         self.session = session
         self.zid = str(session.zid())
-        self._token: Optional[zenoh.LivelinessToken] = None
-        self._queryable: Optional[zenoh.Queryable] = None
+        self._token: zenoh.LivelinessToken | None = None
+        self._queryable: zenoh.Queryable | None = None
         # full will_key (`__zeared/will/<zid>/<slug>`) → envelope
-        self._wills: Dict[str, _WillEnvelope] = {}
+        self._wills: dict[str, _WillEnvelope] = {}
         # Trie of will_keys — replaces the iterate-and-intersect loop in
         # `_handle_will_query`.
         self._index = _PrefixIndex()
@@ -62,7 +66,7 @@ class _SessionPresence:
         # can replay every registered will under the post-reconnect zid.
         # Keyed by (cls_qualname, target_key_expr) so re-registers update
         # rather than duplicate.
-        self._registered: Dict[tuple, _WillEnvelope] = {}
+        self._registered: dict[tuple, _WillEnvelope] = {}
 
     def _ensure_declared(self) -> None:
         """Declare the liveliness token and will queryable if not already."""
@@ -76,7 +80,8 @@ class _SessionPresence:
             self._token = raw.liveliness().declare_token(alive_key)
             will_wildcard = f'{WILL_PREFIX}/{self.zid}/**'
             self._queryable = raw.declare_queryable(
-                will_wildcard, self._handle_will_query,
+                will_wildcard,
+                self._handle_will_query,
             )
 
     def register_will(
@@ -104,21 +109,27 @@ class _SessionPresence:
             self._registered[(cls_qualname, envelope.target_key_expr)] = envelope
         try:
             self.session.put(
-                will_key, raw, encoding=codec.MIME[env_enc],
+                will_key,
+                raw,
+                encoding=codec.MIME[env_enc],
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # If the publish fails, pull the will back out; no stale state.
             with self._lock:
                 if self._wills.pop(will_key, None) is not None:
                     self._index.remove(will_key)
             _log.warning(
-                'register_will: publish of %s failed: %s', will_key, exc,
+                'register_will: publish of %s failed: %s',
+                will_key,
+                exc,
             )
             raise
 
     def _handle_will_query(self, query: zenoh.Query) -> None:
-        """Answer a late subscriber's ``session.get(__zeared/will/<zid>/**)``
-        with every stashed will whose concrete key intersects the query.
+        """Answer a late subscriber's will query from the stash.
+
+        Answer a late subscriber's ``session.get(__zeared/will/<zid>/**)`` with every
+        stashed will whose concrete key intersects the query.
 
         Uses the trie index — O(query depth × matches) rather than O(N)
         across all stashed wills.
@@ -134,10 +145,12 @@ class _SessionPresence:
                 query.reply(will_key, raw, encoding=codec.MIME[env_enc])
             except Exception as exc:  # noqa: BLE001
                 _log.warning(
-                    'will-queryable reply failed on %s: %s', will_key, exc,
+                    'will-queryable reply failed on %s: %s',
+                    will_key,
+                    exc,
                 )
 
-    def replay_to(self, new_session) -> None:
+    def replay_to(self, new_session: SessionLike) -> None:
         """Re-register every previously-registered will against ``new_session``.
 
         Used by the reconnect machinery: the old raw session is dead, the
@@ -175,7 +188,8 @@ class _SessionPresence:
             except Exception:  # noqa: BLE001
                 _log.exception(
                     'replay_to: register_will failed for %s @ %s',
-                    cls_qualname, target,
+                    cls_qualname,
+                    target,
                 )
 
     def drop(self) -> None:
@@ -188,15 +202,11 @@ class _SessionPresence:
             self._wills.clear()
             self._index = _PrefixIndex()
         if token is not None:
-            try:
+            with contextlib.suppress(Exception):
                 token.undeclare()
-            except Exception:  # noqa: BLE001
-                pass
         if queryable is not None:
-            try:
+            with contextlib.suppress(Exception):
                 queryable.undeclare()
-            except Exception:  # noqa: BLE001
-                pass
         _registry.pop(id(self.session), None)
 
 
@@ -205,11 +215,11 @@ class _SessionPresence:
 # ---------------------------------------------------------------------------
 
 
-_registry: Dict[int, _SessionPresence] = {}
+_registry: dict[int, _SessionPresence] = {}
 _registry_lock = threading.Lock()
 
 
-def get_presence(session: zenoh.Session) -> _SessionPresence:
+def get_presence(session: SessionLike) -> _SessionPresence:
     """Return (creating if needed) the presence state for this session."""
     sid = id(session)
     state = _registry.get(sid)
@@ -224,7 +234,7 @@ def get_presence(session: zenoh.Session) -> _SessionPresence:
         return state
 
 
-def clear_presence_state(*, session: Optional['SessionLike'] = None) -> None:
+def clear_presence_state(*, session: SessionLike | None = None) -> None:
     """Drop per-session presence state. Without ``session=``, clears all."""
     with _registry_lock:
         if session is None:
@@ -237,17 +247,13 @@ def clear_presence_state(*, session: Optional['SessionLike'] = None) -> None:
     for s_state in states:
         # Undeclare directly; drop() re-pops from the registry but we already
         # did that above (no-op second time).
-        try:
-            if s_state._token is not None:
-                s_state._token.undeclare()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            if s_state._queryable is not None:
-                s_state._queryable.undeclare()
-        except Exception:  # noqa: BLE001
-            pass
-        s_state._token = None
-        s_state._queryable = None
-        s_state._wills.clear()
-        s_state._index = _PrefixIndex()
+        with contextlib.suppress(Exception):
+            if s_state._token is not None:  # noqa: SLF001
+                s_state._token.undeclare()  # noqa: SLF001
+        with contextlib.suppress(Exception):
+            if s_state._queryable is not None:  # noqa: SLF001
+                s_state._queryable.undeclare()  # noqa: SLF001
+        s_state._token = None  # noqa: SLF001
+        s_state._queryable = None  # noqa: SLF001
+        s_state._wills.clear()  # noqa: SLF001
+        s_state._index = _PrefixIndex()  # noqa: SLF001

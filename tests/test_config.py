@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from unittest import mock
 
 import pytest
@@ -36,8 +35,10 @@ class TestSessionConfigSeared:
 
     def test_round_trip_via_seared(self):
         cfg = z.SessionConfig(
-            mode=z.Mode.PEER, listen=['tcp/0.0.0.0:7447'],
-            retry=True, max_backoff=60.0,
+            mode=z.Mode.PEER,
+            listen=['tcp/0.0.0.0:7447'],
+            retry=True,
+            max_backoff=60.0,
         )
         d = z.SessionConfig.dump(cfg)
         loaded = z.SessionConfig.load(d)
@@ -88,7 +89,9 @@ class TestBuilders:
     def test_with_retry_sets_knobs(self):
         cfg = z.SessionConfig(mode=z.Mode.PEER)
         updated = cfg.with_retry(
-            initial_backoff=0.5, max_backoff=60, max_attempts=10,
+            initial_backoff=0.5,
+            max_backoff=60,
+            max_attempts=10,
         )
         assert updated.retry is True
         assert updated.initial_backoff == 0.5
@@ -97,7 +100,7 @@ class TestBuilders:
 
     def test_with_retry_none_knobs_preserve(self):
         cfg = z.SessionConfig(mode=z.Mode.PEER, initial_backoff=1.0)
-        updated = cfg.with_retry()   # all knobs None
+        updated = cfg.with_retry()  # all knobs None
         assert updated.initial_backoff == 1.0
 
     def test_with_connect_appends(self):
@@ -153,7 +156,7 @@ class TestFromEnv:
         monkeypatch.setenv('ZEARED_SESSION_MODE', 'peer')
         cfg = z.SessionConfig.from_env()
         assert cfg.mode is z.Mode.PEER
-        assert cfg.retry is False     # default
+        assert cfg.retry is False  # default
 
     def test_full_client(self, monkeypatch):
         monkeypatch.setenv('ZEARED_SESSION_MODE', 'client')
@@ -194,9 +197,9 @@ class TestFromEnv:
 
     def test_empty_value_treated_as_unset(self, monkeypatch):
         monkeypatch.setenv('ZEARED_SESSION_MODE', 'peer')
-        monkeypatch.setenv('ZEARED_SESSION_ROUTER', '')   # empty string
+        monkeypatch.setenv('ZEARED_SESSION_ROUTER', '')  # empty string
         cfg = z.SessionConfig.from_env()
-        assert cfg.router is None     # not the empty string
+        assert cfg.router is None  # not the empty string
 
 
 class TestFromYaml:
@@ -205,14 +208,14 @@ class TestFromYaml:
 
     def test_yaml_string(self):
         pytest.importorskip('yaml')
-        yaml_text = '''
+        yaml_text = """
         mode: peer
         retry: true
         connect:
           - tcp/a:7447
           - tcp/b:7447
         max_backoff: 30.0
-        '''
+        """
         cfg = z.SessionConfig.from_yaml(yaml_text)
         assert cfg.mode is z.Mode.PEER
         assert cfg.retry is True
@@ -222,11 +225,7 @@ class TestFromYaml:
     def test_yaml_file(self, tmp_path):
         pytest.importorskip('yaml')
         f = tmp_path / 'config.yaml'
-        f.write_text(
-            'mode: client\n'
-            'router: tcp/router:7447\n'
-            'retry: false\n'
-        )
+        f.write_text('mode: client\nrouter: tcp/router:7447\nretry: false\n')
         cfg = z.SessionConfig.from_yaml(str(f))
         assert cfg.mode is z.Mode.CLIENT
         assert cfg.router == 'tcp/router:7447'
@@ -239,9 +238,8 @@ class TestFromYaml:
         # If yaml IS installed, monkeypatch the import to fail.
         real_yaml = sys.modules.pop('yaml', None)
         try:
-            with patch.dict(sys.modules, {'yaml': None}):
-                with pytest.raises(ImportError, match='PyYAML'):
-                    z.SessionConfig.from_yaml('mode: peer')
+            with patch.dict(sys.modules, {'yaml': None}), pytest.raises(ImportError, match='PyYAML'):
+                z.SessionConfig.from_yaml('mode: peer')
         finally:
             if real_yaml is not None:
                 sys.modules['yaml'] = real_yaml
@@ -262,18 +260,18 @@ class TestPeerFactory:
         # Was previously a TypeError; now kwargs win.
         cfg = z.SessionConfig(mode=z.Mode.PEER, retry=False, max_attempts=5)
         sleeps: list[float] = []
-        with mock.patch('zeared._factories.time.sleep', lambda s: sleeps.append(s)):
+        with mock.patch('zeared._factories.time.sleep', sleeps.append):
             calls = [0]
 
             def fake_open(_):
                 calls[0] += 1
-                raise RuntimeError('down')
+                msg = 'down'
+                raise RuntimeError(msg)
 
-            with mock.patch('zeared._factories.zenoh.open', fake_open):
-                with pytest.raises(RuntimeError):
-                    # retry=True kwarg overrides cfg.retry=False;
-                    # max_attempts=2 kwarg overrides cfg.max_attempts=5.
-                    z.peer(config=cfg, retry=True, max_attempts=2)
+            with mock.patch('zeared._factories.zenoh.open', fake_open), pytest.raises(RuntimeError):
+                # retry=True kwarg overrides cfg.retry=False;
+                # max_attempts=2 kwarg overrides cfg.max_attempts=5.
+                z.peer(config=cfg, retry=True, max_attempts=2)
         assert calls[0] == 2
 
     def test_config_declarative_peer(self):
@@ -289,7 +287,7 @@ class TestClientFactory:
             z.client()
 
     def test_config_without_endpoints_rejected(self):
-        cfg = z.SessionConfig(mode=z.Mode.CLIENT)   # no router, no connect
+        cfg = z.SessionConfig(mode=z.Mode.CLIENT)  # no router, no connect
         with pytest.raises(TypeError, match='router'):
             z.client(config=cfg)
 
@@ -299,11 +297,11 @@ class TestClientFactory:
 
         def fake_open(c):
             captured.append(c)
-            raise RuntimeError('down')
+            msg = 'down'
+            raise RuntimeError(msg)
 
-        with mock.patch('zeared._factories.zenoh.open', fake_open):
-            with pytest.raises(RuntimeError):
-                z.client('tcp/from-kwarg:7447', config=cfg)
+        with mock.patch('zeared._factories.zenoh.open', fake_open), pytest.raises(RuntimeError):
+            z.client('tcp/from-kwarg:7447', config=cfg)
         # Config built with the kwarg endpoint, not the cfg one.
         assert 'tcp/from-kwarg:7447' in str(captured[0])
 
@@ -318,12 +316,16 @@ class TestOpen:
 class TestRetryLoop:
     def test_no_retry_raises_on_first_failure(self):
         def open_fn():
-            raise RuntimeError('no router')
+            msg = 'no router'
+            raise RuntimeError(msg)
 
         with pytest.raises(RuntimeError):
             _open_with_retry(
-                open_fn, retry=False, initial_backoff=0.01,
-                max_backoff=0.1, max_attempts=None,
+                open_fn,
+                retry=False,
+                initial_backoff=0.01,
+                max_backoff=0.1,
+                max_attempts=None,
                 endpoint_label='test',
             )
 
@@ -332,15 +334,19 @@ class TestRetryLoop:
 
         def open_fn():
             calls[0] += 1
-            raise RuntimeError('down')
+            msg = 'down'
+            raise RuntimeError(msg)
 
         with pytest.raises(RuntimeError):
             _open_with_retry(
-                open_fn, retry=True, initial_backoff=0.001,
-                max_backoff=0.002, max_attempts=3,
+                open_fn,
+                retry=True,
+                initial_backoff=0.001,
+                max_backoff=0.002,
+                max_attempts=3,
                 endpoint_label='test',
             )
-        assert calls[0] == 3   # 1 initial + 2 retries (stops BEFORE the 3rd retry)
+        assert calls[0] == 3  # 1 initial + 2 retries (stops BEFORE the 3rd retry)
 
     def test_retry_eventually_succeeds(self):
         calls = [0]
@@ -348,12 +354,16 @@ class TestRetryLoop:
         def open_fn():
             calls[0] += 1
             if calls[0] < 3:
-                raise RuntimeError('still down')
-            return mock.Mock()     # a fake session
+                msg = 'still down'
+                raise RuntimeError(msg)
+            return mock.Mock()  # a fake session
 
         sess = _open_with_retry(
-            open_fn, retry=True, initial_backoff=0.001,
-            max_backoff=0.01, max_attempts=10,
+            open_fn,
+            retry=True,
+            initial_backoff=0.001,
+            max_backoff=0.01,
+            max_attempts=10,
             endpoint_label='test',
         )
         assert sess is not None
@@ -367,7 +377,8 @@ class TestRetryLoop:
         def open_fn():
             calls[0] += 1
             if calls[0] < 5:
-                raise RuntimeError('down')
+                msg = 'down'
+                raise RuntimeError(msg)
             return mock.Mock()
 
         def fake_sleep(s):
@@ -375,8 +386,11 @@ class TestRetryLoop:
 
         with mock.patch('zeared._factories.time.sleep', fake_sleep):
             _open_with_retry(
-                open_fn, retry=True, initial_backoff=1.0,
-                max_backoff=4.0, max_attempts=None,
+                open_fn,
+                retry=True,
+                initial_backoff=1.0,
+                max_backoff=4.0,
+                max_attempts=None,
                 endpoint_label='t',
             )
 
@@ -389,16 +403,22 @@ class TestRetryLoop:
         def open_fn():
             calls[0] += 1
             if calls[0] < 6:
-                raise RuntimeError('down')
+                msg = 'down'
+                raise RuntimeError(msg)
             return mock.Mock()
 
-        with mock.patch('zeared._factories.time.sleep', lambda s: None):
-            with caplog.at_level(logging.INFO, logger='zeared.connect'):
-                _open_with_retry(
-                    open_fn, retry=True, initial_backoff=0.001,
-                    max_backoff=0.002, max_attempts=None,
-                    endpoint_label='thing',
-                )
+        with (
+            mock.patch('zeared._factories.time.sleep', return_value=None),
+            caplog.at_level(logging.INFO, logger='zeared.connect'),
+        ):
+            _open_with_retry(
+                open_fn,
+                retry=True,
+                initial_backoff=0.001,
+                max_backoff=0.002,
+                max_attempts=None,
+                endpoint_label='thing',
+            )
 
         info_records = [r for r in caplog.records if r.levelno == logging.INFO]
         warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]

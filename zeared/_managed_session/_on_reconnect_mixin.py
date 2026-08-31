@@ -1,21 +1,23 @@
-"""``_OnReconnectMixin`` — the ``on_reconnect`` callback registry +
-``_fire_reconnect_callbacks`` driver.
+"""``_OnReconnectMixin`` — the ``on_reconnect`` callback registry + ``_fire_reconnect_callbacks`` driver.
 
 Mixin variant of Pattern B: the ``ManagedSession`` class composes this
 mixin via MRO so the callback-registry methods stay as methods (not
 helper functions taking ``self``). Per the convention codified in
 ``CLAUDE.local.md``.
 """
+
 from __future__ import annotations
 
 import asyncio
 import inspect
 import logging
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING
 
 from ._on_reconnect_handle import OnReconnectHandle
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ._managed_session import ManagedSession
 
 
@@ -29,11 +31,12 @@ class _OnReconnectMixin:
     both are slots on the concrete ``ManagedSession``. This mixin
     contributes no instance state of its own (``__slots__ = ()``).
     """
+
     __slots__ = ()
 
     def on_reconnect(
-        self: 'ManagedSession',
-        cb: Callable[['ManagedSession'], object],
+        self: ManagedSession,
+        cb: Callable[[ManagedSession], object],
     ) -> OnReconnectHandle:
         """Register ``cb`` to fire after every successful reconnect.
 
@@ -55,24 +58,24 @@ class _OnReconnectMixin:
         no-op'ing on the reconnect thread at 3am is the worst possible
         failure mode.
         """
-        loop: Optional[asyncio.AbstractEventLoop] = None
+        loop: asyncio.AbstractEventLoop | None = None
         if inspect.iscoroutinefunction(cb):
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError as e:
-                raise RuntimeError(
+                msg = (
                     'on_reconnect: async callback requires a running event '
                     'loop at registration time; either register from inside '
                     'an async context or use a sync callback'
-                ) from e
+                )
+                raise RuntimeError(msg) from e
         with self._lock:
             entry = (cb, loop)
             self._on_reconnect_callbacks.append(entry)
         return OnReconnectHandle(self, entry)
 
-    def _fire_reconnect_callbacks(self: 'ManagedSession') -> None:
-        """Invoke every registered on_reconnect callback. Called by
-        ``_reconnect`` after restoration."""
+    def _fire_reconnect_callbacks(self: ManagedSession) -> None:
+        """Invoke every registered on_reconnect callback. Called by ``_reconnect`` after restoration."""
         with self._lock:
             entries = list(self._on_reconnect_callbacks)
         for cb, loop in entries:

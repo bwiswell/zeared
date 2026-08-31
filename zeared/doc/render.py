@@ -3,14 +3,18 @@
 Prepends the topic + wire-contract preamble, then reuses seared's field / enum
 / variant section renderers so the two layers stay in lockstep.
 """
+
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from seared.doc import render_enums, render_fields_table, render_variants
 
-from ..message import Message
 from .introspect import MessageDoc, introspect_message
+
+if TYPE_CHECKING:
+    from ..message import Message
 
 LinkFor = Callable[[type], str]
 
@@ -19,16 +23,16 @@ def _default_link(cls: type) -> str:
     return f'{cls.__name__}.md'
 
 
-def _yn(value: bool) -> str:
+def _yn(value: bool) -> str:  # noqa: FBT001
     return 'yes' if value else 'no'
 
 
 def render_topic(md: MessageDoc) -> str:
+    """Render the Topic section for a message doc."""
     if not md.topic:
         return ''
     out = ['## Topic', '', f'`{md.topic}`']
-    for extra in md.extra_topics:
-        out.append(f'`{extra}` (extra)')
+    out.extend(f'`{extra}` (extra)' for extra in md.extra_topics)
     if md.slots:
         out += ['', '| slot | payload field? |', '|------|----------------|']
         for slot in md.slots:
@@ -37,6 +41,7 @@ def render_topic(md: MessageDoc) -> str:
 
 
 def render_wire(md: MessageDoc, link_for: LinkFor = _default_link) -> str:
+    """Render the wire-contract section for a message doc."""
     ttl = '∞' if md.retention_ttl is None else f'{md.retention_ttl}s'
     bits = [
         f'Encoding `{md.encoding}`',
@@ -50,7 +55,7 @@ def render_wire(md: MessageDoc, link_for: LinkFor = _default_link) -> str:
     return ' · '.join(bits)
 
 
-def render_message(cls: 'type[Message]', link_for: LinkFor = _default_link) -> str:
+def render_message(cls: type[Message], link_for: LinkFor = _default_link) -> str:
     """Render the full wire-aware Markdown page for a ``@zeared`` Message."""
     md = introspect_message(cls)
     s = md.schema

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import contextlib
 import threading
 import warnings
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Literal
 
 from . import _codec as codec
 from ._managed_session import resolve_raw
 from .errors import ZearedError
 
 if TYPE_CHECKING:
-    from ._managed_session import SessionLike
     import zenoh
+
+    from ._managed_session import SessionLike
+    from .message import Message
 
 
 _DEFAULT_CAP = 256
@@ -18,7 +21,7 @@ _DEFAULT_CAP = 256
 Encoding = Literal['msgpack', 'json']
 
 
-def effective_cap(cls) -> int:
+def effective_cap(cls: type[Message]) -> int:
     """Resolve the ``PUBLISHER`` class attribute to a concrete cap.
 
     - ``True`` → default cap (256)
@@ -34,21 +37,20 @@ def effective_cap(cls) -> int:
 
 
 class _PublisherCache:
-    """Cache of ``zenoh.Publisher`` keyed by concrete topic, scoped to a
-    single ``(Message subclass, session)`` pair.
+    """Cache of ``zenoh.Publisher`` keyed by concrete topic, scoped to a single ``(Message subclass, session)`` pair.
 
     When the cache is full, ``put()`` falls back to ``session.put`` and emits
     a one-time ``warnings.warn``. A send against a closed session drops the
     offending entry and raises ``ZearedError``.
     """
 
-    __slots__ = ('_cls', '_session', '_cap', '_pubs', '_emitted', '_warned')
+    __slots__ = ('_cap', '_cls', '_emitted', '_pubs', '_session', '_warned')
 
-    def __init__(self, cls: type, session: 'zenoh.Session', cap: int):
+    def __init__(self, cls: type[Message], session: SessionLike, cap: int) -> None:
         self._cls = cls
         self._session = session
         self._cap = cap
-        self._pubs: dict[str, 'zenoh.Publisher'] = {}
+        self._pubs: dict[str, zenoh.Publisher] = {}
         # Every concrete topic this (cls, session) has ever emitted — even
         # those tombstoned later, and those that went through the session.put
         # fallback (PUBLISHER=False or cap-exceeded). Used for introspection
@@ -66,8 +68,12 @@ class _PublisherCache:
         return frozenset(self._emitted)
 
     def put(
-        self, concrete_topic: str, raw: bytes, encoding: Encoding,
-        *, attachment: Optional[bytes] = None,
+        self,
+        concrete_topic: str,
+        raw: bytes,
+        encoding: Encoding,
+        *,
+        attachment: bytes | None = None,
     ) -> None:
         # Record the emission before any branching — ensures introspection
         # reflects reality regardless of which path the send takes.
@@ -100,18 +106,19 @@ class _PublisherCache:
 
         try:
             pub = resolve_raw(self._session).declare_publisher(concrete_topic, encoding=mime)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.drop()
-            raise ZearedError(
-                f'{self._cls.__name__}: failed to declare publisher on '
-                f'{concrete_topic!r}: {e}'
-            ) from e
+            msg = f'{self._cls.__name__}: failed to declare publisher on {concrete_topic!r}: {e}'
+            raise ZearedError(msg) from e
         self._pubs[concrete_topic] = pub
         self._pub_put(concrete_topic, pub, raw, attachment)
 
     def _session_put(
-        self, topic: str, raw: bytes, mime: str,
-        attachment: Optional[bytes] = None,
+        self,
+        topic: str,
+        raw: bytes,
+        mime: str,
+        attachment: bytes | None = None,
     ) -> None:
         try:
             # Spelled out rather than spread from a dict: zenoh's ``put`` is
@@ -119,41 +126,42 @@ class _PublisherCache:
             # every optional keyword it declares.
             if attachment is not None:
                 self._session.put(
-                    topic, raw, encoding=mime, attachment=attachment,
+                    topic,
+                    raw,
+                    encoding=mime,
+                    attachment=attachment,
                 )
             else:
                 self._session.put(topic, raw, encoding=mime)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.drop()
-            raise ZearedError(
-                f'{self._cls.__name__}: session.put failed on {topic!r}: {e}'
-            ) from e
+            msg = f'{self._cls.__name__}: session.put failed on {topic!r}: {e}'
+            raise ZearedError(msg) from e
 
     def _pub_put(
-        self, topic: str, pub: 'zenoh.Publisher', raw: bytes,
-        attachment: Optional[bytes] = None,
+        self,
+        topic: str,
+        pub: zenoh.Publisher,
+        raw: bytes,
+        attachment: bytes | None = None,
     ) -> None:
         try:
             if attachment is not None:
                 pub.put(raw, attachment=attachment)
             else:
                 pub.put(raw)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Most likely the session closed out from under us.
             self._pubs.pop(topic, None)
             self.drop()
-            raise ZearedError(
-                f'{self._cls.__name__}: cached publisher put failed on '
-                f'{topic!r} (session likely closed): {e}'
-            ) from e
+            msg = f'{self._cls.__name__}: cached publisher put failed on {topic!r} (session likely closed): {e}'
+            raise ZearedError(msg) from e
 
     def drop(self) -> None:
         """Undeclare all cached publishers and remove from the registry."""
         for pub in self._pubs.values():
-            try:
+            with contextlib.suppress(Exception):
                 pub.undeclare()
-            except Exception:  # noqa: BLE001
-                pass
         self._pubs.clear()
         _registry.pop((self._cls, id(self._session)), None)
 
@@ -164,7 +172,8 @@ _registry: dict[tuple[type, int], _PublisherCache] = {}
 _registry_lock = threading.Lock()
 
 
-def get_cache(cls: type, session: 'zenoh.Session') -> _PublisherCache:
+def get_cache(cls: type[Message], session: SessionLike) -> _PublisherCache:
+    """Return the publisher cache for ``(cls, session)``, creating it if needed."""
     key = (cls, id(session))
     cache = _registry.get(key)
     if cache is not None:
@@ -180,11 +189,13 @@ def get_cache(cls: type, session: 'zenoh.Session') -> _PublisherCache:
 
 def published_topics(
     *,
-    cls: 'type | None' = None,
-    session: 'zenoh.Session | None' = None,
+    cls: type | None = None,
+    session: zenoh.Session | None = None,
 ) -> dict:
-    """Snapshot introspection: every concrete topic emitted during this
-    process lifetime, keyed on ``(Message subclass, session-id)``.
+    """Snapshot of every concrete topic emitted this process lifetime.
+
+    Snapshot introspection: every concrete topic emitted during this process lifetime,
+    keyed on ``(Message subclass, session-id)``.
 
     Filter on ``cls=`` and/or ``session=`` to narrow the view. Tombstoned
     topics remain in the snapshot — "emitted during this process lifetime"
@@ -203,7 +214,7 @@ def published_topics(
     return out
 
 
-def clear_publisher_cache(*, session: 'SessionLike | None' = None) -> None:
+def clear_publisher_cache(*, session: SessionLike | None = None) -> None:
     """Drop cached publishers.
 
     Without ``session=``, clears every entry in the registry. With
@@ -221,9 +232,7 @@ def clear_publisher_cache(*, session: 'SessionLike | None' = None) -> None:
             caches = [_registry.pop(k) for k in keys]
     for c in caches:
         # Undeclare without re-entering the registry removal branch.
-        for pub in c._pubs.values():
-            try:
+        for pub in c._pubs.values():  # noqa: SLF001
+            with contextlib.suppress(Exception):
                 pub.undeclare()
-            except Exception:  # noqa: BLE001
-                pass
-        c._pubs.clear()
+        c._pubs.clear()  # noqa: SLF001

@@ -18,6 +18,7 @@ bridge is the consumer's to build):
 Requires ``seared >= 0.2.2`` (for ``seared.doc``). See
 project-plans/03-schema-docgen.md in the seared repo.
 """
+
 from .generate import build_docs, document, introspect, main, render_one
 from .introspect import MessageDoc, SlotDoc, introspect_message, is_message_class
 from .render import render_message, render_topic, render_wire
@@ -26,8 +27,20 @@ from .typescript import generate as generate_ts
 from .typescript import render_interface, ts_type
 
 __all__ = [
-    'MessageDoc', 'SlotDoc', 'build_docs', 'document', 'emit_ts',
-    'generate_ts', 'introspect', 'introspect_message', 'is_message_class',
-    'main', 'render_interface', 'render_message', 'render_one',
-    'render_topic', 'render_wire', 'ts_type',
+    'MessageDoc',
+    'SlotDoc',
+    'build_docs',
+    'document',
+    'emit_ts',
+    'generate_ts',
+    'introspect',
+    'introspect_message',
+    'is_message_class',
+    'main',
+    'render_interface',
+    'render_message',
+    'render_one',
+    'render_topic',
+    'render_wire',
+    'ts_type',
 ]

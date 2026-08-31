@@ -45,22 +45,23 @@ consumers without paying the publish-side tax. (4) Async-def callbacks via
 ``on_message`` keep the publish path sync-fast (~-20%) by scheduling one
 coroutine per message on the running loop.
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 import zenoh
 from marshmallow import EXCLUDE, Schema
 from marshmallow.fields import Float as MFloat
-from marshmallow.fields import Integer, List as MList, Nested, String
+from marshmallow.fields import Integer, Nested, String
+from marshmallow.fields import List as MList
 
 import zeared as z
 from zeared import _codec as codec
-
 
 # ---------------------------------------------------------------------------
 # Schemas (identical shape to bench_wire.py / bench_throughput.py).
@@ -103,10 +104,10 @@ _outer_schema = OuterSchema()
 class Inner(z.Zeared):
     x: int = z.Int(required=True)
     y: float = z.Float(required=True)
-    label: Optional[str] = z.Str()
+    label: str | None = z.Str()
 
 
-def _make_zeared_class(topic: str, encoding: str = 'msgpack', publisher=True):
+def _make_zeared_class(topic: str, encoding: str = 'msgpack', publisher=True):  # noqa: FBT002
     """Build a fresh Message subclass per-bench so caches don't collide."""
 
     @z.zeared
@@ -124,6 +125,7 @@ def _make_zeared_class(topic: str, encoding: str = 'msgpack', publisher=True):
 # ---------------------------------------------------------------------------
 # Result / harness.
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class Result:
@@ -176,6 +178,7 @@ def _drain(received_ref, sent, t_pub_end) -> float:
 
 # --- Sync strategies ---
 
+
 def _sync_marshmallow(session, duration_s) -> Result:
     topic = 'bench/async/marshmallow'
     payload = _payload_dict()
@@ -183,7 +186,7 @@ def _sync_marshmallow(session, duration_s) -> Result:
 
     received = [0]
 
-    def handler(sample):
+    def handler(sample) -> None:
         _outer_schema.loads(bytes(sample.payload).decode('utf-8'))
         received[0] += 1
 
@@ -201,7 +204,11 @@ def _sync_marshmallow(session, duration_s) -> Result:
     sub.undeclare()
     return Result(
         'zenoh + marshmallow (json)',
-        sent, received[0], t_pub - t0, t_end - t0, len(raw_ref),
+        sent,
+        received[0],
+        t_pub - t0,
+        t_end - t0,
+        len(raw_ref),
     )
 
 
@@ -228,6 +235,7 @@ def _sync_zeared(session, duration_s, msg_cls, label) -> Result:
 
 
 # --- Async strategies ---
+
 
 def _async_asend_sync_sub(session, duration_s, msg_cls, label) -> Result:
     z.session = session
@@ -269,7 +277,7 @@ async def _run_alisten_consumer_with(
     """
     received = 0
 
-    async def consumer():
+    async def consumer() -> None:
         nonlocal received
         async for _m in msg_cls.alisten():
             received += 1
@@ -286,10 +294,8 @@ async def _run_alisten_consumer_with(
     t_end = time.perf_counter()
 
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     return sent, received, t_pub_end, t_end
 
@@ -307,14 +313,16 @@ def _sync_send_async_listen(session, duration_s, msg_cls, label) -> Result:
             sent = 0
             deadline = t0 + dur
             while time.perf_counter() < deadline:
-                instance.send()                          # sync
+                instance.send()  # sync
                 sent += 1
                 if sent % 500 == 0:
-                    await asyncio.sleep(0)               # yield so consumer drains
+                    await asyncio.sleep(0)  # yield so consumer drains
             return sent, time.perf_counter()
 
         sent, received, t_pub, t_end = await _run_alisten_consumer_with(
-            msg_cls, duration_s, do_publish,
+            msg_cls,
+            duration_s,
+            do_publish,
         )
         return Result(label, sent, received, t_pub - t0, t_end - t0, wire)
 
@@ -334,12 +342,14 @@ def _full_async(session, duration_s, msg_cls, label) -> Result:
             sent = 0
             deadline = t0 + dur
             while time.perf_counter() < deadline:
-                await instance.asend()                   # async
+                await instance.asend()  # async
                 sent += 1
             return sent, time.perf_counter()
 
         sent, received, t_pub, t_end = await _run_alisten_consumer_with(
-            msg_cls, duration_s, do_publish,
+            msg_cls,
+            duration_s,
+            do_publish,
         )
         return Result(label, sent, received, t_pub - t0, t_end - t0, wire)
 
@@ -358,7 +368,7 @@ def _sync_send_async_cb(session, duration_s, msg_cls, label) -> Result:
         sent = 0
         t0 = time.perf_counter()
 
-        async def handler(_m):
+        async def handler(_m) -> None:
             nonlocal received
             received += 1
 
@@ -389,19 +399,20 @@ def _sync_send_async_cb(session, duration_s, msg_cls, label) -> Result:
 # Entry point.
 # ---------------------------------------------------------------------------
 
+
 def run(duration_s: float = 5.0) -> None:
     session = _peer_session()
     try:
         # Build fresh classes each time (unique TOPIC) so publisher caches
         # don't persist across runs.
-        msgp_cached    = _make_zeared_class('bench/async/sync/msgp_cached',    'msgpack', True)
-        msgp_nocache   = _make_zeared_class('bench/async/sync/msgp_nocache',   'msgpack', False)
-        json_cached    = _make_zeared_class('bench/async/sync/json_cached',    'json',    True)
-        a_msgp_syncsub = _make_zeared_class('bench/async/asend_syncsub/msgp',  'msgpack', True)
-        s_msgp_alsn    = _make_zeared_class('bench/async/sendsync_alisten/msgp', 'msgpack', True)
-        full_a_msgp    = _make_zeared_class('bench/async/full_async/msgp',     'msgpack', True)
-        full_a_json    = _make_zeared_class('bench/async/full_async/json',     'json',    True)
-        asyncb_msgp    = _make_zeared_class('bench/async/asynccb/msgp',        'msgpack', True)
+        msgp_cached = _make_zeared_class('bench/async/sync/msgp_cached', 'msgpack', True)  # noqa: FBT003
+        msgp_nocache = _make_zeared_class('bench/async/sync/msgp_nocache', 'msgpack', False)  # noqa: FBT003
+        json_cached = _make_zeared_class('bench/async/sync/json_cached', 'json', True)  # noqa: FBT003
+        a_msgp_syncsub = _make_zeared_class('bench/async/asend_syncsub/msgp', 'msgpack', True)  # noqa: FBT003
+        s_msgp_alsn = _make_zeared_class('bench/async/sendsync_alisten/msgp', 'msgpack', True)  # noqa: FBT003
+        full_a_msgp = _make_zeared_class('bench/async/full_async/msgp', 'msgpack', True)  # noqa: FBT003
+        full_a_json = _make_zeared_class('bench/async/full_async/json', 'json', True)  # noqa: FBT003
+        asyncb_msgp = _make_zeared_class('bench/async/asynccb/msgp', 'msgpack', True)  # noqa: FBT003
 
         # Warm-up each path briefly.
         _sync_marshmallow(session, 0.3)
@@ -413,11 +424,11 @@ def run(duration_s: float = 5.0) -> None:
 
         results = [
             _sync_marshmallow(session, duration_s),
-            _sync_zeared(session, duration_s, json_cached,   'sync  (json,    cached)'),
-            _sync_zeared(session, duration_s, msgp_cached,   'sync  (msgpack, cached)'),
-            _sync_zeared(session, duration_s, msgp_nocache,  'sync  (msgpack, PUBLISHER=False)'),
+            _sync_zeared(session, duration_s, json_cached, 'sync  (json,    cached)'),
+            _sync_zeared(session, duration_s, msgp_cached, 'sync  (msgpack, cached)'),
+            _sync_zeared(session, duration_s, msgp_nocache, 'sync  (msgpack, PUBLISHER=False)'),
             _async_asend_sync_sub(session, duration_s, a_msgp_syncsub, 'async asend + sync on_message'),
-            _sync_send_async_listen(session, duration_s, s_msgp_alsn,  'sync send  + alisten'),
+            _sync_send_async_listen(session, duration_s, s_msgp_alsn, 'sync send  + alisten'),
             _full_async(session, duration_s, full_a_msgp, 'async asend + alisten (msgpack)'),
             _full_async(session, duration_s, full_a_json, 'async asend + alisten (json)'),
             _sync_send_async_cb(session, duration_s, asyncb_msgp, 'sync send  + async-def on_message'),
@@ -428,10 +439,7 @@ def run(duration_s: float = 5.0) -> None:
         print(f'Schema: Outer(name, items[{_N_ITEMS}x Inner], tags[{_N_TAGS}])')
         print(f'Duration target: {duration_s:.1f}s publish window per strategy')
         print('-' * 104)
-        hdr = (
-            f'{"strategy":42s}  {"sent":>8s}  '
-            f'{"pub/s":>9s}  {"e2e/s":>9s}  {"MB/s":>6s}  {"wire":>6s}  {"drops":>6s}'
-        )
+        hdr = f'{"strategy":42s}  {"sent":>8s}  {"pub/s":>9s}  {"e2e/s":>9s}  {"MB/s":>6s}  {"wire":>6s}  {"drops":>6s}'
         print(hdr)
         print('-' * 104)
         for r in results:

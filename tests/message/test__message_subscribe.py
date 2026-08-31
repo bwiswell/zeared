@@ -4,6 +4,7 @@
 End-to-end coverage lives in ``test_subscriber.py`` and
 ``test_publisher.py``. This file confirms the mixin surface.
 """
+
 from __future__ import annotations
 
 import zeared as z

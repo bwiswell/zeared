@@ -1,5 +1,6 @@
 """Smoke tests for ``zeared/_template/__init__.py`` — the namespace
 re-exports for the templating Pattern B subdir."""
+
 from __future__ import annotations
 
 from zeared._template import Template, Templates

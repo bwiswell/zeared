@@ -96,7 +96,8 @@ class TestScopeStack:
         z.session = 'base'
         try:
             with z.session('scoped'):
-                raise RuntimeError('boom')
+                msg = 'boom'
+                raise RuntimeError(msg)  # noqa: TRY301
         except RuntimeError:
             pass
         assert z.session.current == 'base'
@@ -119,6 +120,7 @@ class TestTimestampingInjection:
 
     def test_default_injects_timestamping_into_built_config(self):
         from zeared._factories import _build_config_for_peer
+
         cfg = _build_config_for_peer(None, None, None, timestamping=True)
         # Read back from the Config — Zenoh's Config.get_json returns
         # a JSON string for the requested key path.
@@ -127,6 +129,7 @@ class TestTimestampingInjection:
 
     def test_timestamping_false_skips_injection(self):
         from zeared._factories import _build_config_for_peer
+
         cfg = _build_config_for_peer(None, None, None, timestamping=False)
         val = cfg.get_json('timestamping/enabled').lower()
         # Field unset → 'null'; we explicitly opted out, so it must NOT
@@ -137,6 +140,7 @@ class TestTimestampingInjection:
         """If the user passes zenoh_config, the factory does NOT touch
         timestamping — they took over the Config object."""
         import zenoh
+
         from zeared._factories import _build_config_for_peer
 
         user_cfg = zenoh.Config()
@@ -150,6 +154,7 @@ class TestTimestampingInjection:
 
     def test_client_factory_injects_too(self):
         from zeared._factories import _build_config_for_client
+
         cfg = _build_config_for_client(['tcp/x:7447'], None, timestamping=True)
         val = cfg.get_json('timestamping/enabled')
         assert 'true' in val.lower()
@@ -199,10 +204,12 @@ class TestGcIntervalKwarg:
 
     def test_raw_session_uses_default_gc_interval(self):
         from zeared.presence import (
-            _GC_INTERVAL_SECONDS, _resolve_gc_interval, get_observer,
+            _GC_INTERVAL_SECONDS,
+            _resolve_gc_interval,
+            get_observer,
         )
 
-        sess = z.peer()      # no auto_reconnect → raw session
+        sess = z.peer()  # no auto_reconnect → raw session
         try:
             obs = get_observer(sess)
             assert obs._gc_interval is None
@@ -242,8 +249,10 @@ class TestTimestampingPlusGcInterval:
         from zeared.presence import _resolve_gc_interval, get_observer
 
         sess = z.peer(
-            auto_reconnect=True, probe_interval=0,
-            timestamping=True, gc_interval=30.0,
+            auto_reconnect=True,
+            probe_interval=0,
+            timestamping=True,
+            gc_interval=30.0,
         )
         try:
             # GC interval flowed into the wrapper.

@@ -5,15 +5,15 @@ Primary file of the ``_template`` Pattern B subdir. Holds the
 namespace-reservation guard. The aggregate ``Templates`` collection
 (canonical + extras) lives in the sibling ``_templates.py``.
 """
+
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 from string import Formatter
-from typing import Any, Optional, Tuple
+from typing import Any
 
 from ..errors import TopicError
-
 
 _NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
@@ -31,9 +31,7 @@ _RESERVED_PREFIX = '__zeared'
 # Trailing named multi-segment slot: ``.../{name**}`` at end of template, where
 # ``name`` is a Python-style identifier. Anchored with ``$`` so non-trailing
 # occurrences fall through to the body parser (which then rejects them).
-_NAMED_MULTI_TRAILING_RE = re.compile(
-    r'\{([a-zA-Z_][a-zA-Z0-9_]*)\*\*\}$'
-)
+_NAMED_MULTI_TRAILING_RE = re.compile(r'\{([a-zA-Z_][a-zA-Z0-9_]*)\*\*\}$')
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,17 +59,19 @@ class Template:
         _regex: compiled regex with named captures for each slot.
         _named_multi: name of the trailing ``{name**}`` slot, if any.
     """
+
     raw: str
-    field_names: Tuple[str, ...]
+    field_names: tuple[str, ...]
     wildcard: str
     publishable: bool
     _regex: re.Pattern
-    _named_multi: Optional[str]
+    _named_multi: str | None
 
     @classmethod
-    def parse(cls, template: str) -> 'Template':
+    def parse(cls, template: str) -> Template:  # noqa: C901, PLR0912, PLR0915
         if not isinstance(template, str) or not template:
-            raise TopicError(f'TOPIC must be a non-empty string, got {template!r}')
+            msg = f'TOPIC must be a non-empty string, got {template!r}'
+            raise TopicError(msg)
 
         cls._validate_namespace_reservation(template)
 
@@ -79,7 +79,7 @@ class Template:
         # named ``{name**}``. Both consume the trailing segment; the body
         # is everything before.
         has_anon_multi = False
-        named_multi: Optional[str] = None
+        named_multi: str | None = None
         body = template
 
         if template == '**':
@@ -94,10 +94,7 @@ class Template:
                 named_multi = m.group(1)
                 start = m.start()
                 # Strip preceding '/' if present so body has no trailing slash.
-                if start > 0 and template[start - 1] == '/':
-                    body = template[:start - 1]
-                else:
-                    body = template[:start]
+                body = template[: start - 1] if start > 0 and template[start - 1] == '/' else template[:start]
 
         # Reject any other ``**`` in remaining body. Catches:
         #   - anonymous non-trailing ``**`` (``a/**/c``)
@@ -105,10 +102,8 @@ class Template:
         #     above only matches at end-of-string, so a non-trailing
         #     ``{x**}`` lands here.
         if '**' in body:
-            raise TopicError(
-                f'TOPIC template {template!r}: ** may only appear as the '
-                f'final path segment'
-            )
+            msg = f'TOPIC template {template!r}: ** may only appear as the final path segment'
+            raise TopicError(msg)
 
         literals: list[str] = []
         single_fields: list[str] = []
@@ -116,26 +111,26 @@ class Template:
             try:
                 parts = list(Formatter().parse(body))
             except ValueError as e:
-                raise TopicError(f'invalid TOPIC template {template!r}: {e}') from e
+                msg = f'invalid TOPIC template {template!r}: {e}'
+                raise TopicError(msg) from e
 
             for literal, field_name, format_spec, conversion in parts:
                 literals.append(literal)
                 if field_name is None:
                     continue
                 if format_spec or conversion:
-                    raise TopicError(
+                    msg = (
                         f'TOPIC template {template!r}: format specs / '
                         f'conversions are not supported in '
                         f'{{{field_name}!{conversion or ""}:{format_spec or ""}}}'
                     )
+                    raise TopicError(msg)
                 if not _NAME_RE.match(field_name):
-                    raise TopicError(
-                        f'TOPIC template {template!r}: invalid field name {field_name!r}'
-                    )
+                    msg = f'TOPIC template {template!r}: invalid field name {field_name!r}'
+                    raise TopicError(msg)
                 if field_name in single_fields:
-                    raise TopicError(
-                        f'TOPIC template {template!r}: duplicate field {field_name!r}'
-                    )
+                    msg = f'TOPIC template {template!r}: duplicate field {field_name!r}'
+                    raise TopicError(msg)
                 single_fields.append(field_name)
         else:
             literals.append('')
@@ -143,13 +138,11 @@ class Template:
         # Validate the named-multi name itself (collisions / identifier shape).
         if named_multi is not None:
             if not _NAME_RE.match(named_multi):
-                raise TopicError(
-                    f'TOPIC template {template!r}: invalid field name {named_multi!r}'
-                )
+                msg = f'TOPIC template {template!r}: invalid field name {named_multi!r}'
+                raise TopicError(msg)
             if named_multi in single_fields:
-                raise TopicError(
-                    f'TOPIC template {template!r}: duplicate field {named_multi!r}'
-                )
+                msg = f'TOPIC template {template!r}: duplicate field {named_multi!r}'
+                raise TopicError(msg)
 
         has_multi_marker = has_anon_multi or (named_multi is not None)
         # Anonymous ``**`` makes the template subscribe-only. Named
@@ -158,9 +151,7 @@ class Template:
 
         wildcard = cls._render_wildcard(literals, single_fields, has_multi_marker)
         regex = cls._build_regex(literals, single_fields, has_anon_multi, named_multi)
-        all_names: Tuple[str, ...] = (
-            (*single_fields, named_multi) if named_multi else tuple(single_fields)
-        )
+        all_names: tuple[str, ...] = (*single_fields, named_multi) if named_multi else tuple(single_fields)
         return cls(
             raw=template,
             field_names=all_names,
@@ -172,8 +163,10 @@ class Template:
 
     @staticmethod
     def _validate_namespace_reservation(template: str) -> None:
-        """Reject templates whose first literal segment is ``__zeared``,
-        which collides with internal liveliness / will / observer keys.
+        """Reject templates whose first literal segment is ``__zeared``.
+
+        Reject templates whose first literal segment is ``__zeared``, which collides
+        with internal liveliness / will / observer keys.
 
         Exemption: the anonymous catch-all forms ``**`` (universal) and
         ``__zeared/**`` (diagnostic — "subscribe to all internal traffic
@@ -195,17 +188,20 @@ class Template:
         if first_seg.startswith('{'):
             return
         if first_seg == _RESERVED_PREFIX:
-            raise TopicError(
-                f"TOPIC template {template!r}: the {_RESERVED_PREFIX!r} "
-                f"prefix is reserved for internal zeared use (liveliness "
-                f"tokens, will envelopes, etc.); pick a different "
-                f"top-level segment. The diagnostic catch-all "
-                f"{_RESERVED_PREFIX!r}/** is the only exempted form."
+            msg = (
+                f'TOPIC template {template!r}: the {_RESERVED_PREFIX!r} '
+                f'prefix is reserved for internal zeared use (liveliness '
+                f'tokens, will envelopes, etc.); pick a different '
+                f'top-level segment. The diagnostic catch-all '
+                f'{_RESERVED_PREFIX!r}/** is the only exempted form.'
             )
+            raise TopicError(msg)
 
     @staticmethod
     def _render_wildcard(
-        literals: list[str], single_fields: list[str], has_multi_marker: bool,
+        literals: list[str],
+        single_fields: list[str],
+        has_multi_marker: bool,  # noqa: FBT001
     ) -> str:
         out: list[str] = []
         for i, lit in enumerate(literals):
@@ -219,8 +215,10 @@ class Template:
 
     @staticmethod
     def _build_regex(
-        literals: list[str], single_fields: list[str],
-        has_anon_multi: bool, named_multi: Optional[str],
+        literals: list[str],
+        single_fields: list[str],
+        has_anon_multi: bool,  # noqa: FBT001
+        named_multi: str | None,
     ) -> re.Pattern:
         parts: list[str] = []
         for i, lit in enumerate(literals):
@@ -236,22 +234,21 @@ class Template:
         return re.compile('^' + body + '$')
 
     def render(self, values: dict[str, Any]) -> str:
-        """Format the template; raises if a field is missing, the template
-        is not publishable, or a multi-segment field is empty."""
+        """Render the template against the supplied field values.
+
+        Format the template; raises if a field is missing, the template is not
+        publishable, or a multi-segment field is empty.
+        """
         if not self.publishable:
-            raise TopicError(
-                f'TOPIC {self.raw!r} is subscribe-only (contains anonymous '
-                f'wildcards); cannot be rendered for publish'
-            )
+            msg = f'TOPIC {self.raw!r} is subscribe-only (contains anonymous wildcards); cannot be rendered for publish'
+            raise TopicError(msg)
         # Multi-segment slot: empty value would render `<prefix>/`, which
         # subscribers (regex `(?P<x>.+)`) wouldn't match. Fail loudly.
         if self._named_multi is not None:
             v = values.get(self._named_multi)
             if v == '':
-                raise TopicError(
-                    f"TOPIC {self.raw!r}: multi-segment field "
-                    f"{self._named_multi!r} cannot be empty"
-                )
+                msg = f'TOPIC {self.raw!r}: multi-segment field {self._named_multi!r} cannot be empty'
+                raise TopicError(msg)
         # Python's str.format treats ``{x**}`` as a field name lookup of
         # ``x**`` (which raises). Rewrite the slot to ``{x}`` for the
         # rendering call only — slashes in the value are passed through
@@ -265,9 +262,8 @@ class Template:
         try:
             return fmt.format(**values)
         except KeyError as e:
-            raise TopicError(
-                f'TOPIC {self.raw!r}: missing field {e.args[0]!r} when rendering'
-            ) from e
+            msg = f'TOPIC {self.raw!r}: missing field {e.args[0]!r} when rendering'
+            raise TopicError(msg) from e
 
     def render_selector(self, partial: dict[str, Any]) -> str:
         """Render a query selector key from a partial slot mapping.
@@ -298,11 +294,10 @@ class Template:
         try:
             return fmt.format(**values)
         except KeyError as e:
-            raise TopicError(
-                f'TOPIC {self.raw!r}: unknown field {e.args[0]!r} in selector'
-            ) from e
+            msg = f'TOPIC {self.raw!r}: unknown field {e.args[0]!r} in selector'
+            raise TopicError(msg) from e
 
-    def match(self, key_expr: str) -> Optional[dict[str, str]]:
+    def match(self, key_expr: str) -> dict[str, str] | None:
         """Match an incoming key expression; return ``{field: str}`` or None."""
         m = self._regex.match(key_expr)
         if m is None:

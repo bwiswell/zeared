@@ -1,21 +1,24 @@
-"""Module-level helpers for ``_managed_session`` — the WeakSet registry,
-declare-handle RuntimeWarning emitter, and the small liveness / raw-
-resolution utilities.
+"""Module-level helpers for ``_managed_session``.
+
+Module-level helpers for ``_managed_session`` — the WeakSet registry, declare-handle
+RuntimeWarning emitter, and the small liveness / raw- resolution utilities.
 
 Sibling helper inside the ``_managed_session`` Pattern B subdir.
 """
+
 from __future__ import annotations
 
 import warnings
 import weakref
 from typing import TYPE_CHECKING
 
-import zenoh
-
 if TYPE_CHECKING:
     import asyncio
     import threading
-    from typing import Callable, List, Optional, Protocol, Tuple, Union
+    from collections.abc import Callable
+    from typing import Protocol
+
+    import zenoh
 
     from ._managed_session import ManagedSession
 
@@ -23,14 +26,14 @@ if TYPE_CHECKING:
     # deliberately duck-types ``zenoh.Session`` rather than subclassing it,
     # so the union — not ``zenoh.Session`` — is the honest annotation for
     # every helper that runs ``resolve_raw`` or keys a registry on identity.
-    SessionLike = Union[zenoh.Session, 'ManagedSession']
+    SessionLike = zenoh.Session | ManagedSession
 
-    _ReconnectEntry = Tuple[
+    _ReconnectEntry = tuple[
         'Callable[[ManagedSession], object]',
-        Optional['asyncio.AbstractEventLoop'],
+        'asyncio.AbstractEventLoop' | None,
     ]
 
-    class _ManagedSessionProto(Protocol):
+    class _ManagedSessionProto(Protocol):  # noqa: PYI046  (used via `self:` in the mixins)
         """The slice of ``ManagedSession`` the extracted mixins rely on.
 
         ``_ZenohApiMixin`` and ``_OnReconnectMixin`` are never instantiated
@@ -42,8 +45,8 @@ if TYPE_CHECKING:
         Typing-only: the class body never executes at runtime.
         """
 
-        _lock: 'threading.RLock'
-        _on_reconnect_callbacks: 'List[_ReconnectEntry]'
+        _lock: threading.RLock
+        _on_reconnect_callbacks: list[_ReconnectEntry]
 
         def raw(self) -> zenoh.Session: ...
         def _guard_alive(self) -> None: ...
@@ -61,7 +64,7 @@ if TYPE_CHECKING:
 # wrapper persists in the set as long as those threads run; once
 # ``_teardown`` joins them and the user drops their ref, the entry
 # vanishes naturally.
-_managed_sessions: 'weakref.WeakSet[ManagedSession]' = weakref.WeakSet()
+_managed_sessions: weakref.WeakSet[ManagedSession] = weakref.WeakSet()
 
 
 # Probe interval default; user-configurable via the factory kwarg.
@@ -79,8 +82,11 @@ _DECLARE_HANDLE_WARNING = (
 
 
 def _warn_declare_handle(method: str) -> None:
-    """Emit a once-per-call-site RuntimeWarning. ``stacklevel=3`` points at
-    the user's call site (skipping this helper + the wrapper method)."""
+    """Emit a once-per-call-site RuntimeWarning.
+
+    ``stacklevel=3`` points at the user's call site (skipping this helper + the wrapper
+    method).
+    """
     warnings.warn(
         _DECLARE_HANDLE_WARNING.format(method=method),
         RuntimeWarning,
@@ -89,19 +95,22 @@ def _warn_declare_handle(method: str) -> None:
 
 
 def _is_dead(raw: zenoh.Session) -> bool:
-    """Cheap liveness check. Uses ``is_closed()`` if Zenoh exposes it,
-    falls back to a ``zid()`` call (which raises on a closed session).
+    """Cheap liveness check.
+
+    Uses ``is_closed()`` if Zenoh exposes it, falls back to a ``zid()`` call (which
+    raises on a closed session).
     """
     try:
         if hasattr(raw, 'is_closed'):
             return bool(raw.is_closed())
         raw.zid()
-        return False
     except Exception:  # noqa: BLE001
         return True
+    else:
+        return False
 
 
-def resolve_raw(session: 'SessionLike') -> zenoh.Session:
+def resolve_raw(session: SessionLike) -> zenoh.Session:
     """Return the underlying raw ``zenoh.Session`` for ``session``.
 
     Accepts either a raw ``zenoh.Session`` or a ``ManagedSession`` wrapper.

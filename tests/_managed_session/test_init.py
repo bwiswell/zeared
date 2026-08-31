@@ -1,16 +1,17 @@
 """Smoke tests for ``zeared/_managed_session/__init__.py`` — the
 namespace re-exports for the reconnect-aware session wrapper Pattern B
 subdir."""
+
 from __future__ import annotations
 
 from zeared._managed_session import (
     _DECLARE_HANDLE_WARNING,
     _DEFAULT_PROBE_INTERVAL,
+    ManagedSession,
+    OnReconnectHandle,
     _is_dead,
     _managed_sessions,
     _warn_declare_handle,
-    ManagedSession,
-    OnReconnectHandle,
     resolve_raw,
 )
 

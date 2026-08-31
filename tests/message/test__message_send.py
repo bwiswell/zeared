@@ -5,17 +5,16 @@ Folds in the ``format=`` carrier-hint threading coverage that
 previously lived in ``test_format_threading.py`` — format threading
 is implemented inside ``send`` (and the matching ``_decode``).
 """
+
 from __future__ import annotations
 
 import json
 
 import msgpack
+from conftest import wait
 
 import zeared as z
 from zeared.message._message_send import _MessageSendMixin
-
-from conftest import wait
-
 
 # ---------------------------------------------------------------------------
 # Smoke: mixin surface.

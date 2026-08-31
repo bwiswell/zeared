@@ -1,13 +1,14 @@
 """Shared fixtures for zeared integration tests."""
+
 from __future__ import annotations
 
+import contextlib
 import time
 
 import pytest
 import zenoh
 
 import zeared as z
-
 
 # Suppress Zenoh's default stderr noise during tests.
 zenoh.init_log_from_env_or('error')
@@ -46,6 +47,7 @@ def session_pair():
 def connected_pair(unused_tcp_port_factory=None):
     """Two peer sessions wired via TCP so they discover each other."""
     import random
+
     port = random.randint(20000, 40000)
     endpoint = f'tcp/127.0.0.1:{port}'
 
@@ -69,10 +71,8 @@ def connected_pair(unused_tcp_port_factory=None):
         # Guard double-close — tests may explicitly close a session mid-run
         # (e.g. to fire an LWT).
         for s in (a, b):
-            try:
+            with contextlib.suppress(Exception):
                 s.close()
-            except Exception:
-                pass
 
 
 @pytest.fixture(autouse=True)

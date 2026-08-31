@@ -4,6 +4,7 @@
 End-to-end reconnect-callback coverage lives in ``test__reconnect.py``.
 This file confirms the mixin's public surface and basic registration.
 """
+
 from __future__ import annotations
 
 import threading
@@ -26,6 +27,7 @@ class TestMixinSurface:
 
 class _FakeManaged(_OnReconnectMixin):
     """Minimal stand-in to exercise the mixin without spinning Zenoh."""
+
     def __init__(self):
         self._lock = threading.RLock()
         self._on_reconnect_callbacks = []
@@ -51,7 +53,8 @@ class TestRegistrationAndFire:
         seen: list = []
 
         def raises(s):
-            raise RuntimeError('boom')
+            msg = 'boom'
+            raise RuntimeError(msg)
 
         m.on_reconnect(raises)
         m.on_reconnect(lambda s: seen.append('after-raise'))

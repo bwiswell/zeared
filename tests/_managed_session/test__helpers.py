@@ -2,12 +2,11 @@
 registry, declare-handle RuntimeWarning emitter, and the small
 liveness / raw-resolution utilities.
 """
+
 from __future__ import annotations
 
 import warnings
 import weakref
-
-import pytest
 
 from zeared._managed_session._helpers import (
     _DECLARE_HANDLE_WARNING,
@@ -45,6 +44,7 @@ class TestResolveRaw:
         # A non-ManagedSession object is returned as-is.
         class _Fake:
             pass
+
         f = _Fake()
         assert resolve_raw(f) is f
 
@@ -53,17 +53,21 @@ class TestIsDead:
     def test_returns_true_on_exception(self):
         class _BoomSession:
             def is_closed(self):
-                raise RuntimeError('boom')
+                msg = 'boom'
+                raise RuntimeError(msg)
+
         assert _is_dead(_BoomSession()) is True
 
     def test_returns_false_when_not_closed(self):
         class _AliveSession:
             def is_closed(self):
                 return False
+
         assert _is_dead(_AliveSession()) is False
 
     def test_returns_true_when_is_closed_says_yes(self):
         class _DeadSession:
             def is_closed(self):
                 return True
+
         assert _is_dead(_DeadSession()) is True

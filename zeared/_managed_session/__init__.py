@@ -19,6 +19,7 @@ Other helpers:
 Public surface unchanged: callers continue to write
 ``from zeared._managed_session import ManagedSession``.
 """
+
 from typing import TYPE_CHECKING
 
 from ._helpers import (
@@ -33,15 +34,15 @@ from ._managed_session import ManagedSession
 from ._on_reconnect_handle import OnReconnectHandle
 
 if TYPE_CHECKING:
-    from ._helpers import SessionLike
+    # Re-exported for annotations only — deliberately absent from __all__.
+    from ._helpers import SessionLike as SessionLike
 
 
 __all__ = [
-    'ManagedSession',
-    'SessionLike',
-    'OnReconnectHandle',
     '_DECLARE_HANDLE_WARNING',
     '_DEFAULT_PROBE_INTERVAL',
+    'ManagedSession',
+    'OnReconnectHandle',
     '_is_dead',
     '_managed_sessions',
     '_warn_declare_handle',

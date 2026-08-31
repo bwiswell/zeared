@@ -1,17 +1,26 @@
-"""Reconnect restoration helpers — the post-reopen walks plus the
-cancellable backoff loop.
+"""Reconnect restoration helpers — the post-reopen walks plus the cancellable backoff loop.
 
 Sibling helper file inside the ``_reconnect`` Pattern B subdir.
 """
+
 from __future__ import annotations
 
+import contextlib
 import logging
-import threading
+from typing import TYPE_CHECKING
 
-from .._managed_session import ManagedSession
+if TYPE_CHECKING:
+    import threading
+    from collections.abc import Callable
 
+    import zenoh
+
+    from .._managed_session import ManagedSession
 
 _log = logging.getLogger('zeared.reconnect')
+
+# Attempts logged at INFO before escalating to WARNING.
+_QUIET_ATTEMPTS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -20,34 +29,40 @@ _log = logging.getLogger('zeared.reconnect')
 # ---------------------------------------------------------------------------
 
 
-class _ReconnectAborted(Exception):
+class _ReconnectAbortedError(Exception):
     pass
 
 
-def _open_with_backoff(
-    open_fn,
-    *, initial: float, cap: float,
-    max_attempts, label: str,
+def _open_with_backoff(  # noqa: PLR0913
+    open_fn: Callable[[], zenoh.Session],
+    *,
+    initial: float,
+    cap: float,
+    max_attempts: int | None,
+    label: str,
     cancel: threading.Event,
-):
+) -> zenoh.Session:
     backoff = initial
     attempts = 0
     while True:
         try:
             return open_fn()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             attempts += 1
             if max_attempts is not None and attempts >= max_attempts:
                 raise
-            level = logging.INFO if attempts <= 3 else logging.WARNING
+            level = logging.INFO if attempts <= _QUIET_ATTEMPTS else logging.WARNING
             _log.log(
                 level,
                 '%s reconnect failed (attempt %d): %s — retrying in %.1fs',
-                label, attempts, e, backoff,
+                label,
+                attempts,
+                e,
+                backoff,
             )
             # Cancellable sleep — z.release sets this event during teardown.
             if cancel.wait(backoff):
-                raise _ReconnectAborted()
+                raise _ReconnectAbortedError from e
             backoff = min(backoff * 2, cap)
 
 
@@ -57,21 +72,18 @@ def _open_with_backoff(
 
 
 def _restore_retention(managed: ManagedSession) -> None:
-    """Walk the retention registry; redeclare queryables on every cache
-    bound to this ManagedSession.
+    """Walk the retention registry; redeclare queryables on every cache bound to this ManagedSession.
 
     Cache content (``_cache``, ``_index``) is preserved — only the live
     Zenoh queryable handles change. Without this step, queryables stay
     bound to the dead raw and late subscribers' ``session.get(wildcard)``
     silently misses retained values.
     """
-    from ..retention import _registry as _retention_registry, _registry_lock
+    from ..retention import _registry as _retention_registry
+    from ..retention import _registry_lock
 
     with _registry_lock:
-        candidates = [
-            cache for cache in _retention_registry.values()
-            if cache._session is managed
-        ]
+        candidates = [cache for cache in _retention_registry.values() if cache._session is managed]
     for cache in candidates:
         try:
             cache._redeclare_queryables()
@@ -83,8 +95,11 @@ def _restore_retention(managed: ManagedSession) -> None:
 
 
 def _restore_subscribers(managed: ManagedSession) -> None:
-    """Walk the subscriber registry keyed on this ManagedSession and
-    re-declare each Subscriber against the new raw session."""
+    """Re-declare every registered Subscriber against the new raw session.
+
+    Walk the subscriber registry keyed on this ManagedSession and re-declare each
+    Subscriber against the new raw session.
+    """
     from ..subscriber import _subscribers, _subscribers_lock
 
     sid = id(managed)
@@ -101,19 +116,20 @@ def _restore_subscribers(managed: ManagedSession) -> None:
                 'subscriber redeclare failed for %s — closing it',
                 getattr(sub, '_msg_cls', None),
             )
-            try:
+            with contextlib.suppress(Exception):
                 sub.close()
-            except Exception:  # noqa: BLE001
-                pass
 
 
 def _restore_queryables(managed: ManagedSession) -> None:
-    """Walk the queryable registry keyed on this ManagedSession and
-    re-declare each ``Queryable`` against the new raw session.
+    """Re-declare every registered Queryable against the new raw session.
+
+    Walk the queryable registry keyed on this ManagedSession and re-declare each
+    ``Queryable`` against the new raw session.
 
     Queryables hold no replayed state — just the handler closure — so a
     failed redeclare closes the handle rather than retrying (mirrors the
-    subscriber policy)."""
+    subscriber policy).
+    """
     from ..queryable import _queryables, _queryables_lock
 
     sid = id(managed)
@@ -130,10 +146,8 @@ def _restore_queryables(managed: ManagedSession) -> None:
                 'queryable redeclare failed for %s — closing it',
                 getattr(qbl, '_msg_cls', None),
             )
-            try:
+            with contextlib.suppress(Exception):
                 qbl.close()
-            except Exception:  # noqa: BLE001
-                pass
 
 
 def _restore_wills(managed: ManagedSession) -> None:
@@ -143,7 +157,8 @@ def _restore_wills(managed: ManagedSession) -> None:
     OLD zid disappear (synthesise the will) and the NEW zid appear with
     fresh wills — legitimate offline → online from their perspective.
     """
-    from ..presence import _registry as _presence_registry, _registry_lock
+    from ..presence import _registry as _presence_registry
+    from ..presence import _registry_lock
 
     raw = managed.raw()
 
@@ -151,10 +166,7 @@ def _restore_wills(managed: ManagedSession) -> None:
         # The old presence-state was keyed on id(old_raw). Find any
         # state(s) registered under THIS managed session by walking and
         # matching the session ref.
-        matches = [
-            k for k, state in _presence_registry.items()
-            if state.session is managed or state.session is raw
-        ]
+        matches = [k for k, state in _presence_registry.items() if state.session is managed or state.session is raw]
 
     for key in matches:
         with _registry_lock:

@@ -1,5 +1,4 @@
-"""Queryable dispatch — builds the per-query handler closure that the
-underlying ``zenoh.Queryable`` invokes.
+"""Queryable dispatch — builds the per-query handler closure that the underlying ``zenoh.Queryable`` invokes.
 
 Handles both handler forms:
 
@@ -17,28 +16,31 @@ is held until the coroutine resolves, then its return value is replied.
 Sibling helper inside the ``queryable`` Pattern B subdir — mirrors
 ``subscriber/_subscriber_dispatch.py``.
 """
+
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 from ..errors import QueryableError
 from ._query_context import QueryContext
 
 if TYPE_CHECKING:
-    from ..message import Message
     import asyncio
+    from collections.abc import Callable
+    from concurrent.futures import Future
 
     import zenoh
+
+    from ..message import Message
 
 
 _log = logging.getLogger('zeared.queryable')
 
 
-def _reply_result(ctx: QueryContext, result, msg_cls: type,
-                  on_error: Optional[Callable]) -> None:
-    """Reply with a handler's return value: a single ``Message``, an
-    iterable of them, or ``None`` (no-op)."""
+def _reply_result(ctx: QueryContext, result: Any, msg_cls: type[Message], on_error: Callable | None) -> None:
+    """Reply with a handler's return value: a single ``Message``, an iterable of them, or ``None`` (no-op)."""
     from ..message import Message
 
     if result is None:
@@ -48,34 +50,35 @@ def _reply_result(ctx: QueryContext, result, msg_cls: type,
         iterator = iter(items)
     except TypeError:
         _log.warning(
-            '%s: on_query handler returned %r; expected a Message, an '
-            'iterable of Messages, or None', msg_cls.__name__, type(result),
+            '%s: on_query handler returned %r; expected a Message, an iterable of Messages, or None',
+            msg_cls.__name__,
+            type(result),
         )
         return
     for item in iterator:
         try:
             ctx.reply(item)
         except Exception as exc:  # noqa: BLE001
-            wrapped = QueryableError(
-                f'{msg_cls.__name__}: query reply failed: {exc}'
-            )
+            wrapped = QueryableError(f'{msg_cls.__name__}: query reply failed: {exc}')
             wrapped.__cause__ = exc
             if on_error is not None:
                 on_error(wrapped, b'')
             else:
                 _log.warning(
-                    '%s: query reply failed: %s', msg_cls.__name__, exc,
+                    '%s: query reply failed: %s',
+                    msg_cls.__name__,
+                    exc,
                 )
 
 
 def _build_query_dispatch(
-    msg_cls: 'type[Message]',
+    msg_cls: type[Message],
     handler: Callable,
-    on_error: Optional[Callable[[Exception, bytes], None]],
+    on_error: Callable[[Exception, bytes], None] | None,
     *,
     is_async: bool,
-    loop: 'Optional[asyncio.AbstractEventLoop]',
-) -> Callable[['zenoh.Query'], None]:
+    loop: asyncio.AbstractEventLoop | None,
+) -> Callable[[zenoh.Query], None]:
     """Build the per-query dispatch closure for a ``Queryable``.
 
     The returned closure is what the underlying ``zenoh.Queryable`` calls
@@ -85,20 +88,19 @@ def _build_query_dispatch(
     to Zenoh.
     """
 
-    def dispatch(query: 'zenoh.Query') -> None:
+    def dispatch(query: zenoh.Query) -> None:
         try:
             ctx = QueryContext(query, msg_cls)
         except Exception as exc:  # noqa: BLE001
-            wrapped = QueryableError(
-                f'{msg_cls.__name__}: failed to build query context: {exc}'
-            )
+            wrapped = QueryableError(f'{msg_cls.__name__}: failed to build query context: {exc}')
             wrapped.__cause__ = exc
             if on_error is not None:
                 on_error(wrapped, b'')
             else:
                 _log.warning(
                     '%s: failed to build query context: %s',
-                    msg_cls.__name__, exc,
+                    msg_cls.__name__,
+                    exc,
                 )
             return
 
@@ -113,19 +115,19 @@ def _build_query_dispatch(
             return
         _reply_result(ctx, result, msg_cls, on_error)
 
-    def _dispatch_async(ctx: QueryContext, query: 'zenoh.Query') -> None:
+    def _dispatch_async(ctx: QueryContext, query: zenoh.Query) -> None:
         import asyncio
 
         if loop is None or loop.is_closed():
             _log.warning(
-                '%s: async on_query handler has no running loop; dropping '
-                'query', msg_cls.__name__,
+                '%s: async on_query handler has no running loop; dropping query',
+                msg_cls.__name__,
             )
             return
         coro = handler(ctx)
         future = asyncio.run_coroutine_threadsafe(coro, loop)
 
-        def _on_done(fut) -> None:
+        def _on_done(fut: Future) -> None:
             try:
                 result = fut.result()
             except Exception as exc:  # noqa: BLE001
@@ -141,20 +143,21 @@ def _build_query_dispatch(
 
 
 def _handle_handler_error(
-    query: 'zenoh.Query', msg_cls: type,
-    on_error: Optional[Callable], exc: Exception,
+    query: zenoh.Query,
+    msg_cls: type,
+    on_error: Callable | None,
+    exc: Exception,
 ) -> None:
-    """Route a handler exception through ``on_error`` / logging and send a
-    best-effort error reply so the getter isn't left hanging."""
-    wrapped = QueryableError(
-        f'{msg_cls.__name__}: on_query handler raised: {exc}'
-    )
+    """Route a handler exception and send a best-effort error reply.
+
+    Route a handler exception through ``on_error`` / logging and send a best-effort
+    error reply so the getter isn't left hanging.
+    """
+    wrapped = QueryableError(f'{msg_cls.__name__}: on_query handler raised: {exc}')
     wrapped.__cause__ = exc
     if on_error is not None:
         on_error(wrapped, b'')
     else:
         _log.exception('%s: on_query handler raised', msg_cls.__name__)
-    try:
+    with contextlib.suppress(Exception):
         query.reply_err(str(exc).encode('utf-8'))
-    except Exception:  # noqa: BLE001
-        pass

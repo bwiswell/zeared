@@ -12,10 +12,12 @@ handed to handlers lives in ``_query_context.py``; the module-level
 registry used by ``z.release(session=)`` and the reconnect machinery
 lives in ``_queryable_registry.py``.
 """
+
 from __future__ import annotations
 
+import contextlib
 import inspect
-from typing import TYPE_CHECKING, Callable, Generic, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Self, TypeVar
 
 from .._managed_session import resolve_raw
 from ..errors import QueryableError, TopicError
@@ -23,8 +25,11 @@ from ._query_dispatch import _build_query_dispatch
 from ._queryable_registry import _deregister_queryable, _register_queryable
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import zenoh
 
+    from .._managed_session import ManagedSession, SessionLike
     from ..message import Message
 
 
@@ -33,7 +38,7 @@ if TYPE_CHECKING:
 M = TypeVar('M', bound='Message')
 
 
-class Queryable(Generic[M]):
+class Queryable[M: 'Message']:
     """Zeared queryable handle.
 
     Wraps N underlying ``zenoh.Queryable`` instances — one per declared
@@ -51,13 +56,20 @@ class Queryable(Generic[M]):
     """
 
     __slots__ = (
-        '_zenoh_queryables', '_session', '_closed',
+        '_auto_reconnect',
+        '_closed',
+        '_handler',
+        '_is_async',
+        '_loop',
         # Redeclaration state — populated by `_declare`, used on reconnect.
-        '_msg_cls', '_handler', '_on_error', '_auto_reconnect',
-        '_is_async', '_loop',
+        '_msg_cls',
+        '_on_error',
+        '_session',
+        '_zenoh_queryables',
     )
 
-    def __init__(self, zenoh_queryables: tuple, session=None):
+    def __init__(self, zenoh_queryables: tuple, session: SessionLike | None = None) -> None:
+        """Wrap already-declared zenoh queryables as a zeared handle."""
         self._zenoh_queryables = zenoh_queryables
         self._session = session
         self._closed = False
@@ -71,23 +83,24 @@ class Queryable(Generic[M]):
     @classmethod
     def _declare(
         cls,
-        msg_cls: Type['Message'],
-        session: 'zenoh.Session',
+        msg_cls: type[Message],
+        session: SessionLike,
         handler: Callable,
-        on_error: Optional[Callable[[Exception, bytes], None]],
-        auto_reconnect: bool = True,
-    ) -> 'Queryable':
+        on_error: Callable[[Exception, bytes], None] | None,
+        auto_reconnect: bool = True,  # noqa: FBT001, FBT002
+    ) -> Queryable:
         # RETAINED classes already own a cache-serving queryable over the
         # same template wildcard; a second compute-serving queryable would
         # answer the same get with competing replies. One or the other.
         if getattr(msg_cls, 'RETAINED', False):
-            raise TopicError(
+            msg = (
                 f'{msg_cls.__name__}: on_query is not allowed on a RETAINED '
                 f'class — retention already serves a queryable over the same '
                 f'topic. Use one or the other.'
             )
+            raise TopicError(msg)
 
-        tpls = msg_cls._templates()
+        tpls = msg_cls._templates()  # noqa: SLF001
 
         # Async handler: capture the loop running at on_query time (mirrors
         # the on_message async-callback contract). Fail loud if none.
@@ -95,17 +108,23 @@ class Queryable(Generic[M]):
         loop = None
         if is_async:
             import asyncio
+
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError as e:
-                raise QueryableError(
+                msg = (
                     'async handler passed to on_query, but no running event '
                     'loop at declare time; call from within an async context '
                     'or use a sync handler'
-                ) from e
+                )
+                raise QueryableError(msg) from e
 
         dispatch = _build_query_dispatch(
-            msg_cls, handler, on_error, is_async=is_async, loop=loop,
+            msg_cls,
+            handler,
+            on_error,
+            is_async=is_async,
+            loop=loop,
         )
 
         # Internal declaration — route through the raw to avoid the
@@ -115,18 +134,15 @@ class Queryable(Generic[M]):
         zenoh_queryables: list = []
         try:
             for tpl in tpls.all:
-                zenoh_queryables.append(
+                zenoh_queryables.append(  # noqa: PERF401  (partial list drives rollback below)
                     raw.declare_queryable(tpl.wildcard, dispatch),
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             for q in zenoh_queryables:
-                try:
+                with contextlib.suppress(Exception):
                     q.undeclare()
-                except Exception:  # noqa: BLE001
-                    pass
-            raise QueryableError(
-                f'{msg_cls.__name__}: failed to declare queryable: {e}'
-            ) from e
+            msg = f'{msg_cls.__name__}: failed to declare queryable: {e}'
+            raise QueryableError(msg) from e
 
         handle = cls(tuple(zenoh_queryables), session=session)
         handle._msg_cls = msg_cls
@@ -138,9 +154,10 @@ class Queryable(Generic[M]):
         _register_queryable(session, handle)
         return handle
 
-    def _redeclare(self, new_raw_session, managed_session) -> None:
-        """Rebuild the underlying ``zenoh.Queryable`` set against
-        ``new_raw_session``. Called by the reconnect machinery.
+    def _redeclare(self, new_raw_session: zenoh.Session, managed_session: ManagedSession) -> None:  # noqa: ARG002  (mirrors Subscriber._redeclare)
+        """Rebuild the underlying ``zenoh.Queryable`` set against ``new_raw_session``.
+
+        Called by the reconnect machinery.
 
         Queryables hold no replayed state — just the handler closure — so
         this simply re-declares each template wildcard against the fresh
@@ -150,43 +167,45 @@ class Queryable(Generic[M]):
         if self._closed or self._msg_cls is None or self._handler is None:
             return
         msg_cls = self._msg_cls
-        tpls = msg_cls._templates()
+        tpls = msg_cls._templates()  # noqa: SLF001
         dispatch = _build_query_dispatch(
-            msg_cls, self._handler, self._on_error,
-            is_async=self._is_async, loop=self._loop,
+            msg_cls,
+            self._handler,
+            self._on_error,
+            is_async=self._is_async,
+            loop=self._loop,
         )
         new_queryables: list = []
         try:
             for tpl in tpls.all:
-                new_queryables.append(
+                new_queryables.append(  # noqa: PERF401  (partial list drives rollback below)
                     new_raw_session.declare_queryable(tpl.wildcard, dispatch),
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             for q in new_queryables:
-                try:
+                with contextlib.suppress(Exception):
                     q.undeclare()
-                except Exception:  # noqa: BLE001
-                    pass
-            raise QueryableError(
-                f'{msg_cls.__name__}: redeclare after reconnect failed: {e}'
-            ) from e
+            msg = f'{msg_cls.__name__}: redeclare after reconnect failed: {e}'
+            raise QueryableError(msg) from e
         self._zenoh_queryables = tuple(new_queryables)
 
     def close(self) -> None:
+        """Undeclare every underlying zenoh queryable. Idempotent."""
         if self._closed:
             return
         self._closed = True
         for q in self._zenoh_queryables:
-            try:
+            with contextlib.suppress(Exception):
                 q.undeclare()
-            except Exception:  # noqa: BLE001
-                pass
-        _deregister_queryable(self._session, self)
+        if self._session is not None:
+            _deregister_queryable(self._session, self)
 
-    def __enter__(self) -> 'Queryable':
+    def __enter__(self) -> Self:
+        """Enter the context manager — returns the queryable handle."""
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *exc: object) -> None:
+        """Exit the context manager — closes the handle."""
         self.close()
 
 

@@ -5,6 +5,7 @@
 Detailed async coverage lives in ``test_async_.py``. This file confirms
 the mixin surface.
 """
+
 from __future__ import annotations
 
 from zeared.message._message_async import _MessageAsyncMixin

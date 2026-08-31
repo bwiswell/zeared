@@ -1,9 +1,9 @@
 """Tests for the TypeScript emitter (``zeared.doc.typescript``)."""
+
 from __future__ import annotations
 
-from zeared.doc.typescript import emit, generate, main, ts_type
-
 from doc.ts_models import Spectrum
+from zeared.doc.typescript import emit, generate, main, ts_type
 
 
 def _field(cls, attr):
@@ -18,11 +18,11 @@ class TestTsType:
         assert ts_type(_field(Spectrum, 'id')) == 'number'
         assert ts_type(_field(Spectrum, 'name')) == 'string'
         assert ts_type(_field(Spectrum, 'flag')) == 'boolean'
-        assert ts_type(_field(Spectrum, 'blob')) == 'string'      # bytes → base64
+        assert ts_type(_field(Spectrum, 'blob')) == 'string'  # bytes → base64
 
     def test_decimal_as_number_vs_string(self):
-        assert ts_type(_field(Spectrum, 'price')) == 'number'     # as_number=True
-        assert ts_type(_field(Spectrum, 'label')) == 'string'     # default form
+        assert ts_type(_field(Spectrum, 'price')) == 'number'  # as_number=True
+        assert ts_type(_field(Spectrum, 'label')) == 'string'  # default form
 
     def test_many_and_keyed(self):
         assert ts_type(_field(Spectrum, 'tags')) == 'string[]'
@@ -40,10 +40,7 @@ class TestTsType:
 
     def test_union_nested_envelope(self):
         t = ts_type(_field(Spectrum, 'action'))
-        assert t == (
-            '{ type: "start"; args: StartArgs } | '
-            '{ type: "stop"; args: StopArgs }'
-        )
+        assert t == ('{ type: "start"; args: StartArgs } | { type: "stop"; args: StopArgs }')
 
     def test_union_flat_envelope(self):
         assert ts_type(_field(Spectrum, 'kind')) == '(FlatA & { kind: "a" })'
@@ -54,8 +51,8 @@ class TestEmit:
         self.ts = generate('doc.ts_models')
 
     def test_optionality_and_nullability(self):
-        assert '  id: number;' in self.ts            # required
-        assert '  count?: number;' in self.ts        # optional, non-null default
+        assert '  id: number;' in self.ts  # required
+        assert '  count?: number;' in self.ts  # optional, non-null default
         assert '  ratio?: number | null;' in self.ts  # nullable
 
     def test_enum_aliases_emitted(self):
@@ -63,9 +60,9 @@ class TestEmit:
         assert 'export type Mode = "fast" | "slow";' in self.ts
 
     def test_wire_key_rename_and_quoting(self):
-        assert '  wireName: string;' in self.ts      # data_key rename
-        assert '  "x-ray": string;' in self.ts       # non-identifier key quoted
-        assert 'renamed' not in self.ts              # attr name not leaked
+        assert '  wireName: string;' in self.ts  # data_key rename
+        assert '  "x-ray": string;' in self.ts  # non-identifier key quoted
+        assert 'renamed' not in self.ts  # attr name not leaked
 
     def test_field_jsdoc(self):
         assert '/** a documented field */' in self.ts

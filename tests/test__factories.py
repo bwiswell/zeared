@@ -9,6 +9,7 @@ in 0.0.18 (``_resolve_retry_knobs`` and ``_finalise_session``) and the
 bench / config-build helpers (``_build_config_for_peer`` /
 ``_build_config_for_client``) directly.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -18,11 +19,12 @@ from zeared._factories import (
     _MISSING,
     _build_config_for_client,
     _build_config_for_peer,
-    _finalise_session,
     _resolve_retry_knobs,
     client,
-    open as z_open,
     peer,
+)
+from zeared._factories import (
+    open as z_open,
 )
 
 
@@ -31,7 +33,11 @@ class TestResolveRetryKnobs:
 
     def test_no_config_no_kwargs_uses_defaults(self):
         retry, init_b, max_b, max_a = _resolve_retry_knobs(
-            None, _MISSING, _MISSING, _MISSING, _MISSING,
+            None,
+            _MISSING,
+            _MISSING,
+            _MISSING,
+            _MISSING,
         )
         assert retry is False
         assert init_b == 0.1
@@ -40,11 +46,18 @@ class TestResolveRetryKnobs:
 
     def test_config_provides_base(self):
         cfg = z.SessionConfig(
-            mode=z.Mode.PEER, retry=True, initial_backoff=0.5,
-            max_backoff=60.0, max_attempts=10,
+            mode=z.Mode.PEER,
+            retry=True,
+            initial_backoff=0.5,
+            max_backoff=60.0,
+            max_attempts=10,
         )
         retry, init_b, max_b, max_a = _resolve_retry_knobs(
-            cfg, _MISSING, _MISSING, _MISSING, _MISSING,
+            cfg,
+            _MISSING,
+            _MISSING,
+            _MISSING,
+            _MISSING,
         )
         assert retry is True
         assert init_b == 0.5
@@ -53,11 +66,18 @@ class TestResolveRetryKnobs:
 
     def test_kwargs_override_config(self):
         cfg = z.SessionConfig(
-            mode=z.Mode.PEER, retry=True, initial_backoff=0.5,
-            max_backoff=60.0, max_attempts=10,
+            mode=z.Mode.PEER,
+            retry=True,
+            initial_backoff=0.5,
+            max_backoff=60.0,
+            max_attempts=10,
         )
         retry, init_b, max_b, max_a = _resolve_retry_knobs(
-            cfg, False, 0.01, 1.0, 3,
+            cfg,
+            False,  # noqa: FBT003
+            0.01,
+            1.0,
+            3,
         )
         assert retry is False
         assert init_b == 0.01
@@ -66,12 +86,19 @@ class TestResolveRetryKnobs:
 
     def test_partial_kwargs_layer_over_config(self):
         cfg = z.SessionConfig(
-            mode=z.Mode.PEER, retry=True, initial_backoff=0.5,
-            max_backoff=60.0, max_attempts=10,
+            mode=z.Mode.PEER,
+            retry=True,
+            initial_backoff=0.5,
+            max_backoff=60.0,
+            max_attempts=10,
         )
         # Only ``max_attempts`` overridden — others fall through to config.
         retry, init_b, max_b, max_a = _resolve_retry_knobs(
-            cfg, _MISSING, _MISSING, _MISSING, 99,
+            cfg,
+            _MISSING,
+            _MISSING,
+            _MISSING,
+            99,
         )
         assert retry is True
         assert init_b == 0.5
@@ -110,6 +137,7 @@ class TestBuildConfigForPeer:
 
     def test_user_config_passthrough(self):
         import zenoh
+
         user_cfg = zenoh.Config()
         out = _build_config_for_peer(None, None, user_cfg, timestamping=True)
         assert out is user_cfg

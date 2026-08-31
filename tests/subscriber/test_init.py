@@ -1,10 +1,12 @@
 """Smoke tests for ``zeared/subscriber/__init__.py`` — verifies the
 public surface of the namespace re-exports."""
+
 from __future__ import annotations
 
 from zeared.subscriber import (
-    M,
     _SCHEMA_MISMATCH_CACHE_MAX,
+    M,
+    Subscriber,
     _adapt_async_callback,
     _build_dispatch,
     _close_subscribers_for,
@@ -16,7 +18,6 @@ from zeared.subscriber import (
     _subscribers,
     _subscribers_lock,
     _wants_meta,
-    Subscriber,
 )
 
 

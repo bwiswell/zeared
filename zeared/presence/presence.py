@@ -23,14 +23,19 @@ in ``_presence_session.py``; the cross-session observer lives in
 ``_presence_observer.py``; the synthesised-sample shim is in
 ``_presence_synthesized_sample.py``.
 """
+
 from __future__ import annotations
 
 import hashlib
+from typing import TYPE_CHECKING
 
 import seared as s
 
-from .._codec import Encoding
+if TYPE_CHECKING:
+    from .._codec import Encoding
 
+if TYPE_CHECKING:
+    from .._managed_session import SessionLike
 
 ALIVE_PREFIX = '__zeared/alive'
 WILL_PREFIX = '__zeared/will'
@@ -42,7 +47,7 @@ WILL_PREFIX = '__zeared/will'
 _GC_INTERVAL_SECONDS = 60.0
 
 
-def _resolve_gc_interval(session, observer_override=None) -> float:
+def _resolve_gc_interval(session: SessionLike, observer_override: float | None = None) -> float:
     """Resolve the per-iteration GC interval.
 
     Precedence: observer-instance override (``observer._gc_interval``,
@@ -66,6 +71,7 @@ def _envelope_encoding() -> Encoding:
     """
     # Imported here to avoid a circular import at module load.
     import zeared as z
+
     return 'json' if z.debug else 'msgpack'
 
 
@@ -79,15 +85,18 @@ class _WillEnvelope(s.Seared):
     subscriber sees ``None``, mismatches, and drops the will. ``default=None``
     keeps envelopes from pre-0.2.4 peers (no ``schema`` key) decodable.
     """
+
+    # fmt: off
+    # Column-aligned deliberately — this is the will-envelope wire contract.
     source_zid:      str        = s.Str(required=True)
     target_key_expr: str        = s.Str(required=True)
     encoding:        str        = s.Str(required=True)
     payload:         bytes      = s.Bytes(required=True)
     schema:          str | None = s.Str(default=None)
+    # fmt: on
 
 
 def _slug(cls_qualname: str, concrete_topic: str) -> str:
     """Deterministic short slug for a (cls, concrete_topic) pair."""
-    return hashlib.sha1(
-        f'{cls_qualname}:{concrete_topic}'.encode()
-    ).hexdigest()[:16]
+    digest = hashlib.sha1(f'{cls_qualname}:{concrete_topic}'.encode(), usedforsecurity=False)
+    return digest.hexdigest()[:16]

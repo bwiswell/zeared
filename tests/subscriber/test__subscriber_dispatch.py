@@ -6,11 +6,12 @@ Folds in the retention-dedupe coverage that previously lived in
 ``test_dedupe.py`` — dedupe is implemented as state inside the
 ``_build_dispatch`` closure.
 """
+
 from __future__ import annotations
 
 import time
 
-import pytest
+from conftest import wait
 
 import zeared as z
 from zeared.subscriber._subscriber_dispatch import (
@@ -20,9 +21,6 @@ from zeared.subscriber._subscriber_dispatch import (
     _pick_encoding,
     _wants_meta,
 )
-
-from conftest import wait
-
 
 # ---------------------------------------------------------------------------
 # Smoke: public surface of the dispatch helpers.
@@ -41,26 +39,30 @@ class TestPublicSurface:
 class TestWantsMeta:
     def test_one_arg_callable_no_meta(self):
         def cb(msg): ...
+
         assert _wants_meta(cb) is False
 
     def test_two_arg_callable_wants_meta(self):
         def cb(msg, meta): ...
+
         assert _wants_meta(cb) is True
 
     def test_var_args_wants_meta(self):
         def cb(*args): ...
+
         assert _wants_meta(cb) is True
 
     def test_unintrospectable_falls_back_to_no_meta(self):
         # A C-built-in or similar might not introspect cleanly.
         # ``_wants_meta`` should swallow and return False rather than raise.
-        result = _wants_meta(print)   # builtin — has signature, but exercise
+        result = _wants_meta(print)  # builtin — has signature, but exercise
         assert result in (True, False)
 
 
 class TestAdaptAsyncCallback:
     def test_sync_callback_returned_unchanged(self):
         def cb(msg): ...
+
         assert _adapt_async_callback(cb) is cb
 
 
@@ -88,7 +90,8 @@ class TestDedupeDefaultOn:
 
         received: list[int] = []
         sub = Tele.on_message(
-            lambda m: received.append(m.v), session=session_b,
+            lambda m: received.append(m.v),
+            session=session_b,
         )
         wait(0.5)
         sub.close()
@@ -108,12 +111,13 @@ class TestDedupeDefaultOn:
 
         received: list[int] = []
         sub = Tele.on_message(
-            lambda m: received.append(m.v), session=session_b,
+            lambda m: received.append(m.v),
+            session=session_b,
         )
         wait(0.3)
 
         Tele(id=1, v=10).send(session=session_a)
-        time.sleep(0.05)   # ensure distinct HLC timestamps
+        time.sleep(0.05)  # ensure distinct HLC timestamps
         Tele(id=1, v=20).send(session=session_a)
         wait(0.5)
         sub.close()
@@ -140,7 +144,8 @@ class TestDedupeOptOut:
 
         received: list[int] = []
         sub = Tele.on_message(
-            lambda m: received.append(m.v), session=session_b,
+            lambda m: received.append(m.v),
+            session=session_b,
         )
         wait(0.5)
         sub.close()
@@ -151,6 +156,7 @@ class TestDedupeOptOut:
 class TestSynthesisedWillBypassesDedupe:
     """Wills carry timestamp=None and must always dispatch even when
     DEDUPE is on."""
+
     def test_will_synthesis_dispatched(self, connected_pair):
         session_a, session_b = connected_pair
 
@@ -160,7 +166,7 @@ class TestSynthesisedWillBypassesDedupe:
             RETAINED = True
             LIVELINESS = True
             DEDUPE = True
-            name:  str = z.Str(required=True)
+            name: str = z.Str(required=True)
             state: str = z.Str(required=True)
 
         Status(name='alice', state='online').send(session=session_a)
@@ -169,7 +175,8 @@ class TestSynthesisedWillBypassesDedupe:
 
         states: list[str] = []
         sub = Status.on_message(
-            lambda m: states.append(m.state), session=session_b,
+            lambda m: states.append(m.state),
+            session=session_b,
         )
         wait(0.3)
 
@@ -185,6 +192,7 @@ class TestNonRetainedClassUnaffected:
     def test_no_dedupe_overhead_for_non_retained(self, session):
         """RETAINED = False classes don't activate dedupe regardless of
         DEDUPE attribute value."""
+
         @z.zeared
         class Tick(z.Message):
             TOPIC = 'dd/plain/{n}'
@@ -264,7 +272,7 @@ class TestOriginSignal:
             TOPIC = 'orig/will/{name}'
             RETAINED = True
             LIVELINESS = True
-            name:  str = z.Str(required=True)
+            name: str = z.Str(required=True)
             state: str = z.Str(required=True)
 
         Status(name='alice', state='online').send(session=session_a)

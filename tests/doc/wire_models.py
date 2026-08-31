@@ -1,4 +1,5 @@
 """Fixture Message classes for the zeared doc layer."""
+
 from __future__ import annotations
 
 import zeared as z

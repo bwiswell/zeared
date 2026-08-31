@@ -1,21 +1,24 @@
-"""``_UnretainDescriptor`` and ``_unretain_impl`` — instance-vs-class
-dispatch for ``Message.unretain``.
+"""``_UnretainDescriptor`` and ``_unretain_impl`` — instance-vs-class dispatch for ``Message.unretain``.
 
 Sibling helper inside the ``message`` Pattern B subdir. Lives outside
 the mixin set because ``unretain`` is implemented as a descriptor on
 the class (not a method); it intercepts both ``msg.unretain()`` and
 ``Cls.unretain(**key_fields)``.
 """
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    import zenoh
+    from collections.abc import Callable
+
+    from .._managed_session import SessionLike
+    from .message import Message
 
 
 class _UnretainDescriptor:
-    """Dispatches ``unretain`` instance-vs-class at access:
+    """Dispatch ``unretain`` on instance-vs-class access.
 
     - ``msg.unretain(*, session=None, topic=None)`` — drops the cache entry
       for the concrete topic derived from ``self``'s template field values
@@ -26,38 +29,38 @@ class _UnretainDescriptor:
     Both forms require ``RETAINED = True`` on the class.
     """
 
-    def __get__(self, instance, owner):
+    def __get__(self, instance: Message | None, owner: type[Message]) -> Callable[..., None]:
         if instance is None:
+
             def unretain(
                 *,
-                session=None,
-                topic=None,
-                **key_fields,
+                session: SessionLike | None = None,
+                topic: str | None = None,
+                **key_fields: Any,
             ) -> None:
                 _unretain_impl(owner, key_fields, session=session, topic=topic)
+
             unretain.__qualname__ = f'{owner.__qualname__}.unretain'
             return unretain
 
         def unretain(
             *,
-            session=None,
-            topic=None,
+            session: SessionLike | None = None,
+            topic: str | None = None,
         ) -> None:
-            key_fields = {
-                name: getattr(instance, name)
-                for name in owner._templates().field_names
-            }
+            key_fields = {name: getattr(instance, name) for name in owner._templates().field_names}  # noqa: SLF001
             _unretain_impl(owner, key_fields, session=session, topic=topic)
+
         unretain.__qualname__ = f'{owner.__qualname__}.unretain'
         return unretain
 
 
 def _unretain_impl(
-    cls,
+    cls: type[Message],
     key_fields: dict,
     *,
-    session: Optional['zenoh.Session'],
-    topic: Optional[str],
+    session: SessionLike | None,
+    topic: str | None,
 ) -> None:
     """Shared implementation for ``msg.unretain()`` and ``Cls.unretain(**)``.
 
@@ -71,9 +74,8 @@ def _unretain_impl(
     from ..retention import get_retention_cache
 
     if not getattr(cls, 'RETAINED', False):
-        raise TopicError(
-            f'{cls.__name__}.unretain: class does not have RETAINED = True'
-        )
+        msg = f'{cls.__name__}.unretain: class does not have RETAINED = True'
+        raise TopicError(msg)
 
     sess = z.session.resolve(session)
     template = cls._templates().resolve_publish_topic(topic)
@@ -82,24 +84,30 @@ def _unretain_impl(
     except TopicError:
         raise
     except KeyError as e:
-        raise TopicError(
-            f'{cls.__name__}.unretain: missing key field {e.args[0]!r}'
-        ) from e
+        msg = f'{cls.__name__}.unretain: missing key field {e.args[0]!r}'
+        raise TopicError(msg) from e
 
     buffer = current_buffer()
     if buffer is not None:
         # Encoding is unread on the tombstone path (``_flush`` short-
         # circuits on retain_mode) — carry the class's own so the slot
         # holds a valid ``Encoding`` rather than a sentinel ''.
-        buffer.append((
-            cls, sess, concrete_topic, b'', cls.ENCODING, 'tombstone', None,
-        ))
+        buffer.append(
+            (
+                cls,
+                sess,
+                concrete_topic,
+                b'',
+                cls.ENCODING,
+                'tombstone',
+                None,
+            )
+        )
         return
 
     get_retention_cache(cls, sess).delete(concrete_topic)
     try:
         sess.delete(concrete_topic)
-    except Exception as e:  # noqa: BLE001
-        raise ZearedError(
-            f'{cls.__name__}: session.delete failed on {concrete_topic!r}: {e}'
-        ) from e
+    except Exception as e:
+        msg = f'{cls.__name__}: session.delete failed on {concrete_topic!r}: {e}'
+        raise ZearedError(msg) from e

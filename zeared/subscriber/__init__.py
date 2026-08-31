@@ -10,6 +10,7 @@ retained-fetch helper.
 Public surface unchanged: callers continue to write
 ``from zeared.subscriber import Subscriber``.
 """
+
 from ._subscriber_dispatch import (
     _adapt_async_callback,
     _build_dispatch,
@@ -28,10 +29,10 @@ from ._subscriber_registry import (
 from ._subscriber_retained_fetch import _fetch_retained
 from .subscriber import M, Subscriber
 
-
 __all__ = [
-    'M',
     '_SCHEMA_MISMATCH_CACHE_MAX',
+    'M',
+    'Subscriber',
     '_adapt_async_callback',
     '_build_dispatch',
     '_close_subscribers_for',
@@ -43,5 +44,4 @@ __all__ = [
     '_subscribers',
     '_subscribers_lock',
     '_wants_meta',
-    'Subscriber',
 ]

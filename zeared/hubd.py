@@ -15,18 +15,23 @@ a publicly-reachable host; point nodes at it with
 The relay runs in Zenoh's Rust core — the Python main thread only holds the
 session open and waits for a shutdown signal.
 """
+
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import signal
 import threading
-from typing import Callable, Optional
+from typing import TYPE_CHECKING
 
 import zenoh
 
 from ._factories import hub as _open_hub
 
+if TYPE_CHECKING:
+    import types
+    from collections.abc import Callable
 
 _log = logging.getLogger('zeared.hub')
 
@@ -34,25 +39,28 @@ _DEFAULT_LISTEN = 'tcp/0.0.0.0:7447'
 
 
 def _install_signal_stop(stop: threading.Event) -> None:
-    """Wire SIGINT/SIGTERM to ``stop.set``. No-op off the main thread
-    (signal handlers can only be installed there — e.g. under pytest)."""
-    def _handler(_signum, _frame):
+    """Wire SIGINT/SIGTERM to ``stop.set``.
+
+    No-op off the main thread (signal handlers can only be installed there — e.g. under
+    pytest).
+    """
+
+    def _handler(_signum: int, _frame: types.FrameType | None) -> None:
         stop.set()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
+        with contextlib.suppress(ValueError, OSError):
             signal.signal(sig, _handler)
-        except (ValueError, OSError):  # not main thread / unsupported
-            pass
 
 
-def run(
+def run(  # noqa: PLR0913
     *,
-    listen: Optional[list] = None,
-    connect: Optional[list] = None,
+    listen: list | None = None,
+    connect: list | None = None,
     timestamping: bool = True,
-    zenoh_config: Optional[zenoh.Config] = None,
-    stop: Optional[threading.Event] = None,
-    on_ready: Optional[Callable[[zenoh.Session], None]] = None,
+    zenoh_config: zenoh.Config | None = None,
+    stop: threading.Event | None = None,
+    on_ready: Callable[[zenoh.Session], None] | None = None,
 ) -> None:
     """Open the hub, then block until ``stop`` is set (or SIGINT/SIGTERM).
 
@@ -62,12 +70,16 @@ def run(
     endpoints/zid before connecting.
     """
     sess = _open_hub(
-        listen=listen, connect=connect,
-        timestamping=timestamping, zenoh_config=zenoh_config,
+        listen=listen,
+        connect=connect,
+        timestamping=timestamping,
+        zenoh_config=zenoh_config,
     )
     _log.info(
         'hub up: zid=%s listen=%s connect=%s',
-        sess.zid(), listen or [_DEFAULT_LISTEN], connect or [],
+        sess.zid(),
+        listen or [_DEFAULT_LISTEN],
+        connect or [],
     )
     if on_ready is not None:
         on_ready(sess)
@@ -86,30 +98,39 @@ def run(
             _log.warning('hub session close failed', exc_info=True)
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for ``python -m zeared.hubd``."""
     parser = argparse.ArgumentParser(
         prog='python -m zeared.hubd',
         description='Run a Zenoh relay hub (router) for NAT-gated nodes.',
     )
     parser.add_argument(
-        '-l', '--listen', action='append', metavar='ENDPOINT',
+        '-l',
+        '--listen',
+        action='append',
+        metavar='ENDPOINT',
         help=f'endpoint to bind (repeatable; default {_DEFAULT_LISTEN})',
     )
     parser.add_argument(
-        '-c', '--connect', action='append', metavar='ENDPOINT',
+        '-c',
+        '--connect',
+        action='append',
+        metavar='ENDPOINT',
         help='endpoint of another hub to link to (repeatable)',
     )
     parser.add_argument(
-        '--config', metavar='FILE',
-        help='JSON5 Zenoh config file (for TLS / access-control); '
-             'listen/connect flags still layer on top',
+        '--config',
+        metavar='FILE',
+        help='JSON5 Zenoh config file (for TLS / access-control); listen/connect flags still layer on top',
     )
     parser.add_argument(
-        '--no-timestamping', action='store_true',
+        '--no-timestamping',
+        action='store_true',
         help='do not force HLC timestamping on (on by default)',
     )
     parser.add_argument(
-        '--log-level', default='INFO',
+        '--log-level',
+        default='INFO',
         help='logging level (default INFO)',
     )
     args = parser.parse_args(argv)
@@ -119,9 +140,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         format='%(asctime)s %(levelname)s %(name)s: %(message)s',
     )
 
-    zenoh_config = (
-        zenoh.Config.from_file(args.config) if args.config else None
-    )
+    zenoh_config = zenoh.Config.from_file(args.config) if args.config else None
 
     run(
         listen=args.listen or [_DEFAULT_LISTEN],

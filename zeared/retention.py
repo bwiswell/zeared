@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 import time
-from typing import TYPE_CHECKING, Dict, Optional, Tuple
-
-import zenoh
+from typing import TYPE_CHECKING
 
 from . import _codec as codec
 from ._managed_session import resolve_raw
@@ -13,6 +12,8 @@ from ._prefix_index import _PrefixIndex
 from .errors import TopicError, ZearedError
 
 if TYPE_CHECKING:
+    import zenoh
+
     from ._managed_session import SessionLike
     from .message import Message
 
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger('zeared.retention')
 
 
-def _resolve_retention_ttl(cls, session) -> Optional[float]:
+def _resolve_retention_ttl(cls: type[Message], session: SessionLike) -> float | None:
     """Resolve the effective retention TTL for ``cls`` on ``session``.
 
     Precedence:
@@ -46,7 +47,7 @@ def _resolve_retention_ttl(cls, session) -> Optional[float]:
 # retained-fetch / ``fetch_retained`` can pass the schema check and decode
 # the snapshot. The monotonic timestamp drives ``_RETENTION_TTL``
 # enforcement at query time and is immune to wall-clock jumps.
-_CacheValue = Tuple[bytes, codec.Encoding, Optional[bytes], float]
+_CacheValue = tuple[bytes, codec.Encoding, bytes | None, float]
 
 
 class _RetentionCache:
@@ -59,15 +60,20 @@ class _RetentionCache:
     """
 
     __slots__ = (
-        '_cls', '_session', '_cache', '_index', '_queryables', '_lock',
+        '_cache',
+        '_cls',
+        '_index',
+        '_lock',
+        '_queryables',
         '_redeclaring',
+        '_session',
     )
 
-    def __init__(self, cls: 'type[Message]', session: 'zenoh.Session'):
+    def __init__(self, cls: type[Message], session: SessionLike) -> None:
         self._cls = cls
         self._session = session
         # concrete_topic → (raw_bytes, encoding, attachment, inserted_monotonic)
-        self._cache: Dict[str, _CacheValue] = {}
+        self._cache: dict[str, _CacheValue] = {}
         # Trie of cached concrete topics — replaces the O(N) iterate-and-
         # intersect on every incoming query.
         self._index = _PrefixIndex()
@@ -91,10 +97,9 @@ class _RetentionCache:
         concrete_topic: str,
         raw: bytes,
         encoding: codec.Encoding,
-        attachment: Optional[bytes] = None,
+        attachment: bytes | None = None,
     ) -> None:
-        """Record the last retained payload for ``concrete_topic`` and
-        ensure the class's Queryable(s) are declared.
+        """Record the last retained payload for ``concrete_topic`` and ensure the class's Queryable(s) are declared.
 
         ``attachment`` is the schema-attachment payload from the publish
         (``None`` for classes with no ``SCHEMA``); it's cached so the
@@ -114,8 +119,11 @@ class _RetentionCache:
                 self._index.add(concrete_topic)
 
     def delete(self, concrete_topic: str) -> None:
-        """Drop the cached entry for ``concrete_topic``. Wire-level DELETE
-        is the caller's responsibility (``Message.unretain`` issues it)."""
+        """Drop the cached entry for ``concrete_topic``.
+
+        Wire-level DELETE is the caller's responsibility (``Message.unretain`` issues
+        it).
+        """
         with self._lock:
             if self._cache.pop(concrete_topic, None) is not None:
                 self._index.remove(concrete_topic)
@@ -124,10 +132,8 @@ class _RetentionCache:
         """Undeclare queryables, clear the cache, remove from registry."""
         with self._lock:
             for q in self._queryables:
-                try:
+                with contextlib.suppress(Exception):
                     q.undeclare()
-                except Exception:  # noqa: BLE001
-                    pass
             self._queryables.clear()
             self._cache.clear()
             self._index = _PrefixIndex()
@@ -136,9 +142,9 @@ class _RetentionCache:
     # -- queryable --------------------------------------------------------
 
     def _redeclare_queryables(self) -> None:
-        """Replace dead queryables with fresh ones bound to the (now-current)
-        underlying raw session. Called by the reconnect machinery after
-        the wrapper has swapped its raw.
+        """Replace dead queryables with fresh ones bound to the (now-current) underlying raw session.
+
+        Called by the reconnect machinery after the wrapper has swapped its raw.
 
         Cache state (``_cache``, ``_index``) is preserved — only the live
         Zenoh queryable handles are rebuilt. If the cache has never
@@ -156,30 +162,25 @@ class _RetentionCache:
             # to the raw that just died, so this typically raises and
             # we swallow.
             for q in old:
-                try:
+                with contextlib.suppress(Exception):
                     q.undeclare()
-                except Exception:  # noqa: BLE001
-                    pass
             # Re-declare against the (now-current) raw via the wrapper.
             with self._lock:
-                tpls = self._cls._templates()
+                tpls = self._cls._templates()  # noqa: SLF001
                 try:
                     for t in tpls.all:
                         q = resolve_raw(self._session).declare_queryable(
-                            t.wildcard, self._handle_query,
+                            t.wildcard,
+                            self._handle_query,
                         )
                         self._queryables.append(q)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     for q in self._queryables:
-                        try:
+                        with contextlib.suppress(Exception):
                             q.undeclare()
-                        except Exception:  # noqa: BLE001
-                            pass
                     self._queryables = []
-                    raise ZearedError(
-                        f'{self._cls.__name__}: redeclare retention '
-                        f'queryable after reconnect failed: {e}'
-                    ) from e
+                    msg = f'{self._cls.__name__}: redeclare retention queryable after reconnect failed: {e}'
+                    raise ZearedError(msg) from e
         finally:
             # Clear the flag unconditionally — leaving it stuck-on
             # would deadlock subsequent ``store()`` calls into never
@@ -201,27 +202,24 @@ class _RetentionCache:
                 # which the redeclared queryables will read on the next
                 # ``_handle_query`` after they come up.
                 return
-            tpls = self._cls._templates()
+            tpls = self._cls._templates()  # noqa: SLF001
             try:
                 for t in tpls.all:
                     q = resolve_raw(self._session).declare_queryable(
-                        t.wildcard, self._handle_query,
+                        t.wildcard,
+                        self._handle_query,
                     )
                     self._queryables.append(q)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 # Roll back partial declarations.
                 for q in self._queryables:
-                    try:
+                    with contextlib.suppress(Exception):
                         q.undeclare()
-                    except Exception:  # noqa: BLE001
-                        pass
                 self._queryables.clear()
-                raise ZearedError(
-                    f'{self._cls.__name__}: failed to declare retention '
-                    f'queryable: {e}'
-                ) from e
+                msg = f'{self._cls.__name__}: failed to declare retention queryable: {e}'
+                raise ZearedError(msg) from e
 
-    def _handle_query(self, query: 'zenoh.Query') -> None:
+    def _handle_query(self, query: zenoh.Query) -> None:
         """Reply to a query with cached entries that intersect its key-expr.
 
         Uses the trie index — O(query depth × matches) rather than O(N)
@@ -253,23 +251,27 @@ class _RetentionCache:
         for concrete, raw, encoding, attachment in payloads:
             try:
                 query.reply(
-                    concrete, raw,
+                    concrete,
+                    raw,
                     encoding=codec.MIME[encoding],
                     attachment=attachment,
                 )
             except Exception as exc:  # noqa: BLE001
                 _log.warning(
                     '%s: retention reply failed on %s: %s',
-                    self._cls.__name__, concrete, exc,
+                    self._cls.__name__,
+                    concrete,
+                    exc,
                 )
 
 
 # Module-level registry keyed on ``(cls, id(session))``.
-_registry: Dict[Tuple[type, int], _RetentionCache] = {}
+_registry: dict[tuple[type, int], _RetentionCache] = {}
 _registry_lock = threading.Lock()
 
 
-def get_retention_cache(cls: 'type[Message]', session: 'zenoh.Session') -> _RetentionCache:
+def get_retention_cache(cls: type[Message], session: SessionLike) -> _RetentionCache:
+    """Return the retention cache for ``(cls, session)``, creating it if needed."""
     key = (cls, id(session))
     cache = _registry.get(key)
     if cache is not None:
@@ -283,7 +285,7 @@ def get_retention_cache(cls: 'type[Message]', session: 'zenoh.Session') -> _Rete
         return cache
 
 
-def clear_retention_cache(*, session: Optional['SessionLike'] = None) -> None:
+def clear_retention_cache(*, session: SessionLike | None = None) -> None:
     """Drop cached retained payloads and undeclare queryables.
 
     Without ``session=``, clears every entry. With ``session=``, drops
@@ -300,24 +302,21 @@ def clear_retention_cache(*, session: Optional['SessionLike'] = None) -> None:
             caches = [_registry.pop(k) for k in keys]
     for c in caches:
         # drop() also tries to pop from _registry — already done above, no-op.
-        with c._lock:
-            for q in c._queryables:
-                try:
+        with c._lock:  # noqa: SLF001
+            for q in c._queryables:  # noqa: SLF001
+                with contextlib.suppress(Exception):
                     q.undeclare()
-                except Exception:  # noqa: BLE001
-                    pass
-            c._queryables.clear()
-            c._cache.clear()
-            c._index = _PrefixIndex()
+            c._queryables.clear()  # noqa: SLF001
+            c._cache.clear()  # noqa: SLF001
+            c._index = _PrefixIndex()  # noqa: SLF001
 
 
-def effective_retain(cls: 'type[Message]', arg: Optional[bool]) -> bool:
+def effective_retain(cls: type[Message], arg: bool | None) -> bool:  # noqa: FBT001
     """Resolve the per-send ``retain=`` value against the class's ``RETAINED``."""
     retained = getattr(cls, 'RETAINED', False)
     if arg is None:
         return retained
     if arg and not retained:
-        raise TopicError(
-            f'{cls.__name__}: retain=True requires RETAINED = True on the class'
-        )
+        msg = f'{cls.__name__}: retain=True requires RETAINED = True on the class'
+        raise TopicError(msg)
     return arg

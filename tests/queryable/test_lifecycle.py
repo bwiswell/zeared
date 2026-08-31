@@ -1,16 +1,18 @@
 """Lifecycle tests for queryables — registry, ``release`` ordering, and
 reconnect redeclare.
 """
+
 from __future__ import annotations
 
+import contextlib
 import threading
+
+from conftest import _peer_session, wait
 
 import zeared as z
 from zeared._managed_session import ManagedSession
 from zeared._reconnect import _trigger_reconnect, start_probe
 from zeared.queryable import _queryables
-
-from conftest import wait, _peer_session
 
 
 class TestRegistryAndRelease:
@@ -64,7 +66,8 @@ class TestReconnect:
         m = None
         try:
             m = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='q-reco',
                 probe_interval=0,
                 initial_backoff=0.001,
@@ -72,7 +75,8 @@ class TestReconnect:
                 max_attempts=None,
             )
             qbl = Q.on_query(
-                lambda ctx: Q(id=ctx.captures['id'], v=1), session=m,
+                lambda ctx: Q(id=ctx.captures['id'], v=1),
+                session=m,
             )
             old_handles = qbl._zenoh_queryables
 
@@ -90,14 +94,10 @@ class TestReconnect:
             qbl.close()
         finally:
             if m is not None:
-                try:
+                with contextlib.suppress(Exception):
                     m._teardown(call_close=False)
-                except Exception:
-                    pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass
 
     def test_auto_reconnect_false_skipped(self, session):
         @z.zeared
@@ -110,7 +110,8 @@ class TestReconnect:
         m = None
         try:
             m = ManagedSession(
-                session, lambda: new_raw,
+                session,
+                lambda: new_raw,
                 endpoint_label='q-reco2',
                 probe_interval=0,
                 initial_backoff=0.001,
@@ -118,7 +119,9 @@ class TestReconnect:
                 max_attempts=None,
             )
             qbl = Q.on_query(
-                lambda ctx: None, session=m, auto_reconnect=False,
+                lambda ctx: None,
+                session=m,
+                auto_reconnect=False,
             )
             old_handles = qbl._zenoh_queryables
 
@@ -134,11 +137,7 @@ class TestReconnect:
             qbl.close()
         finally:
             if m is not None:
-                try:
+                with contextlib.suppress(Exception):
                     m._teardown(call_close=False)
-                except Exception:
-                    pass
-            try:
+            with contextlib.suppress(Exception):
                 new_raw.close()
-            except Exception:
-                pass

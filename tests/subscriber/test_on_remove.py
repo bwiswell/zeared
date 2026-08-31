@@ -2,11 +2,12 @@
 DELETE samples (a peer's ``unretain()`` / any ``session.delete``) that the
 normal ``cb`` never sees, plus ``Message.coerce_captures``.
 """
+
 from __future__ import annotations
 
-import zeared as z
-
 from conftest import wait
+
+import zeared as z
 
 
 class TestOnRemoveDelivery:
@@ -32,14 +33,15 @@ class TestOnRemoveDelivery:
             on_remove=lambda meta: removed.append(meta.captures),
             session=session_b,
         )
-        wait(0.3)   # retained-fetch replays existing state to cb
+        wait(0.3)  # retained-fetch replays existing state to cb
 
         # A unretains reader 1 — a live DELETE tombstone.
         Reader.unretain(reader_id=1, session=session_a)
         wait(0.3)
         sub.close()
 
-        assert 1 in adds and 2 in adds
+        assert 1 in adds
+        assert 2 in adds
         # on_remove saw the removal, keyed by the template capture.
         assert removed == [{'reader_id': '1'}]
 
@@ -99,7 +101,7 @@ class TestOnRemoveDelivery:
         wait(0.3)
         sub.close()
 
-        assert typed_ids == [7]   # int, not '7'
+        assert typed_ids == [7]  # int, not '7'
 
     def test_on_remove_exception_routes_to_on_error(self, connected_pair):
         session_a, session_b = connected_pair
@@ -117,7 +119,8 @@ class TestOnRemoveDelivery:
         errors: list = []
 
         def boom(meta):
-            raise RuntimeError('handler blew up')
+            msg = 'handler blew up'
+            raise RuntimeError(msg)
 
         sub = Reader.on_message(
             lambda m: None,

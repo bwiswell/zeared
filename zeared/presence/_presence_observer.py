@@ -1,23 +1,27 @@
-"""Cross-session presence observer — declares ``__zeared/alive/**`` and
-``__zeared/will/**`` subscribers; on a peer's liveliness DELETE, fans
-synthesised will-samples out to every registered dispatcher.
+"""Cross-session presence observer and will fan-out.
+
+Cross-session presence observer — declares ``__zeared/alive/**`` and
+``__zeared/will/**`` subscribers; on a peer's liveliness DELETE, fans synthesised will-
+samples out to every registered dispatcher.
 
 Holds ``_PresenceObserver``, the observer-registry helpers, and the
 ``Dispatcher`` callable type. Materialised once when the first
 ``LIVELINESS = True`` subscriber on a session registers.
 """
+
 from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import zenoh
 
-from typing import TYPE_CHECKING
-
 if TYPE_CHECKING:
     from .._managed_session import SessionLike
+
+import contextlib
 
 from .. import _codec as codec
 from .._managed_session import resolve_raw
@@ -25,12 +29,14 @@ from ._presence_synthesized_sample import _SynthesizedSample
 from .presence import (
     ALIVE_PREFIX,
     WILL_PREFIX,
-    _WillEnvelope,
     _resolve_gc_interval,
+    _WillEnvelope,
 )
 
-
 _log = logging.getLogger('zeared.presence')
+
+# `__zeared/will/<zid>/<slug>` — four segments.
+_WILL_KEY_SEGMENTS = 4
 
 
 # Interested-party callback: invoked with the synthesised sample when a
@@ -56,25 +62,29 @@ class _PresenceObserver:
     """
 
     __slots__ = (
-        'session', '_self_zid',
-        '_alive_sub', '_will_sub',
-        '_wills_by_zid',        # peer_zid → {slug → _WillEnvelope}
-        '_alive_zids',          # set of currently-alive peer zids
-        '_parties',             # list[Dispatcher]
+        '_alive_sub',
+        '_alive_zids',  # set of currently-alive peer zids
+        '_gc_cancel',
+        '_gc_interval',
+        '_gc_thread',
         '_lock',
-        '_gc_thread', '_gc_cancel', '_gc_interval',
+        '_parties',  # list[Dispatcher]
+        '_self_zid',
+        '_will_sub',
+        '_wills_by_zid',  # peer_zid → {slug → _WillEnvelope}
+        'session',
     )
 
-    def __init__(self, session: zenoh.Session):
+    def __init__(self, session: SessionLike) -> None:
         self.session = session
         self._self_zid = str(session.zid())
-        self._alive_sub: Optional[zenoh.Subscriber] = None
-        self._will_sub: Optional[zenoh.Subscriber] = None
-        self._wills_by_zid: Dict[str, Dict[str, _WillEnvelope]] = {}
+        self._alive_sub: zenoh.Subscriber | None = None
+        self._will_sub: zenoh.Subscriber | None = None
+        self._wills_by_zid: dict[str, dict[str, _WillEnvelope]] = {}
         self._alive_zids: set = set()
-        self._parties: List[Dispatcher] = []
+        self._parties: list[Dispatcher] = []
         self._lock = threading.Lock()
-        self._gc_thread: Optional[threading.Thread] = None
+        self._gc_thread: threading.Thread | None = None
         self._gc_cancel = threading.Event()
         # Observer-level GC-interval override; ``None`` means "defer to
         # session-level (or module default)". Tests / niche runtime
@@ -83,7 +93,7 @@ class _PresenceObserver:
         # via the wrapper's ``session._gc_interval`` attribute and is
         # read on every loop iteration, so post-construction wrapper
         # changes also propagate.
-        self._gc_interval: Optional[float] = None
+        self._gc_interval: float | None = None
 
     def start(self) -> None:
         """Declare the two observing subscribers. Idempotent.
@@ -112,10 +122,11 @@ class _PresenceObserver:
 
         # Background initial fetch — best effort, short timeout. Late-joiners
         # get this history via peer queryables.
-        def _fetch():
+        def _fetch() -> None:
             try:
                 for reply in self.session.get(
-                    f'{WILL_PREFIX}/**', timeout=1.0,
+                    f'{WILL_PREFIX}/**',
+                    timeout=1.0,
                 ):
                     ok = getattr(reply, 'ok', None)
                     if ok is not None:
@@ -132,7 +143,9 @@ class _PresenceObserver:
         # longer alive (covers missed-DELETE during partition, etc.).
         self._gc_cancel.clear()
         self._gc_thread = threading.Thread(
-            target=self._gc_loop, daemon=True, name='zeared-presence-gc',
+            target=self._gc_loop,
+            daemon=True,
+            name='zeared-presence-gc',
         )
         self._gc_thread.start()
 
@@ -148,10 +161,7 @@ class _PresenceObserver:
             if self._gc_cancel.wait(interval):
                 return
             with self._lock:
-                stale = [
-                    zid for zid in self._wills_by_zid
-                    if zid not in self._alive_zids
-                ]
+                stale = [zid for zid in self._wills_by_zid if zid not in self._alive_zids]
                 for zid in stale:
                     self._wills_by_zid.pop(zid, None)
 
@@ -169,15 +179,11 @@ class _PresenceObserver:
             self._wills_by_zid.clear()
             self._alive_zids.clear()
         if alive is not None:
-            try:
+            with contextlib.suppress(Exception):
                 alive.undeclare()
-            except Exception:  # noqa: BLE001
-                pass
         if will is not None:
-            try:
+            with contextlib.suppress(Exception):
                 will.undeclare()
-            except Exception:  # noqa: BLE001
-                pass
         if gc_thread is not None and gc_thread.is_alive():
             gc_thread.join(timeout=1.0)
         _observer_registry.pop(id(self.session), None)
@@ -187,11 +193,8 @@ class _PresenceObserver:
             self._parties.append(dispatcher)
 
     def unregister(self, dispatcher: Dispatcher) -> None:
-        with self._lock:
-            try:
-                self._parties.remove(dispatcher)
-            except ValueError:
-                pass
+        with self._lock, contextlib.suppress(ValueError):
+            self._parties.remove(dispatcher)
 
     # -- callbacks from Zenoh ---------------------------------------------
 
@@ -199,9 +202,9 @@ class _PresenceObserver:
         key = str(sample.key_expr)
         if not key.startswith(f'{ALIVE_PREFIX}/'):
             return
-        peer_zid = key[len(ALIVE_PREFIX) + 1:]
+        peer_zid = key[len(ALIVE_PREFIX) + 1 :]
         if peer_zid == self._self_zid:
-            return   # ignore our own token events
+            return  # ignore our own token events
         if sample.kind == zenoh.SampleKind.PUT:
             with self._lock:
                 self._alive_zids.add(peer_zid)
@@ -226,7 +229,7 @@ class _PresenceObserver:
                     except Exception:  # noqa: BLE001
                         _log.exception('presence: dispatcher raised')
 
-    def _on_will(self, sample) -> None:
+    def _on_will(self, sample: zenoh.Sample) -> None:
         """Handle a sample on ``__zeared/will/<zid>/<slug>``.
 
         Bucket is now ``{peer_zid: {slug: _WillEnvelope}}`` so an explicit
@@ -238,7 +241,7 @@ class _PresenceObserver:
         key = str(sample.key_expr)
         parts = key.split('/')
         # Expected shape: ['__zeared', 'will', '<zid>', '<slug>']
-        if len(parts) < 4:
+        if len(parts) < _WILL_KEY_SEGMENTS:
             return
         peer_zid = parts[2]
         slug = parts[3]
@@ -270,11 +273,11 @@ class _PresenceObserver:
 
 
 # Observer registry — keyed on id(session), one observer per session.
-_observer_registry: Dict[int, _PresenceObserver] = {}
+_observer_registry: dict[int, _PresenceObserver] = {}
 _observer_lock = threading.Lock()
 
 
-def get_observer(session: zenoh.Session) -> _PresenceObserver:
+def get_observer(session: SessionLike) -> _PresenceObserver:
     sid = id(session)
     obs = _observer_registry.get(sid)
     if obs is not None:
@@ -288,7 +291,7 @@ def get_observer(session: zenoh.Session) -> _PresenceObserver:
         return obs
 
 
-def clear_observer(session: Optional['SessionLike'] = None) -> None:
+def clear_observer(session: SessionLike | None = None) -> None:
     """Stop observers. Without ``session=``, stops all."""
     with _observer_lock:
         if session is None:

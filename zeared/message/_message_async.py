@@ -1,13 +1,18 @@
-"""``_MessageAsyncMixin`` — async publish + subscribe siblings
-(``asend`` / ``asend_batch`` / ``aunretain`` / ``alisten``).
+"""Async publish and subscribe siblings for :class:`Message`.
+
+``_MessageAsyncMixin`` — async publish + subscribe siblings (``asend`` / ``asend_batch``
+/ ``aunretain`` / ``alisten``).
 
 Mixin — contributes no instance state. ``Message`` composes this via MRO.
 """
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterable, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterable
+
     import zenoh
 
     from .message import Message
@@ -15,54 +20,64 @@ if TYPE_CHECKING:
 
 class _MessageAsyncMixin:
     """Async siblings of the sync publish/subscribe surface on :class:`Message`."""
+
     __slots__ = ()
 
     async def asend(
-        self: 'Message',
+        self: Message,
         *,
-        session: Optional['zenoh.Session'] = None,
-        topic: Optional[str] = None,
-        retain: Optional[bool] = None,
+        session: zenoh.Session | None = None,
+        topic: str | None = None,
+        retain: bool | None = None,
     ) -> None:
-        """Async counterpart of :meth:`send`. Dispatches the sync send on
-        a thread pool worker so an asyncio event loop stays unblocked.
+        """Async counterpart of :meth:`send`.
+
+        Dispatches the sync send on a thread pool worker so an asyncio event loop stays
+        unblocked.
         """
         from ..async_ import asend
+
         await asend(self, session=session, topic=topic, retain=retain)
 
     @classmethod
     async def asend_batch(
-        cls,
-        items: Iterable['Message'],
+        cls: type[Message],
+        items: Iterable[Message],
         *,
-        session: Optional['zenoh.Session'] = None,
-        topic: Optional[str] = None,
-        retain: Optional[bool] = None,
+        session: zenoh.Session | None = None,
+        topic: str | None = None,
+        retain: bool | None = None,
     ) -> None:
         """Async counterpart of :meth:`send_batch`."""
         from ..async_ import asend_batch
+
         await asend_batch(
-            cls, items, session=session, topic=topic, retain=retain,
+            cls,
+            items,
+            session=session,
+            topic=topic,
+            retain=retain,
         )
 
     async def aunretain(
-        self: 'Message',
+        self: Message,
         *,
-        session: Optional['zenoh.Session'] = None,
-        topic: Optional[str] = None,
+        session: zenoh.Session | None = None,
+        topic: str | None = None,
     ) -> None:
         """Async counterpart of :meth:`unretain` (instance form)."""
         import asyncio
+
         await asyncio.to_thread(self.unretain, session=session, topic=topic)
 
     @classmethod
     def alisten(
-        cls,
+        cls: type[Message],
         *,
-        session: Optional['zenoh.Session'] = None,
+        session: zenoh.Session | None = None,
         maxsize: int = 0,
         meta: bool = False,
-    ):
+    ) -> AsyncIterator:
         """Async-iterator subscriber. ``async for msg in Cls.alisten(): ...``.
 
         Each incoming sample is decoded and delivered through an
@@ -74,4 +89,5 @@ class _MessageAsyncMixin:
         schema, ``origin``, ...).
         """
         from ..async_ import alisten
+
         return alisten(cls, session=session, maxsize=maxsize, meta=meta)

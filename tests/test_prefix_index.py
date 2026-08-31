@@ -51,7 +51,7 @@ class TestBasic:
         idx = _PrefixIndex()
         idx.add('a/b/c')
         idx.remove('a/b/c')
-        idx.remove('a/b/c')   # no error
+        idx.remove('a/b/c')  # no error
         assert len(idx) == 0
 
     def test_size_tracking(self):
@@ -60,7 +60,7 @@ class TestBasic:
         idx.add('x/y')
         idx.add('x/z')
         assert len(idx) == 2
-        idx.add('x/y')        # idempotent
+        idx.add('x/y')  # idempotent
         assert len(idx) == 2
         idx.remove('x/y')
         assert len(idx) == 1
@@ -75,7 +75,7 @@ class TestSingleSegmentWildcard:
 
     def test_star_does_not_cross_slash(self):
         idx = _PrefixIndex()
-        idx.add('a/x/y/c')   # would only match a/*/*/c
+        idx.add('a/x/y/c')  # would only match a/*/*/c
         assert set(idx.matching('a/*/c')) == set()
 
     def test_star_at_root(self):
@@ -118,8 +118,7 @@ class TestMultiSegmentWildcard:
             idx.add(t)
         result = set(idx.matching('a/**/c'))
         # All cached topics start with 'a' and end with 'c' — should all match.
-        ref = _linear_match(list(idx._all_concretes()), 'a/**/c') \
-            if hasattr(idx, '_all_concretes') else None
+        _linear_match(list(idx._all_concretes()), 'a/**/c') if hasattr(idx, '_all_concretes') else None
         # Manual reference: a/b/c (a → ** matches 'b' → c) ✓; a/x/c ✓;
         # a/b/x/c (a → ** matches 'b/x' → c) ✓; a/c (a → ** matches zero → c) ✓.
         assert result == {'a/b/c', 'a/x/c', 'a/b/x/c', 'a/c'}
@@ -133,8 +132,7 @@ class TestParityAgainstLinearScan:
     def test_random_corpus(self, seed):
         rng = random.Random(seed)
         # Build a corpus of 50 random concrete topics.
-        segments = ['robot', 'vehicle', 'peer', 'status', 'telemetry',
-                    'registry', 'alice', 'bob', 'charlie', 'dana']
+        segments = ['robot', 'vehicle', 'peer', 'status', 'telemetry', 'registry', 'alice', 'bob', 'charlie', 'dana']
         topics = set()
         while len(topics) < 50:
             depth = rng.randint(2, 5)
@@ -155,7 +153,7 @@ class TestParityAgainstLinearScan:
                 if r < 0.2:
                     parts.append('*')
                 elif r < 0.3 and not parts:
-                    pass    # leading ** is handled below
+                    pass  # leading ** is handled below
                 else:
                     parts.append(rng.choice(segments))
             # Sometimes add trailing **
@@ -166,9 +164,7 @@ class TestParityAgainstLinearScan:
             trie_result = set(idx.matching(query))
             linear_result = _linear_match(topics, query)
             assert trie_result == linear_result, (
-                f'mismatch for query {query!r}\n'
-                f'trie: {sorted(trie_result)}\n'
-                f'linear: {sorted(linear_result)}'
+                f'mismatch for query {query!r}\ntrie: {sorted(trie_result)}\nlinear: {sorted(linear_result)}'
             )
 
 

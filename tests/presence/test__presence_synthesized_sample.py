@@ -1,6 +1,7 @@
 """Tests for ``zeared/presence/_presence_synthesized_sample.py`` — the
 ``_SynthesizedSample`` shim used to fire wills locally through the
 normal subscriber dispatch path."""
+
 from __future__ import annotations
 
 import zenoh
@@ -33,6 +34,5 @@ class TestSynthesizedSample:
         except AttributeError:
             pass
         else:
-            raise AssertionError(
-                '_SynthesizedSample should reject unknown attr writes'
-            )
+            msg = '_SynthesizedSample should reject unknown attr writes'
+            raise AssertionError(msg)

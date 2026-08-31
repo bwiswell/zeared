@@ -4,13 +4,14 @@
 End-to-end coverage of liveliness-driven will synthesis lives in
 ``test_presence.py``; this file confirms the public surface.
 """
+
 from __future__ import annotations
 
 from zeared.presence._presence_observer import (
     Dispatcher,
-    _PresenceObserver,
     _observer_lock,
     _observer_registry,
+    _PresenceObserver,
     clear_observer,
     get_observer,
 )
