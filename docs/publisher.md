@@ -35,8 +35,29 @@ class itself beyond `size` (for testing).
 4. Otherwise → `session.declare_publisher(...)`, cache, then `pub.put(raw)`.
 
 Any send failure (most commonly: the session was closed out from under us)
-drops the entire cache for this pair and raises `ZearedError` with a clear
-message.
+drops the entire cache for this pair and raises with a clear message. On a
+`ManagedSession` the failure is first reported to the wrapper via
+`_note_failure`, so a dead session gets detected even on the cached path
+(a `zenoh.Publisher` bypasses the wrapper, so unlike the `PUBLISHER =
+False` fallback it has to report the failure itself); if that CASes the
+session into `RECONNECTING` / `DEAD`, the raise is the more specific
+`SessionDeadError`. Against a raw `zenoh.Session` — nothing to notify, no
+state machine to consult — it stays a plain `ZearedError`. Both extend
+`ZearedError`, so generic handlers are unaffected.
+
+## `invalidate()` vs `drop()`
+
+Both undeclare every cached `zenoh.Publisher`; only `drop()` also removes
+the cache from `_registry`.
+
+`invalidate()` is the reconnect counterpart, called by
+`_reconnect/_restore.py::_restore_publishers` after the raw swap. The
+handles are bound to the dead raw and must go, but the cache object itself
+carries `_emitted` — process-lifetime state whose contract is literally
+"emitted during this process lifetime" — so it stays registered and the
+next `put()` re-declares lazily against the current raw. Using `drop()` (or
+`clear_publisher_cache()`) there would get sends flowing again but silently
+truncate `published_topics()`.
 
 ## `get_cache(cls, session) -> _PublisherCache`
 

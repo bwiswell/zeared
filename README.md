@@ -886,10 +886,12 @@ Detection: an active probe (`is_closed()` / `zid()` poll) catches dead
 sessions on subscriber-only daemons; send-failure detection catches the
 gap between probe ticks for publisher-heavy paths.
 
-Restoration: subscribers are re-declared against the new raw, retained
-fetches replay (dedupe-safe), and presence wills re-register under the
-new zid (peers see legitimate offline → online — Zenoh's per-session
-zid changes on each `open()`, not a bug).
+Restoration: cached publishers are invalidated (the next `send()`
+re-declares against the new raw, so nothing is dropped on the far side of
+a reconnect), subscribers and queryables are re-declared against the new
+raw, retained fetches replay (dedupe-safe), and presence wills re-register
+under the new zid (peers see legitimate offline → online — Zenoh's
+per-session zid changes on each `open()`, not a bug).
 
 During the reconnect window, `send()` / `get()` / `delete()` raise
 `SessionDeadError`. Handle, retry, drop, or queue at the call site.

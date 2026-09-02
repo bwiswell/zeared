@@ -71,6 +71,36 @@ def _open_with_backoff(  # noqa: PLR0913
 # ---------------------------------------------------------------------------
 
 
+def _restore_publishers(managed: ManagedSession) -> None:
+    """Invalidate cached ``zenoh.Publisher`` handles bound to the dead raw.
+
+    Publishers, unlike retention queryables, have no ordering dependency on
+    anything else reconnect restores — nothing reads a cached publisher
+    until the next ``send()``. So this invalidates rather than redeclares:
+    drop the dead handles, keep the cache (and its ``_emitted``
+    introspection history) registered, and let ``put()`` re-declare lazily
+    against the new raw. Cheap for topics never sent again, and it cannot
+    fail mid-reconnect the way an eager redeclare could.
+
+    Without this the handles stay bound to the raw that ``_reconnect`` just
+    closed, so the first ``send()`` per ``(class, session)`` after a
+    *successful* reconnect is lost and raises instead of publishing.
+    """
+    from ..publisher import _registry as _publisher_registry
+    from ..publisher import _registry_lock
+
+    with _registry_lock:
+        candidates = [cache for cache in _publisher_registry.values() if cache._session is managed]
+    for cache in candidates:
+        try:
+            cache.invalidate()
+        except Exception:  # noqa: BLE001
+            _log.exception(
+                '%s: publisher cache invalidate failed during reconnect',
+                cache._cls.__name__,
+            )
+
+
 def _restore_retention(managed: ManagedSession) -> None:
     """Walk the retention registry; redeclare queryables on every cache bound to this ManagedSession.
 

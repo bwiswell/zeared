@@ -998,3 +998,181 @@ class TestBatchSurvivesReconnect:
                 m._teardown(call_close=False)
             with contextlib.suppress(Exception):
                 new_raw.close()
+
+
+class TestPublisherCacheRebuild:
+    """Pin: cached ``zenoh.Publisher`` handles MUST NOT survive a reconnect.
+
+    ``_PublisherCache`` is keyed on ``id(session)`` — the wrapper's
+    identity, which survives the swap — while the handles it stores were
+    resolved through ``resolve_raw()`` and are bound to the raw that
+    ``_reconnect`` then closes. Without ``_restore_publishers`` the first
+    ``send()`` per (class, session) after a *successful* reconnect hits a
+    dead handle: the message is lost and the caller gets an exception
+    instead of a publish.
+
+    Three tests, one per property the fix has to hold:
+      - the send doesn't raise,
+      - the send is actually delivered,
+      - ``published_topics()`` history survives (i.e. the fix is
+        ``invalidate()``, not ``clear_publisher_cache()`` — the latter
+        deregisters the cache and truncates ``_emitted``).
+    """
+
+    def test_send_after_reconnect_does_not_raise(self, session):
+        @z.zeared
+        class Ping(z.Message):
+            TOPIC = 'reco/pub/ping'
+            n: int = z.Int(required=True)
+
+        new_raw = _peer_session()
+        try:
+            m = ManagedSession(
+                session,
+                lambda: new_raw,
+                endpoint_label='pub-reco',
+                probe_interval=0,
+                initial_backoff=0.001,
+                max_backoff=0.005,
+                max_attempts=None,
+            )
+
+            Ping(n=1).send(session=m)
+            wait(0.2)
+
+            from zeared.publisher import _registry as _pr
+
+            caches = [c for c in _pr.values() if c._session is m]
+            assert len(caches) == 1
+            cache = caches[0]
+            old_pub = cache._pubs['reco/pub/ping']
+
+            done = threading.Event()
+            m._on_reconnect = lambda mgr: done.set()
+            start_probe(m)
+            _trigger_reconnect(m)
+            assert done.wait(timeout=3.0)
+            wait(0.2)
+            assert m.state == 'IDLE'
+            assert m.raw() is new_raw
+
+            # The regression: this raised ZearedError('cached publisher put
+            # failed ... session likely closed') before _restore_publishers.
+            Ping(n=2).send(session=m)
+
+            # Re-declared lazily against the new raw, not the corpse.
+            assert cache._pubs['reco/pub/ping'] is not old_pub
+        finally:
+            with contextlib.suppress(Exception):
+                m._teardown(call_close=False)
+            with contextlib.suppress(Exception):
+                new_raw.close()
+
+    def test_first_post_reconnect_send_is_delivered(self, session):
+        """Not just "doesn't raise" — the sample reaches a subscriber.
+
+        Publisher and subscriber both ride the same wrapper, so after the
+        swap they are both on ``new_raw`` and delivery is observable
+        in-process without wiring a third linked session.
+
+        ``TOPIC`` is deliberately static, with ``n`` carried in the
+        payload: the publisher cache keys on the *concrete* topic, so a
+        templated topic would hand every send a different cache key and
+        never touch the stale handle this test exists to catch.
+        """
+
+        @z.zeared
+        class Ping(z.Message):
+            TOPIC = 'reco/pub/deliver'
+            n: int = z.Int(required=True)
+
+        new_raw = _peer_session()
+        try:
+            m = ManagedSession(
+                session,
+                lambda: new_raw,
+                endpoint_label='pub-deliver',
+                probe_interval=0,
+                initial_backoff=0.001,
+                max_backoff=0.005,
+                max_attempts=None,
+            )
+
+            received: list[int] = []
+            sub = Ping.on_message(lambda p: received.append(p.n), session=m)
+
+            Ping(n=1).send(session=m)
+            wait(0.3)
+            assert received == [1], 'sanity: same-session delivery before reconnect'
+
+            done = threading.Event()
+            m._on_reconnect = lambda mgr: done.set()
+            start_probe(m)
+            _trigger_reconnect(m)
+            assert done.wait(timeout=3.0)
+            wait(0.3)
+
+            Ping(n=2).send(session=m)
+            wait(0.4)
+            sub.close()
+
+            assert received == [1, 2], (
+                'first send after reconnect was dropped — the publisher '
+                'cache still held a handle bound to the closed raw'
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                m._teardown(call_close=False)
+            with contextlib.suppress(Exception):
+                new_raw.close()
+
+    def test_emitted_history_survives_reconnect(self, session):
+        """Guards the *shape* of the fix.
+
+        ``clear_publisher_cache(session=...)`` also gets sends flowing
+        again, but it pops the cache out of ``_registry`` and takes
+        ``_emitted`` with it — silently truncating ``published_topics()``,
+        whose documented contract is "emitted during this process
+        lifetime", literally. If anyone swaps ``invalidate()`` for
+        ``clear_publisher_cache()`` later, this fails.
+        """
+
+        @z.zeared
+        class Ping(z.Message):
+            TOPIC = 'reco/pub/hist/{n}'
+            n: int = z.Int(required=True)
+
+        new_raw = _peer_session()
+        try:
+            m = ManagedSession(
+                session,
+                lambda: new_raw,
+                endpoint_label='pub-hist',
+                probe_interval=0,
+                initial_backoff=0.001,
+                max_backoff=0.005,
+                max_attempts=None,
+            )
+
+            Ping(n=1).send(session=m)
+            Ping(n=2).send(session=m)
+            wait(0.2)
+            before = Ping.published_topics(session=m)
+            assert before == {'reco/pub/hist/1', 'reco/pub/hist/2'}
+
+            done = threading.Event()
+            m._on_reconnect = lambda mgr: done.set()
+            start_probe(m)
+            _trigger_reconnect(m)
+            assert done.wait(timeout=3.0)
+            wait(0.2)
+
+            Ping(n=3).send(session=m)
+            wait(0.2)
+
+            assert Ping.published_topics(session=m) == before | {'reco/pub/hist/3'}
+        finally:
+            with contextlib.suppress(Exception):
+                m._teardown(call_close=False)
+            with contextlib.suppress(Exception):
+                new_raw.close()
