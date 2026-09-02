@@ -104,7 +104,13 @@ class Queryable[M: 'Message']:
 
         # Async handler: capture the loop running at on_query time (mirrors
         # the on_message async-callback contract). Fail loud if none.
-        is_async = inspect.iscoroutinefunction(handler)
+        #
+        # Both awaitable forms qualify. An ``async def`` *generator* is not
+        # a coroutine function — ``iscoroutinefunction`` returns False for
+        # it — so testing only that silently routed async generators down
+        # the sync path, where ``iter()`` on the async_generator failed and
+        # the query was answered with nothing at all.
+        is_async = inspect.iscoroutinefunction(handler) or inspect.isasyncgenfunction(handler)
         loop = None
         if is_async:
             import asyncio
