@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Literal
 
 from . import _codec as codec
 from ._managed_session import resolve_raw
-from .errors import ZearedError
+from .errors import SessionDeadError, ZearedError
 
 if TYPE_CHECKING:
     import zenoh
@@ -154,15 +154,57 @@ class _PublisherCache:
             # Most likely the session closed out from under us.
             self._pubs.pop(topic, None)
             self.drop()
+            self._note_session_failure(e)
             msg = f'{self._cls.__name__}: cached publisher put failed on {topic!r} (session likely closed): {e}'
+            # ``_note_failure`` above CASes a dying ManagedSession into
+            # RECONNECTING synchronously, so this read is current. Raising
+            # the specific error lets the documented retry/queue handler
+            # catch it; ``SessionDeadError`` subclasses ``ZearedError``, so
+            # existing generic handlers are unaffected.
+            if getattr(self._session, 'state', None) in ('RECONNECTING', 'DEAD'):
+                raise SessionDeadError(msg) from e
             raise ZearedError(msg) from e
+
+    def _note_session_failure(self, exc: Exception) -> None:
+        """Report a send failure to the session so lazy reconnect detection fires.
+
+        ``_session_put`` reaches ``ManagedSession._note_failure`` for free
+        via ``_ZenohApiMixin.put``. A cached ``zenoh.Publisher`` bypasses
+        the wrapper entirely, so the default ``PUBLISHER = True`` path has
+        to report the failure itself — otherwise a publisher-only daemon
+        running ``probe_interval=0`` never detects a dead session at all.
+
+        No-op when ``_session`` is a raw ``zenoh.Session`` (no wrapper to
+        tell) and best-effort otherwise: this runs on the way out of an
+        already-failing send and must never mask the original error.
+        """
+        note = getattr(self._session, '_note_failure', None)
+        if note is None:
+            return
+        with contextlib.suppress(Exception):
+            note(exc)
+
+    def invalidate(self) -> None:
+        """Undeclare every cached publisher but keep the cache registered.
+
+        The reconnect counterpart to ``drop()``. The handles are bound to
+        the raw session that just died, but the cache object itself
+        (``_emitted``, ``_warned``) is process-lifetime state and must
+        survive the swap — dropping it would truncate
+        ``published_topics()``, whose contract is literally "emitted during
+        this process lifetime". The next ``put()`` re-declares lazily
+        against the now-current raw.
+        """
+        # Swap first, then undeclare: a concurrent ``put()`` must not be
+        # able to pull a handle out of ``_pubs`` that we are mid-undeclare on.
+        pubs, self._pubs = self._pubs, {}
+        for pub in pubs.values():
+            with contextlib.suppress(Exception):
+                pub.undeclare()
 
     def drop(self) -> None:
         """Undeclare all cached publishers and remove from the registry."""
-        for pub in self._pubs.values():
-            with contextlib.suppress(Exception):
-                pub.undeclare()
-        self._pubs.clear()
+        self.invalidate()
         _registry.pop((self._cls, id(self._session)), None)
 
 
@@ -231,8 +273,6 @@ def clear_publisher_cache(*, session: SessionLike | None = None) -> None:
             keys = [k for k in _registry if k[1] == sid]
             caches = [_registry.pop(k) for k in keys]
     for c in caches:
-        # Undeclare without re-entering the registry removal branch.
-        for pub in c._pubs.values():  # noqa: SLF001
-            with contextlib.suppress(Exception):
-                pub.undeclare()
-        c._pubs.clear()  # noqa: SLF001
+        # ``invalidate`` rather than ``drop`` — the registry entry is already
+        # popped above, and re-entering that branch would be a no-op anyway.
+        c.invalidate()

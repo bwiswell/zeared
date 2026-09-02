@@ -13,14 +13,17 @@ Both feed ``_reconnect`` which:
   1. CAS ``state`` IDLE → RECONNECTING.
   2. Open a new raw session via ``open_fn`` with backoff.
   3. Atomically swap the wrapper's raw reference.
-  4. Walk the subscriber registry and re-declare each.
-  5. Replay any registered presence wills under the new zid.
-  6. Close the old raw session quietly.
+  4. Invalidate cached publishers bound to the dead raw.
+  5. Walk the retention registry and redeclare its queryables.
+  6. Walk the subscriber registry and re-declare each.
+  7. Walk the queryable registry and re-declare each.
+  8. Replay any registered presence wills under the new zid.
+  9. Close the old raw session quietly.
 
 If step 2 exhausts ``max_attempts``, set ``state = DEAD`` and stop the
 probe.
 
-Primary file of the ``_reconnect`` Pattern B subdir. The four
+Primary file of the ``_reconnect`` Pattern B subdir. The five
 ``_restore_*`` helpers + the cancellable ``_open_with_backoff`` loop
 live in the sibling ``_restore.py``.
 """
@@ -35,6 +38,7 @@ from .._managed_session import ManagedSession, _is_dead
 from ._restore import (
     _open_with_backoff,
     _ReconnectAbortedError,
+    _restore_publishers,
     _restore_queryables,
     _restore_retention,
     _restore_subscribers,
@@ -170,16 +174,23 @@ def _reconnect(managed: ManagedSession) -> None:
 
     # Restoration order (reconnect = startup, dependencies before
     # dependents):
-    #   1. Retention queryables — publisher-side infrastructure that
+    #   1. Publisher caches — invalidate the ``zenoh.Publisher`` handles
+    #      bound to the raw we just swapped out. FIRST because the walks
+    #      below run user code that may publish: a restored subscriber's
+    #      retained-fetch replay fires callbacks, and so do the
+    #      on_reconnect hooks at the end. Any send reaching a stale handle
+    #      is lost, so the cache must be clean before any of them run.
+    #   2. Retention queryables — publisher-side infrastructure that
     #      subscribers' retained-fetch will hit. MUST come before
     #      subscriber redeclare so a same-process publisher+subscriber
     #      pair finds a live queryable on the retained-fetch round.
-    #   2. Subscribers — re-declare zenoh subs, re-fire retained fetch
+    #   3. Subscribers — re-declare zenoh subs, re-fire retained fetch
     #      (dedupe-safe), re-register presence dispatcher.
-    #   3. Queryables — re-declare each user queryable (compute-serving,
+    #   4. Queryables — re-declare each user queryable (compute-serving,
     #      no replayed state) against the new raw so peer gets resolve.
-    #   4. Wills — re-register every previously-registered envelope
+    #   5. Wills — re-register every previously-registered envelope
     #      under the new zid; peers see legitimate offline → online.
+    _restore_publishers(managed)
     _restore_retention(managed)
     _restore_subscribers(managed)
     _restore_queryables(managed)

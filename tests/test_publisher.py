@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import contextlib
+import time
 import warnings
 
 import pytest
-from conftest import wait
+from conftest import _peer_session, wait
 
 import zeared as z
-from zeared.errors import ZearedError
+from zeared._managed_session import ManagedSession
+from zeared._reconnect import start_probe
+from zeared.errors import SessionDeadError, ZearedError
 from zeared.publisher import _registry, effective_cap, get_cache
 
 
@@ -366,3 +370,182 @@ class TestClosedSession:
             M(v=2).send()
         # Cache entry cleaned up on failure.
         assert (M, id(session)) not in _registry
+
+
+class TestInvalidate:
+    """``invalidate()`` is the reconnect counterpart to ``drop()``.
+
+    Both undeclare the cached ``zenoh.Publisher`` handles; only ``drop()``
+    also deregisters the cache. The distinction matters because the cache
+    object carries ``_emitted`` — the process-lifetime history behind
+    ``published_topics()`` — which must survive a reconnect.
+    """
+
+    def test_clears_handles_but_keeps_registration(self, session):
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'inval/{n}'
+            n: int = z.Int(required=True)
+
+        z.session = session
+        M(n=1).send()
+        M(n=2).send()
+        cache = get_cache(M, session)
+        assert cache.size == 2
+
+        cache.invalidate()
+
+        assert cache.size == 0
+        assert (M, id(session)) in _registry
+        assert get_cache(M, session) is cache
+
+    def test_preserves_emitted_history(self, session):
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'inval/hist/{n}'
+            n: int = z.Int(required=True)
+
+        z.session = session
+        M(n=1).send()
+        M(n=2).send()
+        before = M.published_topics(session=session)
+        assert len(before) == 2
+
+        get_cache(M, session).invalidate()
+
+        assert M.published_topics(session=session) == before
+
+    def test_next_send_redeclares(self, session):
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'inval/redeclare'
+            v: int = z.Int(required=True)
+
+        z.session = session
+        M(v=1).send()
+        cache = get_cache(M, session)
+        old_pub = cache._pubs['inval/redeclare']
+
+        cache.invalidate()
+        M(v=2).send()
+
+        assert cache.size == 1
+        assert cache._pubs['inval/redeclare'] is not old_pub
+
+    def test_drop_still_deregisters(self, session):
+        """``drop()`` delegates its undeclare loop to ``invalidate()`` but
+        keeps its own contract — the registry entry goes away."""
+
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'inval/drop'
+            v: int = z.Int(required=True)
+
+        z.session = session
+        M(v=1).send()
+        cache = get_cache(M, session)
+
+        cache.drop()
+
+        assert cache.size == 0
+        assert (M, id(session)) not in _registry
+
+
+class TestCachedPublisherFailureDetection:
+    """Pin: a cached-publisher send failure drives lazy reconnect detection.
+
+    ``_session_put`` reaches ``ManagedSession._note_failure`` for free via
+    ``_ZenohApiMixin.put``, so the ``PUBLISHER = False`` path always drove
+    detection. A cached ``zenoh.Publisher`` bypasses the wrapper entirely,
+    so the *default* ``PUBLISHER = True`` path did not — meaning a
+    publisher-only daemon running ``probe_interval=0`` (documented as
+    "only send-failure detection runs") never detected a dead session at
+    all.
+    """
+
+    def _managed(self, old_raw, new_raw):
+        return ManagedSession(
+            old_raw,
+            lambda: new_raw,
+            endpoint_label='pub-detect',
+            probe_interval=0,  # send-failure detection only
+            initial_backoff=0.001,
+            max_backoff=0.005,
+            max_attempts=None,
+        )
+
+    def test_cached_publisher_failure_triggers_reconnect(self):
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'detect/cached'
+            v: int = z.Int(required=True)
+
+        old_raw, new_raw = _peer_session(), _peer_session()
+        m = self._managed(old_raw, new_raw)
+        try:
+            start_probe(m)
+            M(v=1).send(session=m)  # populates the cache on old_raw
+            wait(0.2)
+
+            old_raw.close()
+            with pytest.raises(ZearedError):
+                M(v=2).send(session=m)
+
+            # The reconnect worker runs off-thread; give it a beat.
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline and m.raw() is not new_raw:
+                wait(0.05)
+            assert m.raw() is new_raw, (
+                'cached-publisher send failure did not drive lazy reconnect '
+                'detection — _pub_put bypasses ManagedSession, so it must '
+                'report the failure itself'
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                m._teardown(call_close=False)
+            with contextlib.suppress(Exception):
+                new_raw.close()
+
+    def test_failure_while_reconnecting_raises_session_dead_error(self):
+        """The specific error, not a bare ``ZearedError`` — otherwise the
+        retry/queue handler the README tells callers to write can't catch
+        it. ``SessionDeadError`` subclasses ``ZearedError``, so generic
+        handlers are unaffected."""
+
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'detect/dead'
+            v: int = z.Int(required=True)
+
+        old_raw, new_raw = _peer_session(), _peer_session()
+        m = self._managed(old_raw, new_raw)
+        try:
+            start_probe(m)
+            M(v=1).send(session=m)
+            wait(0.2)
+
+            old_raw.close()
+            with pytest.raises(SessionDeadError):
+                M(v=2).send(session=m)
+        finally:
+            with contextlib.suppress(Exception):
+                m._teardown(call_close=False)
+            with contextlib.suppress(Exception):
+                new_raw.close()
+
+    def test_raw_session_failure_still_raises_plain_zeared_error(self, session):
+        """A raw ``zenoh.Session`` has no state machine to consult — the
+        error stays a plain ``ZearedError``."""
+
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'detect/raw'
+            v: int = z.Int(required=True)
+
+        z.session = session
+        M(v=1).send()
+        session.close()
+
+        with pytest.raises(ZearedError) as exc_info:
+            M(v=2).send()
+        assert not isinstance(exc_info.value, SessionDeadError)
