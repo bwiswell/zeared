@@ -301,6 +301,7 @@ Rules:
 - `query()` defaults to **no consolidation** — a query is a fan-out and each queryable may reply more than once; Zenoh's default consolidation would collapse same-key replies. Pass `consolidation=` to opt into dedup.
 - Omitted key slots widen to `*` (whole-template wildcard); embed `*` in a value for a partial wildcard. `params=` appends `?k=v`; `REQUEST = SomeClass` + `request=` sends a typed request payload.
 - `async def` handlers: register via `z.aon_query(Cls, handler)`; the query stays live until the coroutine resolves. Async getters: `z.aquery` / `z.aquery_one`.
+- **Generator handlers stream.** A `handler` that `yield`s replies each instance as it is produced, so serving a large result set never materialises it — `async def` generators included (0.3.2). A generator that raises part-way through routes to `on_error` and sends an error reply, so the getter knows the stream was truncated.
 - `on_query` on a `RETAINED = True` class raises `TopicError` — retention already serves a queryable over the same topic; pick one.
 - Queryables survive reconnect (managed sessions, `auto_reconnect=True`), are closed by `z.release()`, and can be dropped with `z.clear_queryable_cache()`.
 

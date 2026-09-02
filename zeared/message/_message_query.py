@@ -48,9 +48,20 @@ class _MessageQueryMixin:
         ``ctx.reply`` / ``ctx.reply_err`` / ``ctx.reply_del`` (for
         multi-reply, streaming, or error cases) and return ``None``.
 
+        A **generator** handler is the streaming form: each yielded
+        instance is replied as it is produced, so a handler serving a large
+        result set never materialises it. ``async def`` generators work the
+        same way (drained with ``async for``).
+
         ``async def`` handlers are scheduled on the loop running at
         ``on_query`` time; the query stays live until the coroutine
         resolves, then its return value is replied.
+
+        A handler that raises — including a generator that raises part-way
+        through, after some replies have gone out — routes through
+        ``on_error`` and sends an error reply, so the getter learns the
+        stream was truncated rather than treating a partial answer as
+        complete.
 
         Raises ``TopicError`` on a ``RETAINED = True`` class — retention
         already serves a queryable over the same topic.

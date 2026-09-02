@@ -337,6 +337,10 @@ async def aon_query(
     Declared inline on the calling event-loop thread (not offloaded) so an
     ``async def`` handler captures *this* loop for its replies. The declare
     itself is a fast Zenoh call. Returns the :class:`Queryable` handle.
+
+    ``async def`` **generator** handlers are supported too: each yielded
+    instance is replied as it is produced, giving a streaming multi-reply
+    handler that never materialises its result set.
     """
     return cls.on_query(
         handler,

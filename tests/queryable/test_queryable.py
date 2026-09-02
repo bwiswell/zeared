@@ -114,6 +114,74 @@ class TestRoundTrip:
         assert sorted(m.v for m in res) == [10, 20]
 
 
+class TestGeneratorHandler:
+    """The streaming shape of the return form.
+
+    A generator handler is consumed lazily by ``_reply_result``, so replies
+    go out as they are yielded and the handler never materialises the full
+    result set. These pin the two properties that makes worth having:
+    every yielded item is replied, and a mid-stream raise is reported
+    rather than silently truncating the answer.
+    """
+
+    def test_generator_replies_every_yield(self, session):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/gen/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        def handler(ctx):
+            for v in range(4):
+                yield Row(id=ctx.captures['id'], v=v)
+
+        z.session = session
+        with Row.on_query(handler):
+            wait()
+            res = Row.query(id='k', timeout=2.0)
+        assert sorted(m.v for m in res) == [0, 1, 2, 3]
+
+    def test_generator_raising_midstream_is_reported(self, session):
+        """Regression: the raise escaped into Zenoh's callback.
+
+        ``handler(ctx)`` returns the generator object without executing a
+        line of it, so ``dispatch``'s try/except sees nothing; the body
+        only runs later, as ``_reply_result`` advances the iterator. An
+        unguarded raise there surfaced as a "zenoh.handlers: callback
+        error" traceback on stderr — ``on_error`` never fired, no error
+        reply was sent, and the getter received the partial stream as
+        though it were the whole answer.
+        """
+
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/genboom/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        def handler(ctx):
+            yield Row(id=ctx.captures['id'], v=0)
+            yield Row(id=ctx.captures['id'], v=1)
+            msg = 'boom mid-stream'
+            raise RuntimeError(msg)
+
+        served: list[Exception] = []
+        got: list[Exception] = []
+
+        z.session = session
+        with Row.on_query(handler, on_error=lambda e, raw: served.append(e)):
+            wait()
+            res = Row.query(id='k', timeout=1.0, on_error=lambda e, raw: got.append(e))
+
+        # Replies emitted before the raise still land.
+        assert sorted(m.v for m in res) == [0, 1]
+        # Serving side sees the handler error...
+        assert any(isinstance(e, z.QueryableError) and 'boom mid-stream' in str(e) for e in served), served
+        # ...and the getter is told the stream was truncated, rather than
+        # believing [0, 1] was a complete answer.
+        assert any(isinstance(e, z.QueryError) and 'boom mid-stream' in str(e) for e in got), got
+
+
 class TestParamsAndRequest:
     def test_params_reach_handler(self, session):
         seen = {}

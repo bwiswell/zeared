@@ -61,6 +61,14 @@ handlers never import Zenoh:
 
 ### Async handlers
 
+A **generator** handler is the streaming form of the return form: each
+yielded instance is replied as it is produced, so the handler never
+materialises the full result set. This is the server side of a multi-reply
+query — memory stays O(1) in the number of replies. Note that the *getter*
+still collects: `Cls.query` returns a list and `z.aquery` wraps that same
+blocking collect, so a streaming handler improves server memory, not the
+caller's time-to-first-usable-reply.
+
 `async def` handlers are supported — register via `z.aon_query(Cls,
 handler)` (or `Cls.on_query` from within a running loop). The loop is
 captured at declare time; the query stays live until the coroutine
@@ -135,6 +143,18 @@ Queryables are registered per `id(session)` in a module-level registry.
   policy).
 
 ## Interaction with `RETAINED`
+
+`async def` **generator** handlers are supported on the same footing
+(0.3.2) and are drained with `async for`. They need a running loop at
+declare time exactly as coroutine handlers do — `Queryable._declare` tests
+`iscoroutinefunction` **or** `isasyncgenfunction`, since the former alone
+is `False` for an async generator function and used to route one down the
+sync path, where it replied nothing at all.
+
+Errors never reach Zenoh's callback. A handler that raises routes through
+`on_error` / logging and sends a best-effort `reply_err` — including a
+generator raising mid-stream, which surfaces only as the iterator is
+advanced, long after `handler(ctx)` itself returned cleanly.
 
 `on_query` on a `RETAINED = True` class raises `TopicError`: retention
 already owns a cache-serving queryable over the same template wildcard, and
