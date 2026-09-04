@@ -31,6 +31,20 @@ if TYPE_CHECKING:
     from .meta import ZenohMeta
     from .queryable import Queryable, QueryContext
 
+# The query wrappers and ``afetch_retained`` below are generic in the
+# message class, using PEP 695 type parameters. Their bounds are lazily
+# evaluated, so ``Message`` staying a TYPE_CHECKING-only import is fine.
+#
+# The point is to carry the element type through from the sync surface —
+# each wraps a method that is already typed in terms of its own message
+# class — rather than flattening it to a bare ``list`` / ``Message | None``
+# and pushing a ``cast`` onto every caller.
+#
+# ``alisten`` is deliberately not in this set: its ``meta=`` flag makes the
+# return ``AsyncIterator[M] | AsyncIterator[tuple[M, ZenohMeta]]``, which
+# needs overloads rather than a type parameter. Deferred to 0.4.0, where
+# that surface is being revisited anyway.
+
 
 class _AsyncSessionContextManager:
     """Async context manager for ``apeer`` / ``aclient`` / ``aopen``.
@@ -236,17 +250,19 @@ async def aunretain(
         )
 
 
-async def afetch_retained(
-    cls: type[Message],
+async def afetch_retained[M: Message](
+    cls: type[M],
     *,
     session: zenoh.Session | None = None,
     on_error: Callable[[Exception, bytes], None] | None = None,
-) -> list:
+) -> list[M]:
     """Async variant of ``Cls.fetch_retained(...)``. Runs the sync fetch on a thread (Zenoh's ``get`` is blocking)."""
+    # Called through a lambda rather than passed as a bound method: a
+    # method reference handed to ``to_thread`` erases the link between
+    # ``fetch_retained``'s own type parameter and this one. Same shape as
+    # ``aquery`` below, for the same reason.
     return await asyncio.to_thread(
-        cls.fetch_retained,
-        session=session,
-        on_error=on_error,
+        lambda: cls.fetch_retained(session=session, on_error=on_error),
     )
 
 
@@ -291,8 +307,8 @@ async def alisten(
         sub.close()
 
 
-async def aquery(  # noqa: PLR0913
-    cls: type[Message],
+async def aquery[M: Message](  # noqa: PLR0913
+    cls: type[M],
     *,
     session: zenoh.Session | None = None,
     params: dict | None = None,
@@ -304,7 +320,7 @@ async def aquery(  # noqa: PLR0913
     consolidation: Any = None,
     on_error: Callable[[Exception, bytes], None] | None = None,
     **key_fields: Any,
-) -> list:
+) -> list[M]:
     """Async variant of ``Cls.query(...)``. Runs the blocking get on a thread and returns the decoded reply list."""
     return await asyncio.to_thread(
         lambda: cls.query(
@@ -320,8 +336,8 @@ async def aquery(  # noqa: PLR0913
     )
 
 
-async def aquery_iter(  # noqa: PLR0913
-    cls: type[Message],
+async def aquery_iter[M: Message](  # noqa: PLR0913
+    cls: type[M],
     *,
     session: zenoh.Session | None = None,
     params: dict | None = None,
@@ -332,7 +348,7 @@ async def aquery_iter(  # noqa: PLR0913
     consolidation: Any = None,
     on_error: Callable[[Exception, bytes], None] | None = None,
     **key_fields: Any,
-) -> AsyncIterator:
+) -> AsyncIterator[M]:
     """Async generator yielding decoded replies as they arrive.
 
     ``async for row in z.aquery_iter(Cls, id='x'): ...`` — the streaming
@@ -400,7 +416,7 @@ async def aquery_iter(  # noqa: PLR0913
             worker.cancel()
 
 
-async def aquery_one(cls: type[Message], **kwargs: Any) -> Message | None:
+async def aquery_one[M: Message](cls: type[M], **kwargs: Any) -> M | None:
     """Async variant of ``Cls.query_one(...)``.
 
     Inherits the short-circuit: returns at the first decoded reply rather
