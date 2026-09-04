@@ -22,7 +22,7 @@ from ..errors import QueryError
 _M = TypeVar('_M', bound='Message')
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     import zenoh
 
@@ -74,7 +74,51 @@ def _run_query(  # noqa: PLR0913
     consolidation: Any,
     on_error: Callable[[Exception, bytes], None] | None,
 ) -> list[_M]:
-    """Issue the get, decode OK replies, return typed instances."""
+    """Issue the get, decode OK replies, return typed instances.
+
+    The eager sibling of :func:`_iter_query` — literally ``list()`` over
+    it, so the two can never drift in how they decode or route errors.
+    """
+    return list(
+        _iter_query(
+            session,
+            msg_cls,
+            key_fields,
+            params=params,
+            request=request,
+            timeout=timeout,
+            target=target,
+            consolidation=consolidation,
+            on_error=on_error,
+        )
+    )
+
+
+def _iter_query(  # noqa: PLR0913
+    session: SessionLike,
+    msg_cls: type[_M],
+    key_fields: dict,
+    *,
+    params: dict | None,
+    request: Any,
+    timeout: float | None,
+    target: Any,
+    consolidation: Any,
+    on_error: Callable[[Exception, bytes], None] | None,
+) -> Iterator[_M]:
+    """Issue the get and yield typed instances as replies arrive.
+
+    Deliberately **not** a generator function: the ``session.get`` fires
+    when this is called, not on the first ``next()``. Zenoh's ``get`` is
+    itself non-blocking (it returns a channel immediately), so issuing it
+    eagerly is what makes ``timeout`` start counting from the call and
+    time-to-first-reply mean what it says. A plain generator would defer
+    the whole query until someone iterated.
+
+    Decoding stays lazy — that is the point. Note the consequence for
+    error routing: ``on_error`` fires as the caller *consumes*, so an
+    iterator nobody iterates reports nothing.
+    """
     import zeared as z
 
     selector = _build_selector(msg_cls, key_fields, params)
@@ -102,8 +146,24 @@ def _run_query(  # noqa: PLR0913
         kwargs['encoding'] = codec.MIME[enc]
 
     replies = session.get(selector, **kwargs)
+    return _decode_replies(replies, msg_cls, selector, on_error, debug=z.debug)
 
-    out: list[_M] = []
+
+def _decode_replies(
+    replies: Any,
+    msg_cls: type[_M],
+    selector: str,
+    on_error: Callable[[Exception, bytes], None] | None,
+    *,
+    debug: bool,
+) -> Iterator[_M]:
+    """Yield decoded instances from a reply channel, routing failures.
+
+    The channel yields each reply as it lands, so consuming this lazily is
+    what turns a query into a stream. Error replies and per-reply decode
+    failures route to ``on_error`` (else log) and are skipped, exactly as
+    in the collecting path — this *is* the collecting path.
+    """
     for reply in replies:
         ok = reply.ok if hasattr(reply, 'ok') else None
         if ok is None:
@@ -112,7 +172,7 @@ def _run_query(  # noqa: PLR0913
         try:
             raw = bytes(ok.payload)
             key = str(ok.key_expr)
-            enc = _pick_reply_encoding(ok, msg_cls.ENCODING, z.debug)
+            enc = _pick_reply_encoding(ok, msg_cls.ENCODING, debug)
             msg, _captures = msg_cls._decode(raw, key, enc)  # noqa: SLF001
         except Exception as exc:  # noqa: BLE001
             raw_bytes = bytes(getattr(ok, 'payload', b''))
@@ -127,8 +187,7 @@ def _run_query(  # noqa: PLR0913
                     exc,
                 )
             continue
-        out.append(msg)
-    return out
+        yield msg
 
 
 def _route_error_reply(reply: Any, msg_cls: type[Message], selector: str, on_error: Callable | None) -> None:

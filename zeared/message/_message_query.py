@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     import zenoh
 
@@ -130,6 +130,59 @@ class _MessageQueryMixin:
         )
 
     @classmethod
+    def iter_query(  # noqa: PLR0913
+        cls: type[_M],
+        *,
+        session: zenoh.Session | None = None,
+        params: dict | None = None,
+        request: Message | None = None,
+        timeout: float | None = None,
+        target: Any = None,
+        consolidation: Any = None,
+        on_error: Callable[[Exception, bytes], None] | None = None,
+        **key_fields: Any,
+    ) -> Iterator[_M]:
+        """Stream decoded replies as they arrive, instead of collecting them.
+
+        Same arguments and same decoding as :meth:`query` — which is
+        literally ``list()`` over this — but each reply is yielded as it
+        lands, so a caller can act on early answers instead of waiting out
+        the whole window.
+
+        The underlying ``session.get`` is issued when this is *called*, so
+        ``timeout`` starts counting from here even if iteration begins
+        later. ``timeout`` is the total duration of the query, not a gap
+        between replies.
+
+        Two things it deliberately does not do:
+
+        - **Breaking out does not stop the server.** Unlike
+          ``Cls.alisten``, whose cleanup undeclares a real subscriber,
+          abandoning this iterator only stops *your* consumption — the
+          serving queryable runs to completion regardless. Zenoh's
+          cancellation is client-side only.
+        - **``on_error`` fires on consumption.** An iterator nobody
+          iterates reports nothing, where ``query`` would already have
+          routed every failure.
+        """
+        import zeared as z
+
+        from ..queryable._query_get import _iter_query
+
+        sess = z.session.resolve(session)
+        return _iter_query(
+            sess,
+            cls,
+            key_fields,
+            params=params,
+            request=request,
+            timeout=timeout,
+            target=target,
+            consolidation=consolidation,
+            on_error=on_error,
+        )
+
+    @classmethod
     def query_one(
         cls: type[_M],
         **kwargs: Any,
@@ -138,6 +191,11 @@ class _MessageQueryMixin:
 
         Non-deterministic when several queryables answer — the first
         decoded reply wins. Accepts every ``query`` keyword.
+
+        Returns as soon as a reply decodes rather than waiting out
+        ``timeout`` (0.3.4). One consequence: ``on_error`` now sees only
+        the failures that arrive *before* the first good reply, where it
+        used to see every failure in the whole window. Use
+        :meth:`query` when you need the complete error picture.
         """
-        results = cls.query(**kwargs)
-        return results[0] if results else None
+        return next(iter(cls.iter_query(**kwargs)), None)

@@ -7,6 +7,8 @@ retention's queryable answers a same-session retained-fetch.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from conftest import wait
 
@@ -346,3 +348,126 @@ class TestHandleLifecycle:
         qbl.close()
         qbl.close()  # no raise
         assert qbl._closed
+
+
+class TestIterQuery:
+    """``iter_query`` — replies yielded as they arrive.
+
+    ``query`` is ``list()`` over this, so the decode and error-routing
+    paths are shared by construction; these pin the streaming property
+    itself and the two documented asymmetries.
+    """
+
+    def test_yields_same_rows_as_query(self, session):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/iter/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        def handler(ctx):
+            for v in range(4):
+                yield Row(id=ctx.captures['id'], v=v)
+
+        z.session = session
+        with Row.on_query(handler):
+            wait()
+            streamed = sorted(m.v for m in Row.iter_query(id='k', timeout=2.0))
+            collected = sorted(m.v for m in Row.query(id='k', timeout=2.0))
+        assert streamed == collected == [0, 1, 2, 3]
+
+    def test_returns_a_lazy_iterator_not_a_list(self, session):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/iterlazy/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        z.session = session
+        with Row.on_query(lambda ctx: Row(id=ctx.captures['id'], v=1)):
+            wait()
+            it = Row.iter_query(id='k', timeout=2.0)
+            assert not isinstance(it, list)
+            assert iter(it) is not None
+            assert [m.v for m in it] == [1]
+
+    def test_first_row_arrives_before_the_last_is_produced(self, session):
+        """The whole point: time-to-first-usable-reply beats the window.
+
+        The handler spaces four replies 0.3s apart. ``query`` cannot
+        return before the last one (~1.2s); ``iter_query`` must hand over
+        the first well before that.
+        """
+
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/itertiming/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        def handler(ctx):
+            for v in range(4):
+                time.sleep(0.3)
+                yield Row(id=ctx.captures['id'], v=v)
+
+        z.session = session
+        with Row.on_query(handler):
+            wait()
+            t0 = time.monotonic()
+            it = Row.iter_query(id='k', timeout=5.0)
+            first = next(iter(it))
+            t_first = time.monotonic() - t0
+
+            t1 = time.monotonic()
+            rows = Row.query(id='k', timeout=5.0)
+            t_all = time.monotonic() - t1
+
+        assert first.v == 0
+        assert len(rows) == 4
+        # First streamed reply lands around 0.3s; the collected call can't
+        # return before ~1.2s. Generous margin — this is about the shape,
+        # not a benchmark.
+        assert t_first < t_all, f'no streaming benefit: first={t_first:.2f}s all={t_all:.2f}s'
+        assert t_first < 0.9, f'first reply took {t_first:.2f}s — not streaming'
+
+
+class TestQueryOneShortCircuit:
+    """``query_one`` returns at the first decoded reply (0.3.4).
+
+    It used to collect every reply for the full ``timeout`` and then take
+    ``[0]``, so it always paid the whole window even when the first
+    answer arrived immediately.
+    """
+
+    def test_returns_before_the_window_closes(self, session):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/one/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        def handler(ctx):
+            yield Row(id=ctx.captures['id'], v=0)
+            time.sleep(1.5)
+            yield Row(id=ctx.captures['id'], v=1)
+
+        z.session = session
+        with Row.on_query(handler):
+            wait()
+            t0 = time.monotonic()
+            one = Row.query_one(id='k', timeout=4.0)
+            elapsed = time.monotonic() - t0
+
+        assert one is not None
+        assert one.v == 0
+        assert elapsed < 1.2, f'query_one waited {elapsed:.2f}s — did not short-circuit'
+
+    def test_still_none_when_nobody_answers(self, session):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/onenone/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        z.session = session
+        assert Row.query_one(id='nobody', timeout=0.5) is None

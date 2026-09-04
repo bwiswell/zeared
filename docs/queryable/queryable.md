@@ -64,10 +64,32 @@ handlers never import Zenoh:
 A **generator** handler is the streaming form of the return form: each
 yielded instance is replied as it is produced, so the handler never
 materialises the full result set. This is the server side of a multi-reply
-query — memory stays O(1) in the number of replies. Note that the *getter*
-still collects: `Cls.query` returns a list and `z.aquery` wraps that same
-blocking collect, so a streaming handler improves server memory, not the
-caller's time-to-first-usable-reply.
+query — memory stays O(1) in the number of replies.
+
+Since 0.3.4 the getter can stream too: `Cls.iter_query(...)` and
+`z.aquery_iter(...)` yield each reply as it lands. Paired with a generator
+handler that gives a query which is O(1) on both ends and hands the caller
+its first answer without waiting out the window. `Cls.query` is `list()`
+over `iter_query`, so the decode and error-routing paths cannot drift.
+
+Three properties to know before reaching for it:
+
+- **`timeout` is total duration**, and the underlying `session.get` fires
+  when the getter is *called* — not on the first `next()`. Holding an
+  iterator and consuming it later spends the window regardless.
+- **`on_error` fires on consumption.** An iterator nobody iterates reports
+  nothing, where `query` would already have routed every failure.
+- **Breaking out does not stop the server.** Measured: a client abandoning
+  the channel after 2 of 8 replies — with or without an explicit
+  `CancellationToken` — still left the queryable producing all 8. Zenoh's
+  cancellation is client-side only, which is why no cancel parameter is
+  offered; shipping one would only imply a guarantee that isn't there.
+  This is the one place the `alisten` analogy breaks: that iterator's
+  cleanup undeclares a real subscriber and genuinely stops the work.
+
+`query_one` rides on the same path and short-circuits at the first decoded
+reply instead of waiting out `timeout`. It therefore sees only the errors
+that arrive before that reply; use `query` when you need all of them.
 
 `async def` handlers are supported — register via `z.aon_query(Cls,
 handler)` (or `Cls.on_query` from within a running loop). The loop is
