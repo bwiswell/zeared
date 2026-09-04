@@ -680,7 +680,7 @@ Arbitrary strings passed to `send(topic=...)` raise `TopicError`.
 `on_message(cb)` inspects `cb`'s arity once at subscribe time:
 
 - `cb(msg)` — decoded message only.
-- `cb(msg, meta)` — `meta` is a `ZenohMeta` seared dataclass carrying the resolved `key_expr`, `timestamp`, wire `encoding`, `source_info`, optional `attachment`, and `origin` (the replay-vs-live signal: `z.Origin.LIVE` / `REPLAY` / `WILL`). No Zenoh types leak into user code.
+- `cb(msg, meta)` — `meta` is a `ZenohMeta` seared dataclass carrying the resolved `key_expr`, `timestamp`, wire `encoding`, `source_info`, `origin_zid` (the publishing session's zid, from the HLC — attribution only, never authorization), optional `attachment`, and `origin` (the replay-vs-live signal: `z.Origin.LIVE` / `REPLAY` / `WILL`). No Zenoh types leak into user code.
 
 ```python
 def on_telemetry(msg: Telemetry, meta: z.ZenohMeta) -> None:
@@ -1149,6 +1149,8 @@ prod_sub  = Telemetry.on_message(prod_cb)                 # class default (dedup
 - **One `z.Union` field per class.** Multiple would collide on top-level wire keys.
 - **No automatic session-close detection on caches without auto-reconnect.** Zenoh sessions don't support weakrefs; cached publishers and retention queryables are dropped on the next failing send / `clear_*_cache(session=sess)` call when running raw, and lazy-rebuilt after reconnect when running managed.
 - **Presence is subscriber-synthesised.** Non-subscribers never observe the offline event. Graceful close fires the will the same as a crash — if you need distinct wire values, publish explicitly before close.
+- **`origin_zid` is attribution, not authentication.** The zid comes from the sample's HLC, and `put(timestamp=...)` lets a publisher claim any value. Enforce origin at the router (Zenoh access control on a TLS certificate), not from this field.
+- **Dedupe tolerates a bounded clock skew.** A sample whose HLC is more than `DEDUPE_MAX_SKEW` seconds (default 300) ahead of local time is delivered but does not advance the dedupe watermark — otherwise one far-future timestamp blinds the subscriber to that key until restart. Set `None` to disable.
 - **`send()` raises during the reconnect window.** With `auto_reconnect=True`, ops on a session in `RECONNECTING` or `DEAD` state raise `SessionDeadError`. No buffering / blocking — callers that want either build it on top.
 - **Raw `threading.Thread` doesn't propagate batch context.** `with z.batch():` + raw thread spawn means the worker bypasses the batch. Use `asyncio.to_thread()` or `contextvars.copy_context().run()` for thread-spawned workers. See `docs/batch.md`.
 

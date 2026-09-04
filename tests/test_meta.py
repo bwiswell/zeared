@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import contextlib
 import datetime
+import random
 
-from zeared.meta import Origin, ZenohMeta, _parse_attachment_schema, _parse_hlc
+import pytest
+from conftest import wait
+
+import zeared as z
+from zeared.meta import Origin, ZenohMeta, _parse_attachment_schema, _parse_hlc, _parse_origin_zid
 
 
 class TestZenohMeta:
@@ -122,3 +128,109 @@ class TestParseAttachmentSchema:
 
         att = codec.pack(['not-a-dict'], 'msgpack')
         assert _parse_attachment_schema(att) is None
+
+
+@pytest.fixture
+def timestamped_pair():
+    """Two linked peers opened through zeared's own factories.
+
+    conftest's raw-zenoh pair fixture calls ``zenoh.open`` directly and
+    never sets ``timestamping/enabled``, so its samples carry no HLC at
+    all — fine for the tests that use it, useless for anything reading the
+    timestamp. ``z.peer`` opts into timestamping by default (RETAINED +
+    DEDUPE need it), which is what a real deployment looks like.
+    """
+    ep = f'tcp/127.0.0.1:{random.randint(20000, 40000)}'
+    pub = z.peer(listen=[ep])
+    sub = z.peer(connect=[ep])
+    wait(0.3)
+    try:
+        yield pub, sub
+    finally:
+        for sess in (pub, sub):
+            with contextlib.suppress(Exception):
+                z.release(session=sess)
+
+
+class TestOriginZid:
+    """``origin_zid`` — the HLC's id half, surfaced as attribution.
+
+    Zenoh leaves ``sample.source_info`` unset on an ordinary publish, so
+    the timestamp's id half is the only origin signal actually on the
+    wire. It is not authentication: ``put(timestamp=...)`` lets a
+    publisher claim any zid.
+    """
+
+    def test_parses_from_string_form(self):
+        assert _parse_origin_zid('7681717563362965824/abc123') == 'abc123'
+
+    def test_none_on_none_and_garbled(self):
+        assert _parse_origin_zid(None) is None
+        assert _parse_origin_zid('no-separator') is None
+
+    def test_prefers_timestamp_accessor(self):
+        class FakeTs:
+            def get_id(self):
+                return 'from-accessor'
+
+            def __str__(self):
+                return 'from-string/other'
+
+        assert _parse_origin_zid(FakeTs()) == 'from-accessor'
+
+    def test_matches_publisher_zid_on_a_real_sample(self, timestamped_pair):
+        """The end-to-end claim: the id half is the publishing session."""
+        pub, sub = timestamped_pair
+
+        @z.zeared
+        class Ping(z.Message):
+            TOPIC = 'meta/originzid'
+            v: int = z.Int(required=True)
+
+        seen: list = []
+        Ping.on_message(lambda m, meta: seen.append(meta), session=sub)
+        wait(0.3)
+        Ping(v=1).send(session=pub)
+        wait(0.5)
+
+        assert seen, 'no sample delivered'
+        assert seen[0].origin_zid == str(pub.zid())
+
+
+class TestIssuedAtOnRealSamples:
+    """Regression: ``issued_at`` was ``None`` on every real sample.
+
+    ``_HLC_RE`` required 16 hex digits, but ``zenoh.Timestamp.__str__``
+    renders the NTP64 value in **decimal** (19 digits for current dates),
+    so the regex never matched and the advertised field silently stayed
+    ``None``. The unit test that covered ``_parse_hlc`` built its input
+    with ``f'{ntp64:016x}'`` — a form Zenoh does not emit — which is
+    exactly why it survived.
+    """
+
+    def test_decimal_ntp64_string_parses(self):
+        seconds = 1735689600  # 2025-01-01T00:00:00 UTC
+        ntp64 = seconds << 32
+        result = _parse_hlc(f'{ntp64:d}/abc')
+        assert result is not None
+        assert abs((result - datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)).total_seconds()) < 1.0
+
+    def test_issued_at_populated_on_a_real_sample(self, timestamped_pair):
+        pub, sub = timestamped_pair
+
+        @z.zeared
+        class Ping(z.Message):
+            TOPIC = 'meta/issuedat'
+            v: int = z.Int(required=True)
+
+        seen: list = []
+        Ping.on_message(lambda m, meta: seen.append(meta), session=sub)
+        wait(0.3)
+        before = datetime.datetime.now(datetime.UTC)
+        Ping(v=1).send(session=pub)
+        wait(0.5)
+
+        assert seen, 'no sample delivered'
+        issued = seen[0].issued_at
+        assert issued is not None, 'issued_at is None on a real sample'
+        assert abs((issued - before).total_seconds()) < 60.0

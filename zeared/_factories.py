@@ -80,6 +80,48 @@ def _open_with_retry(  # noqa: PLR0913
             return sess
 
 
+def _resolve_zenoh_config(
+    config: SessionConfig | None,
+    zenoh_config: zenoh.Config | None,
+) -> zenoh.Config | None:
+    """Build a ``zenoh.Config`` from a ``SessionConfig``'s raw-Zenoh fields.
+
+    Returns ``None`` when there is nothing raw to apply, which leaves the
+    ``_build_config_for_*`` helpers on their normal "zeared builds the
+    whole config" branch.
+
+    An explicit ``zenoh_config=`` kwarg always wins — it is the lower-level
+    escape hatch and a caller who reaches for it has said what they want.
+
+    Precedence within the built config: ``zenoh_config_file`` first, then
+    ``mode`` / ``timestamping`` (which the ``_build_config_for_*`` helpers
+    skip once they are handed a config, so they have to be set here), then
+    ``zenoh_overrides``. Overrides land last so the field name is honest.
+
+    This is what makes a security posture — mTLS, access control, scouting
+    off — expressible through the declarative ``SessionConfig`` path
+    instead of only through a hand-built ``zenoh.Config``.
+    """
+    if zenoh_config is not None:
+        return zenoh_config
+    if config is None:
+        return None
+    has_file = bool(config.zenoh_config_file)
+    has_overrides = bool(config.zenoh_overrides)
+    if not has_file and not has_overrides:
+        return None
+
+    c = zenoh.Config.from_file(config.zenoh_config_file) if has_file else zenoh.Config()
+    # ``mode`` is a required SessionConfig field, so it is always known;
+    # timestamping mirrors the factories' own default (RETAINED + DEDUPE
+    # need the HLC).
+    c.insert_json5('mode', json.dumps(config.mode.value))
+    c.insert_json5('timestamping/enabled', 'true')
+    for key, value in config.zenoh_overrides.items():
+        c.insert_json5(str(key), json.dumps(value))
+    return c
+
+
 def _build_config_for_peer(
     connect: list | None,
     listen: list | None,
@@ -279,6 +321,8 @@ def peer(  # noqa: PLR0913
     if listen is not None:
         base_listen = listen
 
+    zenoh_config = _resolve_zenoh_config(config, zenoh_config)
+
     label = f'peer(connect={base_connect or []}, listen={base_listen or []})'
 
     def _open() -> zenoh.Session:
@@ -354,6 +398,8 @@ def client(  # noqa: PLR0913
     if not endpoints:
         msg = 'client(): need either router=<endpoint(s)> or config=SessionConfig(... with connect/router)'
         raise TypeError(msg)
+
+    zenoh_config = _resolve_zenoh_config(config, zenoh_config)
 
     label = f'client(connect={endpoints})'
 
@@ -437,6 +483,8 @@ def hub(  # noqa: PLR0913
         base_connect = connect
     if not base_listen:
         base_listen = ['tcp/0.0.0.0:7447']
+
+    zenoh_config = _resolve_zenoh_config(config, zenoh_config)
 
     label = f'hub(listen={base_listen}, connect={base_connect or []})'
 

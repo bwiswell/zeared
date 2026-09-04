@@ -13,6 +13,7 @@ class ZenohMeta(z.Zeared):
     issued_at:   datetime.datetime | None = z.DateTime(default=None)  # parsed UTC
     encoding:    str | None               = z.Str(default=None)       # e.g. 'application/msgpack'
     source_info: str | None               = z.Str(default=None)       # stringified source id
+    origin_zid:  str | None               = z.Str(default=None)       # HLC id half (attribution only)
     attachment:  bytes | None             = z.Bytes(default=None)
     schema:      str | None               = z.Str(default=None)       # publisher's class SCHEMA
     captures:    dict                     = z.Dict(default_factory=dict)
@@ -42,6 +43,22 @@ and `id: int = z.Int(...)`), the captured value is additionally coerced
 through the field's `deserialize` and set on the instance — both `msg.id`
 and `meta.captures['id']` are available.
 
+## `meta.origin_zid` — attribution, not authentication
+
+The Zenoh session id of whoever stamped the sample's HLC, normally the
+publisher. Use it for logging, forensics, and spotting a misconfigured
+node.
+
+**Do not authorize on it.** `Session.put` and `Publisher.put` both accept
+a caller-supplied `timestamp=`, so a hostile publisher can claim any zid.
+Real origin enforcement belongs at the router — Zenoh access control keyed
+on a TLS certificate. A field that looks like provenance but isn't is
+worse than no field at all.
+
+`source_info` sits next to it and is almost always `None`: Zenoh only
+populates it when a publisher explicitly passes `source_info=`, so the
+HLC's id half is the only origin signal ordinarily on the wire.
+
 ## `meta.schema` and `meta.issued_at`
 
 `schema` carries the publisher's class-level `SCHEMA` value, decoded
@@ -55,6 +72,11 @@ comparison automatically; mismatches drop the sample and route via
 warn-once-per-(sender, schema) policy. Subscribers with `SCHEMA = None`
 skip the check entirely; `meta.schema` still populates from the wire
 for diagnostic use.
+
+> **Fixed in 0.3.3:** `issued_at` was `None` on every real sample. The
+> parser required 16 hex digits, but `zenoh.Timestamp.__str__` renders the
+> NTP64 value in decimal. It now reads `Timestamp.get_time()` directly and
+> only falls back to string parsing.
 
 `issued_at` is parsed from the sample's HLC timestamp (`sample.timestamp`)
 into a UTC `datetime.datetime`. Requires Zenoh timestamping to be

@@ -78,6 +78,15 @@ class Message(
     RETAINED: ClassVar[bool] = False
     LIVELINESS: ClassVar[bool] = False
     DEDUPE: ClassVar[bool] = True
+    # Ceiling, in seconds, on how far ahead of the local clock a sample's
+    # HLC may be and still advance the dedupe watermark. ``None`` disables
+    # the check (pre-0.3.3 behaviour). A sample beyond the ceiling is still
+    # delivered — it just doesn't move the watermark, so one far-future
+    # timestamp can't park it ahead of every genuine sample and blind the
+    # subscriber to that key until restart. Raise it for publishers with
+    # legitimately loose clocks; the cost of a high value is only that a
+    # poisoned watermark takes longer to be rejected.
+    DEDUPE_MAX_SKEW: ClassVar[float | None] = 300.0
     # Optional retention TTL in seconds. ``None`` (default) means
     # retained values live forever (or until the publishing session
     # closes / a tombstone is emitted). Any positive float opts the
