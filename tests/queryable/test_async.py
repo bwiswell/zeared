@@ -7,6 +7,7 @@ zeared has no pytest-asyncio dependency; async bodies run via
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 from conftest import _peer_session
@@ -179,3 +180,129 @@ class TestAsyncGeneratorHandler:
                 Row.on_query(handler, session=s)
         finally:
             s.close()
+
+
+class TestAqueryIter:
+    """``aquery_iter`` — the async streaming getter.
+
+    Bridges the blocking channel loop to the event loop through a worker
+    thread, terminating on a sentinel (a query ends; a subscription
+    doesn't, which is why ``alisten`` needs no such thing).
+    """
+
+    def test_yields_same_rows_as_aquery(self, session):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/aiter/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        z.session = session
+        out = {}
+
+        async def body():
+            async def handler(ctx):
+                for v in range(4):
+                    yield Row(id=ctx.captures['id'], v=v)
+
+            qbl = await z.aon_query(Row, handler)
+            await asyncio.sleep(0.3)
+            out['streamed'] = [m.v async for m in z.aquery_iter(Row, id='a', timeout=2.0)]
+            out['collected'] = [m.v for m in await z.aquery(Row, id='a', timeout=2.0)]
+            qbl.close()
+
+        asyncio.run(body())
+        assert sorted(out['streamed']) == sorted(out['collected']) == [0, 1, 2, 3]
+
+    def test_first_row_arrives_before_the_last_is_produced(self, session):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/aitertiming/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        z.session = session
+        out = {}
+
+        async def body():
+            async def handler(ctx):
+                for v in range(4):
+                    await asyncio.sleep(0.3)
+                    yield Row(id=ctx.captures['id'], v=v)
+
+            qbl = await z.aon_query(Row, handler)
+            await asyncio.sleep(0.3)
+
+            t0 = time.monotonic()
+            async for m in z.aquery_iter(Row, id='a', timeout=5.0):
+                out['first'] = m
+                out['t_first'] = time.monotonic() - t0
+                break
+
+            t1 = time.monotonic()
+            out['all'] = await z.aquery(Row, id='a', timeout=5.0)
+            out['t_all'] = time.monotonic() - t1
+            qbl.close()
+
+        asyncio.run(body())
+        assert out['first'].v == 0
+        assert len(out['all']) == 4
+        assert out['t_first'] < out['t_all']
+        assert out['t_first'] < 0.9, f'first reply took {out["t_first"]:.2f}s — not streaming'
+
+    def test_early_break_does_not_hang_the_loop(self, session):
+        """Breaking out must return promptly and not wedge on the worker.
+
+        ``asyncio.to_thread`` can't interrupt a blocked thread, so the
+        generator's ``finally`` signals it to stand down instead. The
+        serving side still runs to completion — that asymmetry is
+        documented, not fixed.
+        """
+
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/aiterbreak/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        z.session = session
+        out = {}
+
+        async def body():
+            async def handler(ctx):
+                for v in range(6):
+                    await asyncio.sleep(0.2)
+                    yield Row(id=ctx.captures['id'], v=v)
+
+            qbl = await z.aon_query(Row, handler)
+            await asyncio.sleep(0.3)
+            t0 = time.monotonic()
+            seen = []
+            async for m in z.aquery_iter(Row, id='a', timeout=10.0):
+                seen.append(m.v)
+                if len(seen) == 2:
+                    break
+            out['elapsed'] = time.monotonic() - t0
+            out['seen'] = seen
+            qbl.close()
+
+        asyncio.run(asyncio.wait_for(body(), timeout=20.0))
+        assert out['seen'] == [0, 1]
+        # Returned near the second reply (~0.4s), not the 10s timeout.
+        assert out['elapsed'] < 3.0, f'break took {out["elapsed"]:.2f}s'
+
+    def test_empty_when_nobody_answers(self, session):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/aiternone/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        z.session = session
+        out = {}
+
+        async def body():
+            out['rows'] = [m async for m in z.aquery_iter(Row, id='nobody', timeout=0.5)]
+
+        asyncio.run(body())
+        assert out['rows'] == []

@@ -13,6 +13,7 @@ same session, same ``z.batch()`` buffer (backed by ``contextvars``).
 from __future__ import annotations
 
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -319,8 +320,92 @@ async def aquery(  # noqa: PLR0913
     )
 
 
+async def aquery_iter(  # noqa: PLR0913
+    cls: type[Message],
+    *,
+    session: zenoh.Session | None = None,
+    params: dict | None = None,
+    request: Any = None,
+    # Mirrors the sync `Cls.iter_query(timeout=...)` public API.
+    timeout: float | None = None,  # noqa: ASYNC109
+    target: Any = None,
+    consolidation: Any = None,
+    on_error: Callable[[Exception, bytes], None] | None = None,
+    **key_fields: Any,
+) -> AsyncIterator:
+    """Async generator yielding decoded replies as they arrive.
+
+    ``async for row in z.aquery_iter(Cls, id='x'): ...`` — the streaming
+    sibling of :func:`aquery`, which collects the whole list before
+    returning.
+
+    Zenoh's bindings are sync, so the blocking channel loop runs in a
+    worker thread and hands items to the loop via ``call_soon_threadsafe``
+    — the same bridge :func:`alisten` uses for subscribers. Unlike a
+    subscriber a query *ends*, so a sentinel closes the queue; an
+    exception raised in the worker is re-raised in the consumer.
+
+    Breaking out of the loop stops this side promptly — the worker is told
+    to stop and exits at the next reply or the timeout, whichever comes
+    first — but it does **not** stop the serving queryable, which runs to
+    completion. Zenoh's cancellation is client-side only.
+
+    There is no ``maxsize``: replies are already in flight from the
+    channel, so bounding the queue would relocate buffering rather than
+    apply backpressure. The bound that matters is ``timeout``.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    done = object()
+    stop = threading.Event()
+
+    def _pump() -> None:
+        # Runs on a worker thread. Every hand-off goes through the loop,
+        # never touching the queue directly.
+        try:
+            for msg in cls.iter_query(
+                session=session,
+                params=params,
+                request=request,
+                timeout=timeout,
+                target=target,
+                consolidation=consolidation,
+                on_error=on_error,
+                **key_fields,
+            ):
+                if stop.is_set():
+                    return
+                loop.call_soon_threadsafe(queue.put_nowait, msg)
+        except Exception as exc:  # noqa: BLE001
+            # Surface it to the consumer rather than losing it on a
+            # detached thread.
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, done)
+
+    worker = asyncio.ensure_future(asyncio.to_thread(_pump))
+    try:
+        while True:
+            item = await queue.get()
+            if item is done:
+                return
+            if isinstance(item, Exception):
+                raise item
+            yield item
+    finally:
+        # ``asyncio.to_thread`` can't interrupt a blocked worker, so ask it
+        # to stand down; it notices at the next reply or the timeout.
+        stop.set()
+        if not worker.done():
+            worker.cancel()
+
+
 async def aquery_one(cls: type[Message], **kwargs: Any) -> Message | None:
-    """Async variant of ``Cls.query_one(...)``."""
+    """Async variant of ``Cls.query_one(...)``.
+
+    Inherits the short-circuit: returns at the first decoded reply rather
+    than waiting out ``timeout`` (0.3.4).
+    """
     return await asyncio.to_thread(lambda: cls.query_one(**kwargs))
 
 
@@ -371,6 +456,7 @@ __all__ = [
     'aopen',
     'apeer',
     'aquery',
+    'aquery_iter',
     'aquery_one',
     'asend',
     'asend_batch',

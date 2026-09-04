@@ -68,6 +68,7 @@ from .async_ import (
     aopen,
     apeer,
     aquery,
+    aquery_iter,
     aquery_one,
     asend,
     asend_batch,
@@ -97,7 +98,7 @@ from .queryable import Queryable, QueryContext, clear_queryable_cache
 from .retention import clear_retention_cache
 from .subscriber import Subscriber
 
-__version__ = '0.3.3'
+__version__ = '0.3.4'
 
 # Module-level defaults.
 # ``session`` is a dual-role handle (see ``_SessionHandle`` docstring) — the
@@ -168,6 +169,7 @@ __all__ = [
     'aopen',
     'apeer',
     'aquery',
+    'aquery_iter',
     'aquery_one',
     'asend',
     'asend_batch',
