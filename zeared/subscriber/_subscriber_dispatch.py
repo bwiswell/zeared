@@ -13,6 +13,7 @@ the same closure).
 from __future__ import annotations
 
 import contextlib
+import datetime
 import inspect
 import logging
 from typing import TYPE_CHECKING, Any
@@ -24,7 +25,7 @@ from ..errors import (
     SchemaMismatchError,
     SubscriptionError,
 )
-from ..meta import Origin, _parse_attachment_schema, from_sample
+from ..meta import Origin, _parse_attachment_schema, _parse_hlc, from_sample
 
 if TYPE_CHECKING:
     from collections import OrderedDict
@@ -37,6 +38,46 @@ if TYPE_CHECKING:
 
 
 _log = logging.getLogger('zeared.subscriber')
+
+# Default ceiling on how far ahead of the local clock a sample's HLC may
+# be and still advance the dedupe watermark. Overridable per class via
+# ``DEDUPE_MAX_SKEW``; ``None`` disables the check.
+_DEFAULT_DEDUPE_MAX_SKEW = 300.0
+
+
+def _safe_on_error(
+    on_error: Callable[[Exception, bytes], None] | None,
+    exc: Exception,
+    raw: bytes,
+    msg_cls: type[Message],
+) -> bool:
+    """Invoke a user ``on_error`` callback, absorbing anything it raises.
+
+    Returns ``True`` when a callback ran, so callers can fall back to
+    logging when none is registered.
+
+    Dispatch runs on Zenoh's callback thread. An ``on_error`` that raises
+    used to escape into it — the same defect fixed on the queryable side
+    in 0.3.2, and the one this module's own docstring already promises
+    against ("every failure mode through ``on_error`` / ``_log``").
+
+    Zenoh's handler does absorb the escape, so the subscription survives
+    either way; what it does not do is say what the *original* error was.
+    An escaping handler therefore turned a decode failure into a bare
+    "callback error" traceback with the actual cause nowhere in the log.
+    Catching it here keeps both errors, and keeps the promise.
+    """
+    if on_error is None:
+        return False
+    try:
+        on_error(exc, raw)
+    except Exception:  # noqa: BLE001
+        _log.exception(
+            '%s: on_error callback itself raised; original error was: %s',
+            msg_cls.__name__,
+            exc,
+        )
+    return True
 
 
 _META_CALLBACK_ARITY = 2  # (msg, meta) — a 2-arg callback opts into metadata
@@ -173,6 +214,40 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
 
     tpls = msg_cls._templates()  # noqa: SLF001
 
+    max_skew = getattr(msg_cls, 'DEDUPE_MAX_SKEW', _DEFAULT_DEDUPE_MAX_SKEW)
+    skew_warned: set[str] = set()
+
+    def _within_skew(ts: object, key_expr: str) -> bool:
+        """Whether ``ts`` is close enough to now to advance the watermark.
+
+        ``True`` when the check is disabled, when the HLC can't be parsed
+        (nothing to compare against — the pre-existing behaviour), or when
+        the sample is inside the ceiling. Warns once per key so a genuinely
+        skewed publisher is visible in the log rather than silently
+        un-deduped.
+        """
+        if max_skew is None:
+            return True
+        issued = _parse_hlc(ts)
+        if issued is None:
+            return True
+        skew = (issued - datetime.datetime.now(datetime.UTC)).total_seconds()
+        if skew <= max_skew:
+            return True
+        if key_expr not in skew_warned:
+            skew_warned.add(key_expr)
+            _log.warning(
+                '%s: sample on key_expr=%s is %.0fs ahead of local time '
+                '(ceiling %.0fs); delivering it but not advancing the '
+                'dedupe watermark. Check the publisher clock — or, if this '
+                'is unexpected traffic, who is publishing on that key.',
+                msg_cls.__name__,
+                key_expr,
+                skew,
+                max_skew,
+            )
+        return False
+
     def _dispatch_remove(
         sample: zenoh.Sample,
         origin: Origin,
@@ -192,9 +267,7 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
             wrapped = CallbackError(f'{msg_cls.__name__} on_remove raised on key_expr={key_expr!r}: {exc}')
             wrapped.__cause__ = exc
             # A tombstone carries no payload — hand on_error empty bytes.
-            if on_error is not None:
-                on_error(wrapped, b'')
-            else:
+            if not _safe_on_error(on_error, wrapped, b'', msg_cls):
                 _log.exception(
                     '%s on_remove callback raised',
                     msg_cls.__name__,
@@ -224,7 +297,16 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
                 last = seen_ts.get(key_expr)
                 if last is not None and ts_str <= last:
                     return  # duplicate (or out-of-order); drop
-                seen_ts[key_expr] = ts_str
+                # Deliver, but only let a sample within the skew ceiling
+                # move the watermark. A far-future HLC would otherwise
+                # park the watermark ahead of every genuine sample and
+                # blind this subscriber to the key until restart — one
+                # message, no recovery. Declining the *advance* defeats
+                # that while a clock-skewed publisher still gets through;
+                # dropping the sample instead would turn someone else's
+                # bad clock into our own outage.
+                if _within_skew(ts, key_expr):
+                    seen_ts[key_expr] = ts_str
         # Schema-mismatch check — only when this class expects a
         # schema (SCHEMA != None). Pulls the wire schema from the
         # attachment; mismatches drop the sample (route via on_error
@@ -257,9 +339,7 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
                         f'this (sender, schema) pair will drop '
                         f'silently'
                     )
-                    if on_error is not None:
-                        on_error(wrapped, raw)
-                    else:
+                    if not _safe_on_error(on_error, wrapped, raw, msg_cls):
                         _log.warning('%s', wrapped)
                 return
 
@@ -269,9 +349,7 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
         except Exception as exc:  # noqa: BLE001
             wrapped = DecodeError(f'{msg_cls.__name__} decode failed on key_expr={key_expr!r}: {exc}')
             wrapped.__cause__ = exc
-            if on_error is not None:
-                on_error(wrapped, raw)
-            else:
+            if not _safe_on_error(on_error, wrapped, raw, msg_cls):
                 _log.warning(
                     '%s: decode failed on key_expr=%s: %s',
                     msg_cls.__name__,
@@ -291,9 +369,7 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
         except Exception as exc:  # noqa: BLE001
             wrapped = CallbackError(f'{msg_cls.__name__} callback raised on key_expr={key_expr!r}: {exc}')
             wrapped.__cause__ = exc
-            if on_error is not None:
-                on_error(wrapped, raw)
-            else:
+            if not _safe_on_error(on_error, wrapped, raw, msg_cls):
                 _log.exception(
                     '%s subscriber callback raised',
                     msg_cls.__name__,

@@ -23,6 +23,8 @@ class SessionConfig(z.Zeared):
     initial_backoff: float      = z.Float(default=0.1)
     max_backoff:     float      = z.Float(default=30.0)
     max_attempts:    int | None = z.Int(default=None)
+    zenoh_config_file: str | None = z.Str(default=None)   # JSON5 Zenoh config path
+    zenoh_overrides:   dict       = z.Dict(default_factory=dict)
 ```
 
 `mode` is a `z.Mode` enum (`Mode.PEER` / `Mode.CLIENT`). Strings still
@@ -112,6 +114,31 @@ zeared's factory kwargs split into two categories:
 |----------|--------------------------------|
 | **Maps to a `zenoh.Config` field** (`timestamping`) | Silenced — you took over the Config; layer Config-level settings yourself or drop the high-level kwarg. |
 | **Out-of-band** (`retry`, `initial_backoff`, `max_backoff`, `max_attempts`, `auto_reconnect`, `probe_interval`, `gc_interval`) | Layered freely on top — they don't touch the `zenoh.Config`. |
+
+## Raw Zenoh settings: `zenoh_config_file` / `zenoh_overrides`
+
+Anything zeared doesn't model — TLS/mTLS, access control, scouting,
+transport limits — comes from these two fields:
+
+```toml
+[zenoh]
+mode = "client"
+router = "tcp/hub.local:7447"
+zenoh_config_file = "/etc/rio-node.json5"          # certs, ACL
+zenoh_overrides = { "scouting/multicast/enabled" = false }
+```
+
+Precedence when the underlying `zenoh.Config` is built: **the file, then
+zeared's own `mode` / timestamping, then `zenoh_overrides`.** Overrides
+genuinely override — a `mode` set there beats `SessionConfig.mode`.
+
+An explicit `zenoh_config=<zenoh.Config>` factory kwarg still wins over
+both; it is the lower-level escape hatch, and a caller reaching for it has
+said what they want.
+
+`ZEARED_SESSION_ZENOH_CONFIG_FILE` carries the path from the environment.
+`zenoh_overrides` has no env form — a nested mapping doesn't survive a
+flat env string legibly; put it in the file the config loads from.
 
 So `z.peer(zenoh_config=raw, timestamping=True)` does NOT inject
 timestamping; `raw` is your responsibility. But

@@ -50,6 +50,15 @@ class ZenohMeta(s.Seared):
     timestamping is enabled. ``None`` when no timestamp on the sample
     (synthesised wills, raw publishes pre-0.0.13, etc.).
 
+    ``origin_zid`` is the Zenoh session id of whoever stamped the sample's
+    HLC — normally the publisher. It is **attribution, not
+    authentication**: ``Session.put`` / ``Publisher.put`` both accept a
+    caller-supplied ``timestamp=``, so a hostile publisher can claim any
+    zid. Use it for logging, forensics, and catching a misconfigured node;
+    do not use it to authorize anything. Real origin enforcement belongs
+    at the router (Zenoh access-control keyed on a TLS certificate).
+    ``None`` when the sample carries no timestamp.
+
     ``origin`` is the sample's provenance — ``Origin.LIVE`` for a real
     publish through the live subscriber, ``Origin.REPLAY`` for a
     retained-fetch delivery (subscribe-time or post-reconnect), and
@@ -65,6 +74,7 @@ class ZenohMeta(s.Seared):
     issued_at:   datetime.datetime | None = s.DateTime(default=None)  # parsed UTC
     encoding:    str | None               = s.Str(default=None)
     source_info: str | None               = s.Str(default=None)
+    origin_zid:  str | None               = s.Str(default=None)      # HLC id half
     attachment:  bytes | None             = s.Bytes(default=None)
     schema:      str | None               = s.Str(default=None)
     captures:    dict                     = s.Dict(default_factory=dict)
@@ -72,37 +82,92 @@ class ZenohMeta(s.Seared):
     # fmt: on
 
 
-# Zenoh HLC sample timestamp shape: ``<8-hex-seconds><8-hex-frac>/<id>``.
-# Format documented in Zenoh's protocol spec; parser is permissive — falls
-# back to None on any error.
-_HLC_RE = re.compile(r'^([0-9a-fA-F]{16})/')
+# Zenoh HLC sample timestamp shape: ``<ntp64>/<id>``. The numeric half is
+# a 64-bit NTP fixed-point value (high 32 bits = seconds since 1970, low
+# 32 = fraction); ``zenoh.Timestamp.__str__`` renders it in **decimal**.
+#
+# The digits are accepted in either base because this regex only sees the
+# string fallback path: a real ``zenoh.Timestamp`` is read through
+# ``get_time()`` / ``get_id()`` below. Which base a 16-digit run is meant
+# to be is genuinely ambiguous, so ``_ntp64_seconds`` disambiguates on the
+# epoch it yields rather than guessing from the text.
+_HLC_RE = re.compile(r'^([0-9a-fA-F]+)/')
+
+# Any decode landing outside [2000-01-01, 2100-01-01) is the wrong base.
+_EPOCH_PLAUSIBLE_MIN = 946684800
+_EPOCH_PLAUSIBLE_MAX = 4102444800
+
+
+def _ntp64_seconds(raw: str) -> float | None:
+    """Decode the numeric half of an HLC string into epoch seconds.
+
+    Tries decimal first (what Zenoh actually emits), then hex, and keeps
+    whichever yields a plausible wall-clock time.
+    """
+    for base in (10, 16):
+        try:
+            ntp64 = int(raw, base)
+        except ValueError:
+            continue
+        seconds = ntp64 >> 32
+        if _EPOCH_PLAUSIBLE_MIN <= seconds <= _EPOCH_PLAUSIBLE_MAX:
+            # Low 32 bits are an NTP fractional-second field.
+            return seconds + (ntp64 & 0xFFFFFFFF) / (1 << 32)
+    return None
+
+
+def _parse_hlc_string(s_repr: str) -> datetime.datetime | None:
+    """Parse the ``<ntp64>/<id>`` string form into a UTC ``datetime``."""
+    m = _HLC_RE.match(s_repr)
+    if not m:
+        return None
+    epoch = _ntp64_seconds(m.group(1))
+    if epoch is None:
+        return None
+    try:
+        return datetime.datetime.fromtimestamp(epoch, tz=datetime.UTC)
+    except ValueError, OSError, OverflowError:
+        return None
 
 
 def _parse_hlc(ts: object) -> datetime.datetime | None:
     """Parse a Zenoh HLC sample timestamp into a UTC ``datetime``.
 
-    Zenoh HLC is a 64-bit NTP-style fixed-point timestamp followed by a
-    node id; high 32 bits are seconds since 1970, low 32 bits are
-    fractional. Falls back to ``None`` on any parse failure.
+    Prefers ``zenoh.Timestamp.get_time()``, which returns an aware UTC
+    ``datetime`` directly. Falls back to parsing the string form for
+    hand-built values and older bindings. Permissive — ``None`` on any
+    failure, so a malformed timestamp never breaks dispatch.
     """
     if ts is None:
         return None
-    s_repr = str(ts)
-    m = _HLC_RE.match(s_repr)
-    if not m:
+    get_time = getattr(ts, 'get_time', None)
+    if get_time is not None:
+        try:
+            return get_time()
+        except Exception:  # noqa: BLE001
+            return None
+    return _parse_hlc_string(str(ts))
+
+
+def _parse_origin_zid(ts: object) -> str | None:
+    """Extract the publishing session's zid from a Zenoh HLC timestamp.
+
+    The HLC's id half is the zid of whichever session stamped the sample —
+    normally the publisher. Prefers ``zenoh.Timestamp.get_id()``; falls
+    back to the string suffix. ``None`` when absent or unparseable.
+
+    **Attribution, not authentication** — see :attr:`ZenohMeta.origin_zid`.
+    """
+    if ts is None:
         return None
-    try:
-        ntp64 = int(m.group(1), 16)
-        seconds = ntp64 >> 32
-        fraction = ntp64 & 0xFFFFFFFF
-        # Convert NTP fractional 32-bit field to seconds.
-        frac_seconds = fraction / (1 << 32)
-        return datetime.datetime.fromtimestamp(
-            seconds + frac_seconds,
-            tz=datetime.UTC,
-        )
-    except ValueError, OSError, OverflowError:
-        return None
+    get_id = getattr(ts, 'get_id', None)
+    if get_id is not None:
+        try:
+            return str(get_id())
+        except Exception:  # noqa: BLE001
+            return None
+    _, sep, tail = str(ts).partition('/')
+    return tail or None if sep else None
 
 
 def _parse_attachment_schema(attachment: bytes | None) -> str | None:
@@ -156,6 +221,11 @@ def from_sample(sample: zenoh.Sample) -> ZenohMeta:
     src = sample.source_info
     src_str = str(src) if src is not None else None
 
+    # Zenoh leaves ``source_info`` unset on an ordinary publish (it is only
+    # populated when a caller passes ``source_info=``), so the HLC's id
+    # half is the only origin signal actually present on the wire.
+    origin_zid = _parse_origin_zid(ts)
+
     attach = sample.attachment
     attach_bytes = bytes(attach) if attach is not None else None
 
@@ -167,6 +237,7 @@ def from_sample(sample: zenoh.Sample) -> ZenohMeta:
         issued_at=issued_at,
         encoding=enc_str,
         source_info=src_str,
+        origin_zid=origin_zid,
         attachment=attach_bytes,
         schema=schema,
         captures={},

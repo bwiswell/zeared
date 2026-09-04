@@ -47,6 +47,19 @@ class SessionConfig(s.Seared):
     becomes the sole ``connect`` endpoint when set and ``connect`` is
     empty.
 
+    Raw Zenoh settings zeared doesn't model — TLS/mTLS, access control,
+    scouting — come from ``zenoh_config_file`` (a path to a JSON5 Zenoh
+    config) and ``zenoh_overrides`` (JSON5 fragments keyed by config path,
+    e.g. ``{'scouting/multicast/enabled': False}``). Without these the
+    declarative path can only express what the typed fields cover, which
+    is why a security posture had to be set by bypassing ``SessionConfig``
+    entirely and calling a factory with ``zenoh_config=``.
+
+    Precedence when building the underlying ``zenoh.Config``: the file
+    first, then zeared's own ``mode`` / timestamping, then
+    ``zenoh_overrides``. Overrides genuinely override — a ``mode`` set
+    there beats :attr:`mode`.
+
     Retry knobs:
       - ``retry=False`` (default): ``zenoh.open`` is called once; failures
         propagate immediately.
@@ -71,6 +84,8 @@ class SessionConfig(s.Seared):
     initial_backoff: float      = s.Float(default=0.1)
     max_backoff:     float      = s.Float(default=30.0)
     max_attempts:    int | None = s.Int(default=None)
+    zenoh_config_file: str | None = s.Str(default=None)   # JSON5 Zenoh config path
+    zenoh_overrides:   dict       = s.Dict(default_factory=dict)
     # fmt: on
 
     # -- builders -----------------------------------------------------
@@ -136,6 +151,12 @@ class SessionConfig(s.Seared):
         | ``INITIAL_BACKOFF`` | ``initial_backoff`` | optional; float seconds |
         | ``MAX_BACKOFF`` | ``max_backoff`` | optional; float seconds |
         | ``MAX_ATTEMPTS`` | ``max_attempts`` | optional; int |
+        | ``ZENOH_CONFIG_FILE`` | ``zenoh_config_file`` | optional; path to a JSON5 Zenoh config |
+
+        ``zenoh_overrides`` is deliberately absent from the env surface —
+        a nested JSON5 mapping doesn't survive a flat env string legibly.
+        Put it in the TOML / JSON the config is loaded from, or point
+        ``ZENOH_CONFIG_FILE`` at a file.
 
         Missing optional fields fall back to seared defaults. Missing
         required ``MODE`` raises ``ValidationError`` via ``cls.load``.
@@ -150,6 +171,7 @@ class SessionConfig(s.Seared):
             ('INITIAL_BACKOFF', 'initial_backoff', float),
             ('MAX_BACKOFF', 'max_backoff', float),
             ('MAX_ATTEMPTS', 'max_attempts', int),
+            ('ZENOH_CONFIG_FILE', 'zenoh_config_file', str),
         ):
             v = os.environ.get(f'{prefix}{env_key}')
             if v is None or v == '':

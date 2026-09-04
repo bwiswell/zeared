@@ -9,16 +9,22 @@ Folds in the retention-dedupe coverage that previously lived in
 
 from __future__ import annotations
 
+import datetime
+import logging
 import time
+from collections import OrderedDict
 
+import zenoh
 from conftest import wait
 
 import zeared as z
+from zeared import _codec as codec
 from zeared.subscriber._subscriber_dispatch import (
     _adapt_async_callback,
     _build_dispatch,
     _make_presence_dispatcher,
     _pick_encoding,
+    _safe_on_error,
     _wants_meta,
 )
 
@@ -308,3 +314,181 @@ class TestHLCTimestampLexCompare:
 
     def test_equal_strings_compare_equal(self):
         assert not ('1700000000.000000000/abc' < '1700000000.000000000/abc')
+
+
+class TestSafeOnError:
+    """Pin: a user ``on_error`` that raises must not escape into Zenoh.
+
+    Dispatch runs on Zenoh's callback thread. Before 0.3.3 every
+    ``on_error`` call site invoked the user callback bare, so a raising
+    error handler propagated out of dispatch — the same defect fixed on
+    the queryable side in 0.3.2, and one this module's own docstring
+    already promised against ("every failure mode through ``on_error`` /
+    ``_log``").
+    """
+
+    def test_returns_false_without_a_callback(self):
+        class M:
+            __name__ = 'M'
+
+        assert _safe_on_error(None, ValueError('x'), b'', M) is False
+
+    def test_absorbs_a_raising_callback(self, caplog):
+        class M:
+            __name__ = 'M'
+
+        def boom(exc, raw):
+            msg = 'handler exploded'
+            raise RuntimeError(msg)
+
+        with caplog.at_level(logging.ERROR, logger='zeared.subscriber'):
+            assert _safe_on_error(boom, ValueError('original'), b'', M) is True
+        assert 'on_error callback itself raised' in caplog.text
+        # The original error is still reported, not swallowed by the second.
+        assert 'original' in caplog.text
+
+    def test_raising_on_error_is_logged_with_the_original_error(self, session, caplog):
+        """End-to-end: a bad decode plus a raising handler.
+
+        Zenoh's own handler absorbs an escaping callback, so this is not
+        about surviving — it is about *diagnosis*. Unguarded, the log got
+        a bare "callback error" traceback for the handler and lost the
+        decode failure that triggered it.
+        """
+
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'dispatch/safeerr'
+            v: int = z.Int(required=True)
+
+        calls: list = []
+
+        def bad_handler(exc, raw):
+            calls.append(exc)
+            msg = 'handler exploded'
+            raise RuntimeError(msg)
+
+        z.session = session
+        sub = Row.on_message(lambda m: None, on_error=bad_handler)
+        wait()
+        with caplog.at_level(logging.ERROR, logger='zeared.subscriber'):
+            # Undecodable payload on the class's own topic.
+            session.put('dispatch/safeerr', b'\xff\xfe not msgpack')
+            wait(0.4)
+        sub.close()
+
+        assert len(calls) == 1
+        # Both errors survive: the handler's, and the decode failure that
+        # provoked it. The latter is what an unguarded escape threw away.
+        assert 'on_error callback itself raised' in caplog.text
+        assert 'decode failed' in caplog.text
+
+
+class TestDedupeSkewCeiling:
+    """Pin: a far-future HLC must not park the dedupe watermark.
+
+    Dedupe drops any sample whose timestamp string sorts ``<=`` the last
+    seen for that key. With no ceiling, one sample stamped years ahead
+    sets a watermark no genuine sample can beat — the subscriber is blind
+    to that key until the process restarts. One message, no recovery.
+
+    The fix delivers the offending sample but declines to advance the
+    watermark, so a publisher with a merely skewed clock still gets
+    through rather than turning someone else's bad clock into our outage.
+    """
+
+    def _dispatch_for(self, msg_cls, seen_ts, received):
+        return _build_dispatch(
+            msg_cls,
+            None,
+            received.append,
+            wants_meta=False,
+            dedupe_active=True,
+            expected_schema=None,
+            seen_mismatches=OrderedDict(),
+            seen_ts=seen_ts,
+            watchdog=None,
+            schema_mismatch_cache_max=8,
+        )
+
+    def _sample(self, key, payload, epoch_seconds):
+        ntp64 = int(epoch_seconds) << 32
+
+        class FakeTs:
+            def get_time(self):
+                return datetime.datetime.fromtimestamp(epoch_seconds, tz=datetime.UTC)
+
+            def __str__(self):
+                return f'{ntp64:d}/fakezid'
+
+        class FakeSample:
+            kind = zenoh.SampleKind.PUT
+            key_expr = key
+            timestamp = FakeTs()
+            attachment = None
+            encoding = None
+            source_info = None
+
+            def __init__(self, p):
+                self.payload = p
+
+        return FakeSample(payload)
+
+    def test_far_future_sample_does_not_advance_watermark(self):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'dispatch/skew'
+            v: int = z.Int(required=True)
+
+        seen_ts: dict = {}
+        received: list = []
+        dispatch = self._dispatch_for(Row, seen_ts, received)
+
+        now = time.time()
+        poison = codec.pack({'v': 1}, 'msgpack')
+        genuine = codec.pack({'v': 2}, 'msgpack')
+
+        # A sample stamped ten years ahead.
+        dispatch(self._sample('dispatch/skew', poison, now + 10 * 365 * 86400))
+        # ...must not stop a genuine one arriving right after.
+        dispatch(self._sample('dispatch/skew', genuine, now))
+
+        assert [m.v for m in received] == [1, 2], 'the far-future sample poisoned the watermark and blinded the key'
+
+    def test_normal_samples_still_dedupe(self):
+        """The ceiling must not disable ordinary dedupe."""
+
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'dispatch/skewok'
+            v: int = z.Int(required=True)
+
+        seen_ts: dict = {}
+        received: list = []
+        dispatch = self._dispatch_for(Row, seen_ts, received)
+
+        now = time.time()
+        dispatch(self._sample('dispatch/skewok', codec.pack({'v': 1}, 'msgpack'), now))
+        # Older timestamp on the same key -> duplicate, dropped.
+        dispatch(self._sample('dispatch/skewok', codec.pack({'v': 2}, 'msgpack'), now - 10))
+
+        assert [m.v for m in received] == [1]
+
+    def test_ceiling_is_configurable_and_disablable(self):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'dispatch/skewoff'
+            DEDUPE_MAX_SKEW = None  # pre-0.3.3 behaviour
+            v: int = z.Int(required=True)
+
+        seen_ts: dict = {}
+        received: list = []
+        dispatch = self._dispatch_for(Row, seen_ts, received)
+
+        now = time.time()
+        dispatch(self._sample('dispatch/skewoff', codec.pack({'v': 1}, 'msgpack'), now + 10 * 365 * 86400))
+        dispatch(self._sample('dispatch/skewoff', codec.pack({'v': 2}, 'msgpack'), now))
+
+        # With the check off the watermark is poisoned — the genuine
+        # sample is dropped. This is what the default now prevents.
+        assert [m.v for m in received] == [1]

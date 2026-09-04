@@ -5,9 +5,12 @@ import os
 from unittest import mock
 
 import pytest
+import zenoh
 
 import zeared as z
-from zeared._factories import _open_with_retry
+from zeared._factories import _open_with_retry, _resolve_zenoh_config
+from zeared._mode import Mode
+from zeared.config import SessionConfig
 
 
 class TestSessionConfigSeared:
@@ -425,3 +428,73 @@ class TestRetryLoop:
         # Five failures; first three at INFO, remaining two at WARNING.
         assert len(info_records) >= 3
         assert len(warning_records) >= 2
+
+
+class TestZenohConfigFields:
+    """The raw-Zenoh escape hatch on the declarative path.
+
+    Without these, ``SessionConfig`` can express only what its typed
+    fields cover — so a TLS/ACL/scouting posture could be set *only* by
+    bypassing ``SessionConfig`` and hand-building a ``zenoh.Config``,
+    which is the shape every consumer's config loader is built around.
+    """
+
+    def test_defaults_are_inert(self):
+        cfg = SessionConfig(mode=Mode.PEER)
+        assert cfg.zenoh_config_file is None
+        assert cfg.zenoh_overrides == {}
+        assert _resolve_zenoh_config(cfg, None) is None
+
+    def test_overrides_build_a_config(self):
+        cfg = SessionConfig(
+            mode=Mode.PEER,
+            zenoh_overrides={'scouting/multicast/enabled': False},
+        )
+        built = _resolve_zenoh_config(cfg, None)
+        assert built is not None
+        assert 'false' in str(built.get_json('scouting/multicast/enabled')).lower()
+
+    def test_mode_and_timestamping_are_set(self):
+        """``_build_config_for_*`` skips these once handed a config, so the
+        resolver has to supply them or the session silently loses both."""
+        cfg = SessionConfig(mode=Mode.CLIENT, zenoh_overrides={'scouting/gossip/enabled': False})
+        built = _resolve_zenoh_config(cfg, None)
+        assert 'client' in str(built.get_json('mode'))
+        assert 'true' in str(built.get_json('timestamping/enabled')).lower()
+
+    def test_overrides_win_over_mode(self):
+        """Documented precedence: file -> zeared's own -> overrides."""
+        cfg = SessionConfig(mode=Mode.PEER, zenoh_overrides={'mode': 'router'})
+        built = _resolve_zenoh_config(cfg, None)
+        assert 'router' in str(built.get_json('mode'))
+
+    def test_explicit_kwarg_wins(self):
+        """The lower-level escape hatch beats the declarative one."""
+        explicit = zenoh.Config()
+        cfg = SessionConfig(mode=Mode.PEER, zenoh_overrides={'scouting/gossip/enabled': False})
+        assert _resolve_zenoh_config(cfg, explicit) is explicit
+
+    def test_config_file_is_loaded(self, tmp_path):
+        path = tmp_path / 'z.json5'
+        path.write_text('{ scouting: { multicast: { enabled: false } } }')
+        cfg = SessionConfig(mode=Mode.PEER, zenoh_config_file=str(path))
+        built = _resolve_zenoh_config(cfg, None)
+        assert 'false' in str(built.get_json('scouting/multicast/enabled')).lower()
+
+    def test_roundtrips_through_load(self):
+        """The path consumers actually use: a TOML/dict table -> SessionConfig."""
+        cfg = SessionConfig.load(
+            {
+                'mode': 'client',
+                'router': 'tcp/hub:7447',
+                'zenoh_config_file': '/etc/rio-node.json5',
+                'zenoh_overrides': {'scouting/multicast/enabled': False},
+            }
+        )
+        assert cfg.zenoh_config_file == '/etc/rio-node.json5'
+        assert cfg.zenoh_overrides == {'scouting/multicast/enabled': False}
+
+    def test_env_carries_the_file(self, monkeypatch):
+        monkeypatch.setenv('ZEARED_SESSION_MODE', 'peer')
+        monkeypatch.setenv('ZEARED_SESSION_ZENOH_CONFIG_FILE', '/etc/node.json5')
+        assert SessionConfig.from_env().zenoh_config_file == '/etc/node.json5'
