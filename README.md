@@ -979,6 +979,11 @@ Mapping: scalars → `number`/`string`/`boolean`; `Enum` → literal unions
 → no `?`; a default → `?`; `X | None` → `?: T | null`. `dump=False` fields are
 omitted. `Bytes` is base64 (`string`) on the JSON wire; frames/ndarrays are
 `unknown` — decode them in your bridge. Also available programmatically:
+A downstream package can give a custom field its own TypeScript spelling: subclass a
+seared field and set `TS_TYPE = 'SecretRef'` (the type the member gets) and, optionally,
+`TS_PRELUDE = 'export type SecretRef = string & {...};'` (an alias emitted once, before the
+interfaces). Fields without `TS_TYPE` map by class name as before.
+
 `from zeared.doc import generate_ts; generate_ts('rio_protocol')` returns the
 `.ts` source as a string.
 
