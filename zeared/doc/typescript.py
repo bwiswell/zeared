@@ -120,6 +120,10 @@ def ts_type(f: Any) -> str:
         base = '[' + ', '.join(ts_type(sub) for sub in f.tuple_fields) + ']'
     elif type(f).__name__ == 'Decimal':
         base = 'number' if getattr(f, 'as_number', False) else 'string'
+    elif getattr(type(f), 'TS_TYPE', None):
+        # A custom field class names its own TS type (and may ship the alias
+        # that defines it via ``TS_PRELUDE`` — see ``_collect_preludes``).
+        base = str(type(f).TS_TYPE)
     else:
         base = _SCALAR.get(type(f).__name__, 'unknown')
     if getattr(f, 'keyed', False):
@@ -215,6 +219,22 @@ def _collect_enums(classes: list[type[Seared]]) -> list[type[Enum]]:
     return sorted(seen.values(), key=lambda e: e.__name__)
 
 
+def _collect_preludes(classes: list[type[Seared]]) -> list[str]:
+    """Gather every custom field class's ``TS_PRELUDE`` (a type alias its ``TS_TYPE`` needs), deduped.
+
+    A downstream package can subclass a seared field (a branded string, say) and declare
+    ``TS_TYPE = 'SecretRef'`` plus ``TS_PRELUDE = 'export type SecretRef = string & {...};'``;
+    the alias is emitted once, before the interfaces, whenever such a field is in play.
+    """
+    seen: dict[str, None] = {}
+    for cls in classes:
+        for _attr, _wire, f in cls.__seared_fields__:
+            prelude = getattr(type(f), 'TS_PRELUDE', None)
+            if prelude:
+                seen.setdefault(str(prelude).strip(), None)
+    return sorted(seen)
+
+
 def render_enum(enum_cls: type[Enum]) -> str:
     """Render an Enum as a TS union-of-literals type alias (wire values)."""
     literals = ' | '.join(_ts_literal(m.value) for m in enum_cls)
@@ -255,6 +275,9 @@ def emit(classes: list[type[Seared]]) -> str:
     enums = _collect_enums(classes)
     if enums:
         blocks.append('\n'.join(render_enum(e) for e in enums))
+    preludes = _collect_preludes(classes)
+    if preludes:
+        blocks.append('\n'.join(preludes))
     blocks.extend(render_interface(c) for c in classes)
     return '\n\n'.join(blocks) + '\n'
 

@@ -137,3 +137,31 @@ class TestCli:
     def test_check_fails_when_missing(self, tmp_path):
         out = tmp_path / 'nope.ts'
         assert main(['doc.ts_models', '-o', str(out), '--check']) == 1
+
+
+class TestCustomFieldTypes:
+    """A downstream field class can name its own TS type and ship the alias that defines it."""
+
+    def test_ts_type_honours_a_custom_field_class(self):
+        from dataclasses import dataclass
+
+        import zeared as z
+
+        @dataclass(frozen=True, kw_only=True, slots=True)
+        class Branded(z.Str):
+            TS_TYPE = 'Branded'
+            TS_PRELUDE = 'export type Branded = string & { readonly __brand: "Branded" };'
+
+        assert ts_type(Branded()) == 'Branded'
+        assert ts_type(Branded(many=True)) == 'Branded[]'
+
+        @z.zeared
+        class Uses(z.Zeared):
+            ref: str | None = Branded(default=None)
+            other: str = Branded(required=True)
+
+        out = emit([Uses])
+        assert out.count('export type Branded = string') == 1  # the prelude, once
+        assert out.index('export type Branded') < out.index('export interface Uses')
+        assert '  ref?: Branded | null;' in out
+        assert '  other: Branded;' in out
