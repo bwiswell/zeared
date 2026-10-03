@@ -11,8 +11,10 @@ message is proof of relay.
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 
+import pytest
 import zenoh
 from conftest import wait
 
@@ -43,7 +45,17 @@ def _raw_client(ep: str) -> zenoh.Session:
     return zenoh.open(c)
 
 
+def _shm_segments() -> int:
+    """How many Zenoh shared-memory segments this process has mapped."""
+    with open('/proc/self/maps') as maps:  # noqa: PTH123 — a procfs read, not a path to model
+        return sum(1 for line in maps if line.rstrip().endswith('.zenoh'))
+
+
 class TestBuildRouterConfig:
+    def test_shared_memory_off_by_default(self):
+        cfg = _build_config_for_router(['tcp/0.0.0.0:7447'], None, None)
+        assert cfg.get_json('transport/shared_memory/enabled') == 'false'
+
     def test_sets_router_mode_and_listen(self):
         cfg = _build_config_for_router(['tcp/0.0.0.0:7447'], None, None)
         js = cfg.get_json('mode')
@@ -61,6 +73,58 @@ class TestBuildRouterConfig:
             None,
         )
         assert 'other' in cfg.get_json('connect/endpoints')
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='reads /proc/self/maps')
+class TestSharedMemoryStaysOff:
+    """A large message through the hub travels inline, never through Zenoh's shared memory.
+
+    With Zenoh's shared-memory transport on (its default), anything over 3 KB between two
+    processes on one host goes through a shared-memory pool. The receiver locks the pages it maps
+    and keeps every closed session's segment mapped, and once that reaches ``RLIMIT_MEMLOCK``
+    Zenoh drops large messages, saying so only at DEBUG. No segment mapped is the proof the path
+    is never taken; sessions in one process take it too, so this runs in-process.
+    """
+
+    def test_a_large_put_and_query_through_the_hub_map_no_segment(self):
+        ep = _endpoint()
+        h = z.hub(listen=[ep])
+        a, b = z.client(ep), z.client(ep)
+        wait(0.4)
+        before = _shm_segments()
+        got: list[int] = []
+        sub = a.declare_subscriber('svc/big', lambda sample: got.append(len(sample.payload.to_bytes())))
+        qbl = a.declare_queryable('svc/q', lambda q: q.reply('svc/q', b'ok'))
+        wait(0.2)
+        b.put('svc/big', b'x' * 100_000)
+        replies = [bytes(r.ok.payload) for r in b.get('svc/q', payload=b'x' * 100_000, timeout=3.0) if r.ok]
+        wait(0.3)
+        after = _shm_segments()
+        sub.undeclare()
+        qbl.undeclare()
+        for sess in (a, b, h):
+            sess.close()
+        assert replies == [b'ok']
+        assert got == [100_000]
+        assert after == before
+
+    def test_the_hub_alone_keeps_it_off_for_clients_that_allow_it(self):
+        """Shared memory is agreed per link, so a hub with it off covers clients on Zenoh's defaults."""
+        ep = _endpoint()
+        h = z.hub(listen=[ep])
+        a, b = _raw_client(ep), _raw_client(ep)
+        wait(0.4)
+        before = _shm_segments()
+        qbl = a.declare_queryable('svc/q', lambda q: q.reply('svc/q', b'ok'))
+        wait(0.2)
+        replies = [bytes(r.ok.payload) for r in b.get('svc/q', payload=b'x' * 100_000, timeout=3.0) if r.ok]
+        wait(0.3)
+        after = _shm_segments()
+        qbl.undeclare()
+        for sess in (a, b, h):
+            sess.close()
+        assert replies == [b'ok']
+        assert after == before
 
 
 class TestModeDispatch:
@@ -238,6 +302,18 @@ class TestHubDaemon:
         assert captured['listen'] == ['tcp/0.0.0.0:9999']
         assert captured['connect'] == ['tcp/other:7447']
         assert captured['timestamping'] is False
+
+    def test_main_turns_shared_memory_off_over_a_config_file(self, monkeypatch, tmp_path):
+        """A hub's ``--config`` (TLS, access control) cannot switch shared memory back on."""
+        captured: dict = {}
+        monkeypatch.setattr('zeared.hubd.run', lambda **kw: captured.update(kw))
+        from zeared.hubd import main
+
+        conf = tmp_path / 'hub.json5'
+        conf.write_text("{ mode: 'router', transport: { shared_memory: { enabled: true } } }")
+        main(['--config', str(conf)])
+        assert captured['zenoh_config'].get_json('transport/shared_memory/enabled') == 'false'
+        assert captured['zenoh_config'].get_json('mode') == '"router"'  # the rest of the file stands
 
     def test_main_defaults_listen(self, monkeypatch):
         captured: dict = {}

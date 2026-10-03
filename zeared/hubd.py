@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 
 import zenoh
 
+from ._factories import _SHARED_MEMORY
 from ._factories import hub as _open_hub
 
 if TYPE_CHECKING:
@@ -121,7 +122,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         '--config',
         metavar='FILE',
-        help='JSON5 Zenoh config file (for TLS / access-control); listen/connect flags still layer on top',
+        help=(
+            'JSON5 Zenoh config file (for TLS / access-control); listen/connect flags still layer on '
+            'top, and shared memory stays off whatever it says'
+        ),
     )
     parser.add_argument(
         '--no-timestamping',
@@ -140,7 +144,12 @@ def main(argv: list[str] | None = None) -> int:
         format='%(asctime)s %(levelname)s %(name)s: %(message)s',
     )
 
-    zenoh_config = zenoh.Config.from_file(args.config) if args.config else None
+    zenoh_config = None
+    if args.config:
+        zenoh_config = zenoh.Config.from_file(args.config)
+        # The file brings TLS and access control; it cannot bring shared memory back. A hub is
+        # where Zenoh's shared-memory leak bites first (see ``_SHARED_MEMORY``).
+        zenoh_config.insert_json5(_SHARED_MEMORY, 'false')
 
     run(
         listen=args.listen or [_DEFAULT_LISTEN],

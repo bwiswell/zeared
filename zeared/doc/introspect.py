@@ -59,10 +59,8 @@ def introspect_message(cls: type[Message]) -> MessageDoc:
     schema = _seared_introspect(cls)
     topic = getattr(cls, 'TOPIC', '') or ''
     field_attrs = {f.attr for f in schema.fields}
-    seen: set[str] = set()
-    slots = tuple(
-        SlotDoc(name=n, is_field=n in field_attrs) for n in _SLOT.findall(topic) if not (n in seen or seen.add(n))
-    )
+    # ``dict.fromkeys`` drops a repeated slot and keeps the topic's order.
+    slots = tuple(SlotDoc(name=n, is_field=n in field_attrs) for n in dict.fromkeys(_SLOT.findall(topic)))
     parts = topic.split('/')
     category = parts[1] if len(parts) > 1 and '{' not in parts[1] else None
     return MessageDoc(

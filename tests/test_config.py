@@ -462,6 +462,17 @@ class TestZenohConfigFields:
         assert 'client' in str(built.get_json('mode'))
         assert 'true' in str(built.get_json('timestamping/enabled')).lower()
 
+    def test_shared_memory_is_off_even_over_a_file_that_enables_it(self, tmp_path):
+        """Like timestamping, zeared's own setting lands on top of the file."""
+        path = tmp_path / 'z.json5'
+        path.write_text('{ transport: { shared_memory: { enabled: true } } }')
+        built = _resolve_zenoh_config(SessionConfig(mode=Mode.CLIENT, zenoh_config_file=str(path)), None)
+        assert built.get_json('transport/shared_memory/enabled') == 'false'
+
+    def test_an_override_opts_back_in_to_shared_memory(self):
+        cfg = SessionConfig(mode=Mode.PEER, zenoh_overrides={'transport/shared_memory/enabled': True})
+        assert _resolve_zenoh_config(cfg, None).get_json('transport/shared_memory/enabled') == 'true'
+
     def test_overrides_win_over_mode(self):
         """Documented precedence: file -> zeared's own -> overrides."""
         cfg = SessionConfig(mode=Mode.PEER, zenoh_overrides={'mode': 'router'})

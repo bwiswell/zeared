@@ -32,6 +32,27 @@ _MISSING = object()
 # Reconnect attempts logged at INFO before escalating to WARNING.
 _QUIET_ATTEMPTS = 3
 
+#: Zenoh's shared-memory transport — off in every config zeared builds. On (Zenoh's default), a
+#: put, query or reply over 3 KB between two processes on one host travels through a shared-memory
+#: pool, 16 MB a session, instead of over the link. The receiver locks the pages it maps and keeps
+#: every closed session's segment mapped, so a long-lived hub with sessions coming and going climbs
+#: toward ``RLIMIT_MEMLOCK`` (64 MB on a stock Linux box). Once there, opening the next segment
+#: fails and Zenoh drops the message, logging it only at DEBUG: large messages simply stop
+#: arriving. Only links within one host ever use it, and it is agreed per link, so a hub with it
+#: off keeps it off every link through the hub.
+_SHARED_MEMORY = 'transport/shared_memory/enabled'
+
+
+def _apply_defaults(c: zenoh.Config, mode: str, *, timestamping: bool) -> None:
+    """Set zeared's own settings on a config it builds: the mode, HLC timestamping, shared memory off.
+
+    Timestamping is on unless opted out (RETAINED + DEDUPE need the HLC).
+    """
+    c.insert_json5('mode', json.dumps(mode))
+    if timestamping:
+        c.insert_json5('timestamping/enabled', 'true')
+    c.insert_json5(_SHARED_MEMORY, 'false')
+
 
 def _open_with_retry(  # noqa: PLR0913
     open_fn: Callable[[], zenoh.Session],
@@ -94,9 +115,11 @@ def _resolve_zenoh_config(
     escape hatch and a caller who reaches for it has said what they want.
 
     Precedence within the built config: ``zenoh_config_file`` first, then
-    ``mode`` / ``timestamping`` (which the ``_build_config_for_*`` helpers
-    skip once they are handed a config, so they have to be set here), then
-    ``zenoh_overrides``. Overrides land last so the field name is honest.
+    zeared's own settings — ``mode``, timestamping, shared memory off (which
+    the ``_build_config_for_*`` helpers skip once they are handed a config,
+    so they have to be set here) — then ``zenoh_overrides``. Overrides land
+    last so the field name is honest: they are how a session opts back in to
+    shared memory.
 
     This is what makes a security posture — mTLS, access control, scouting
     off — expressible through the declarative ``SessionConfig`` path
@@ -112,11 +135,9 @@ def _resolve_zenoh_config(
         return None
 
     c = zenoh.Config.from_file(config.zenoh_config_file) if has_file else zenoh.Config()
-    # ``mode`` is a required SessionConfig field, so it is always known;
-    # timestamping mirrors the factories' own default (RETAINED + DEDUPE
-    # need the HLC).
-    c.insert_json5('mode', json.dumps(config.mode.value))
-    c.insert_json5('timestamping/enabled', 'true')
+    # ``mode`` is a required SessionConfig field, so it is always known; the
+    # rest mirrors the factories' own defaults.
+    _apply_defaults(c, config.mode.value, timestamping=True)
     for key, value in config.zenoh_overrides.items():
         c.insert_json5(str(key), json.dumps(value))
     return c
@@ -129,14 +150,12 @@ def _build_config_for_peer(
     *,
     timestamping: bool = True,
 ) -> zenoh.Config:
-    # User let us build the config when ``zenoh_config is None`` — set
-    # the mode + opt into HLC timestamping (RETAINED + DEDUPE need it).
-    # ``timestamping=False`` opts back out.
+    # User let us build the config when ``zenoh_config is None`` — zeared's
+    # own settings apply (``timestamping=False`` opts out of the HLC). A
+    # caller's own ``zenoh_config`` is taken as given.
     c = zenoh_config if zenoh_config is not None else zenoh.Config()
     if zenoh_config is None:
-        c.insert_json5('mode', '"peer"')
-        if timestamping:
-            c.insert_json5('timestamping/enabled', 'true')
+        _apply_defaults(c, 'peer', timestamping=timestamping)
     if connect:
         c.insert_json5('connect/endpoints', json.dumps(connect))
     if listen:
@@ -152,9 +171,7 @@ def _build_config_for_client(
 ) -> zenoh.Config:
     c = zenoh_config if zenoh_config is not None else zenoh.Config()
     if zenoh_config is None:
-        c.insert_json5('mode', '"client"')
-        if timestamping:
-            c.insert_json5('timestamping/enabled', 'true')
+        _apply_defaults(c, 'client', timestamping=timestamping)
     c.insert_json5('connect/endpoints', json.dumps(endpoints))
     return c
 
@@ -171,9 +188,7 @@ def _build_config_for_router(
     # queries, and liveliness in-process — no ``zenohd`` binary required.
     c = zenoh_config if zenoh_config is not None else zenoh.Config()
     if zenoh_config is None:
-        c.insert_json5('mode', '"router"')
-        if timestamping:
-            c.insert_json5('timestamping/enabled', 'true')
+        _apply_defaults(c, 'router', timestamping=timestamping)
     c.insert_json5('listen/endpoints', json.dumps(listen))
     if connect:
         c.insert_json5('connect/endpoints', json.dumps(connect))
@@ -466,7 +481,10 @@ def hub(  # noqa: PLR0913
     Returns a raw :class:`zenoh.Session`: a hub is a listener with no
     zeared-owned resources to supervise, so there is no ``ManagedSession``
     wrapper. Secure a public hub with TLS / access-control via
-    ``zenoh_config=`` (or the daemon's ``--config`` file).
+    ``zenoh_config=`` (or the daemon's ``--config`` file). A raw
+    ``zenoh_config=`` is taken as given, Zenoh's own defaults included — set
+    ``transport/shared_memory/enabled`` false in it (the daemon does that for
+    its file).
     """
     base_listen = list(config.listen) or None if config is not None else None
     base_connect = list(config.connect) or None if config is not None else None

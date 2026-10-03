@@ -129,8 +129,10 @@ zenoh_overrides = { "scouting/multicast/enabled" = false }
 ```
 
 Precedence when the underlying `zenoh.Config` is built: **the file, then
-zeared's own `mode` / timestamping, then `zenoh_overrides`.** Overrides
-genuinely override — a `mode` set there beats `SessionConfig.mode`.
+zeared's own `mode` / timestamping / shared memory off, then
+`zenoh_overrides`.** Overrides genuinely override — a `mode` set there beats
+`SessionConfig.mode`, and `{"transport/shared_memory/enabled" = true}` there
+is how a session opts back in to shared memory.
 
 An explicit `zenoh_config=<zenoh.Config>` factory kwarg still wins over
 both; it is the lower-level escape hatch, and a caller reaching for it has
@@ -154,6 +156,24 @@ config doesn't add HLC timestamps, and without timestamps retention
 dedupe is a no-op. Pass `timestamping=False` to opt back out (e.g.
 debugging, or a config that for some reason can't have timestamping
 enabled).
+
+## Shared memory off
+
+Every config zeared builds — from factory kwargs, from a `SessionConfig`,
+or under a `zenoh_config_file` — sets `transport/shared_memory/enabled=false`.
+Zenoh's own default is on: a put, query or reply over 3 KB between two
+processes on one host then travels through a shared-memory pool (16 MB a
+session) instead of over the link. The receiver locks the pages it maps and
+keeps every closed session's segment mapped, so a long-lived node —
+a hub above all — with sessions coming and going climbs toward
+`RLIMIT_MEMLOCK` (64 MB on a stock Linux box). Once there, opening the next
+segment fails and Zenoh drops the message, logging it only at DEBUG:
+large messages simply stop arriving, while small ones keep working.
+
+Only links within one host ever use shared memory, and it is agreed per
+link, so a hub with it off keeps it off every link through the hub. Opt a
+session back in with a `zenoh_overrides` entry; a raw `zenoh_config=` is
+taken as given, Zenoh's default included.
 
 ## Loading from external sources
 

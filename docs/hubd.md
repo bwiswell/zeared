@@ -23,7 +23,11 @@ python -m zeared.hubd [-l ENDPOINT ...] [-c ENDPOINT ...] \
 - `-c/--connect` — endpoint(s) of other hubs to link to (repeatable), for a
   multi-hub mesh (HA / scale).
 - `--config` — a JSON5 Zenoh config file for **TLS / access-control**;
-  `--listen` / `--connect` still layer on top.
+  `--listen` / `--connect` still layer on top. Shared memory stays off
+  whatever the file says: a hub is where Zenoh's shared-memory transport
+  first starts silently dropping large messages (`config.md` →
+  "Shared memory off"). A hub embedded with `z.hub(zenoh_config=...)` is
+  taken as given, so set it off there.
 - `--no-timestamping` — disable the HLC timestamping that's on by default
   (retention dedupe needs it).
 
