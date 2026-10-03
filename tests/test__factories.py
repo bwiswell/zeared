@@ -135,6 +135,10 @@ class TestBuildConfigForPeer:
         val = cfg.get_json('timestamping/enabled').lower()
         assert 'true' not in val
 
+    def test_shared_memory_off_by_default(self):
+        cfg = _build_config_for_peer(None, None, None, timestamping=False)
+        assert cfg.get_json('transport/shared_memory/enabled') == 'false'
+
     def test_user_config_passthrough(self):
         import zenoh
 
@@ -144,6 +148,8 @@ class TestBuildConfigForPeer:
         # User didn't enable timestamping — we don't either.
         val = out.get_json('timestamping/enabled').lower()
         assert 'true' not in val
+        # Nor do we turn shared memory off: a caller's own config is taken as given.
+        assert out.get_json('transport/shared_memory/enabled') == 'true'
 
 
 class TestBuildConfigForClient:
@@ -151,6 +157,10 @@ class TestBuildConfigForClient:
         cfg = _build_config_for_client(['tcp/x:7447'], None, timestamping=True)
         val = cfg.get_json('timestamping/enabled').lower()
         assert 'true' in val
+
+    def test_shared_memory_off_by_default(self):
+        cfg = _build_config_for_client(['tcp/x:7447'], None, timestamping=True)
+        assert cfg.get_json('transport/shared_memory/enabled') == 'false'
 
 
 class TestOpenDispatcher:

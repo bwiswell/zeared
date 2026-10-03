@@ -38,9 +38,11 @@ raw `zenoh.Session`.
 - `_build_config_for_peer(connect, listen, zenoh_config, *,
   timestamping)` / `_build_config_for_client(endpoints, zenoh_config,
   *, timestamping)` — build the `zenoh.Config` for each mode. When
-  `zenoh_config is None` we set the mode and inject
-  `timestamping/enabled=true` (RETAINED + DEDUPE need it). When the
-  user supplies a config, we don't touch it (silent-respect).
+  `zenoh_config is None` we apply zeared's own settings
+  (`_apply_defaults`): the mode, `timestamping/enabled=true`
+  (RETAINED + DEDUPE need it) and `transport/shared_memory/enabled=false`
+  (see `config.md` → "Shared memory off"). When the user supplies a
+  config, we don't touch it (silent-respect).
 - `_resolve_retry_knobs(config, retry, initial_backoff, max_backoff,
   max_attempts)` — layer kwargs over the config's retry knobs; shared
   by `peer` / `client`.
