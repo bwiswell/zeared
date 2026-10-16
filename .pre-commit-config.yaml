@@ -6,6 +6,9 @@
 # no filenames. `bench-tables` re-renders the benchmark numbers from the
 # committed `bench/results.json` and fails if a doc has drifted from them; it
 # reads only the artifact, so it needs no brokers and runs in a moment.
+# `no-commit-to-branch` refuses a commit on `master`, which moves only by
+# merging a `version/` branch (see README Development); it is prek's
+# built-in copy, so nothing is fetched to run it.
 repos:
   - repo: local
     hooks:
@@ -37,3 +40,6 @@ repos:
         language: system
         pass_filenames: false
         files: ^(README\.md|docs/overview/benchmarks\.md|bench/.*)$
+  - repo: builtin
+    hooks:
+      - id: no-commit-to-branch  # master moves only by merge

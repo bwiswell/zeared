@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.3.12"
+version = "0.3.13"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -35,7 +35,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-seared = { git = "https://github.com/bwiswell/seared" }
+seared = { git = "https://github.com/bwiswell/seared", tag = "v0.3.4" }
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,49 @@
+name: Release Tag
+run-name: Tagging the release in ${{ github.sha }}
+
+# A version merged to master is released: tagged `v<version>` with a GitHub release. No packages
+# are built — consumers take the source at the tag (a uv git source pinned with `tag = "v…"`).
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - pyproject.toml
+
+jobs:
+  tag-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Read Version
+        id: version
+        run: |
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          STAMPED=$(sed -n "s/^__version__ = '\(.*\)'$/\1/p" zeared/__init__.py)
+          if [[ "${VERSION}" != "${STAMPED}" ]]; then
+            echo "pyproject.toml says ${VERSION}, zeared/__init__.py says ${STAMPED}" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      # A pyproject.toml change that is not a version bump (a dependency, a tool setting) finds its
+      # version already released and stops there.
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          if gh release view "v${VERSION}" --repo "${REPO}" > /dev/null 2>&1; then
+            echo "v${VERSION} is already released"
+            exit 0
+          fi
+          gh release create "v${VERSION}" --repo "${REPO}" --target "${COMMIT}" --title "v${VERSION}" --generate-notes

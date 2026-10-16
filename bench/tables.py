@@ -85,7 +85,6 @@ _STACKS = (
 _MARSHMALLOW = ('wire', 'zenoh + marshmallow (json)')
 _WIRE_JSON = ('wire', 'zenoh + zeared (json, cached)')
 _WIRE_MSGPACK = ('wire', 'zenoh + zeared (msgpack, cached)')
-_WIRE_UNCACHED = ('wire', 'zenoh + zeared (msgpack, PUBLISHER=False)')
 _ASYNC_FASTEST = ('async', 'sync send + sync on_message (msgpack)')
 _PYD_Q0 = ('stacks', 'pydantic + MQTT (QoS 0)')
 _PYD_Q1 = ('stacks', 'pydantic + MQTT (QoS 1)')
@@ -335,6 +334,12 @@ def _largest_spread(results: Results) -> float | None:
     return max(spreads) if spreads else None
 
 
+def _enqueue_overstatement(r: Results, row: tuple[str, str]) -> float | None:
+    """How far a row's publish rate overstates its end-to-end rate (``paho`` returns at enqueue)."""
+    pub, e2e = r.median(row, 'pub_rate'), r.median(row)
+    return None if pub is None or not e2e else pub / e2e
+
+
 def _largest_gap(results: Results) -> float | None:
     """The widest pub/s-to-e2e/s gap in the async suite, as a fraction of pub/s."""
     gaps = []
@@ -380,7 +385,6 @@ def blocks(report: Report) -> dict[str, str]:
         'wire-smaller': _pct(_less(r.ratio(_WIRE_MSGPACK, _WIRE_JSON, 'wire_bytes'))),
         'wire-msgpack-bytes': _fmt(r.median(_WIRE_MSGPACK, 'wire_bytes'), lambda x: f'{x:.0f}'),
         'wire-json-bytes': _fmt(r.median(_WIRE_JSON, 'wire_bytes'), lambda x: f'{x:.0f}'),
-        'cache-gain': _approx(_pct(_more(r.ratio(_WIRE_MSGPACK, _WIRE_UNCACHED)))),
         # Inline blocks, the async headline bullets (end to end, against the fastest row).
         'async-marshmallow': _approx(_pct(_less(r.ratio(('async', 'zenoh + marshmallow (json)'), fastest)))),
         'async-larger': _approx(_pct(_more(r.ratio(('async', 'zenoh + marshmallow (json)'), fastest, 'wire_bytes')))),
@@ -399,6 +403,8 @@ def blocks(report: Report) -> dict[str, str]:
         # Inline blocks, the answer's prose.
         'answer-behind': _x(r.ratio(_PYD_Q0, _ZEARED_DEFAULT)),
         'mqtt-qos1-cost': _x(r.ratio(_PYD_Q0, _PYD_Q1), 0),
+        'mqtt-enqueue-q0': _approx(_x(_enqueue_overstatement(r, _PYD_Q0), 0)),
+        'mqtt-enqueue-q1': _approx(_x(_enqueue_overstatement(r, _PYD_Q1), 0)),
     }
 
 

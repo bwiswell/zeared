@@ -303,8 +303,8 @@ wheels = [
 
 [[package]]
 name = "seared"
-version = "0.3.3"
-source = { git = "https://github.com/bwiswell/seared#10c59f5e55a9e1ae66aa87c4e68e7bc43a26261c" }
+version = "0.3.4"
+source = { git = "https://github.com/bwiswell/seared?tag=v0.3.4#886be3809e6ef6f7fbfc1b0c093116449afaf504" }
 
 [[package]]
 name = "tomli"
@@ -381,7 +381,7 @@ wheels = [
 
 [[package]]
 name = "zeared"
-version = "0.3.12"
+version = "0.3.13"
 source = { editable = "." }
 dependencies = [
     { name = "eclipse-zenoh" },
@@ -412,7 +412,7 @@ requires-dist = [
     { name = "msgpack", specifier = ">=1.1.2" },
     { name = "paho-mqtt", marker = "extra == 'bench'", specifier = ">=2.1,<3.0" },
     { name = "pydantic", marker = "extra == 'bench'", specifier = ">=2.11,<3.0" },
-    { name = "seared", git = "https://github.com/bwiswell/seared" },
+    { name = "seared", git = "https://github.com/bwiswell/seared?tag=v0.3.4" },
 ]
 provides-extras = ["bench"]
 

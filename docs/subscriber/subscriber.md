@@ -44,7 +44,7 @@ raised — use `Cls.alisten()` instead.
 ## Auto-reconnect interaction
 
 When the resolved session is a `ManagedSession`
-(see [`_managed_session.md`](_managed_session.md)), the reconnect
+(see [`_managed_session.md`](../_managed_session/_managed_session.md)), the reconnect
 machinery walks the per-session subscriber registry on every successful
 swap and calls `Subscriber._redeclare(new_raw, managed)` on each. The
 user's `Subscriber` handle stays valid across the boundary — internally
@@ -77,7 +77,7 @@ samples — cached payloads from peer `_RetentionCache` queryables — flow
 through the same dispatch function used for live samples, marked
 `meta.origin = Origin.REPLAY` so 2-arg callbacks can distinguish cached
 state from live traffic (see [`../meta.md`](../meta.md)). Decode failures
-route through the unified `on_error` hook. See [`retention.md`](retention.md).
+route through the unified `on_error` hook. See [`retention.md`](../retention.md).
 
 The fetch drains synchronously inside `_declare`, so by the time
 `on_message` returns every subscribe-time replay has been delivered (or
@@ -136,7 +136,7 @@ against this class's templates; if it matches, the subscriber's normal
 `cb(msg, meta)`) with `meta.source_info = peer_zid` and
 `meta.origin = Origin.WILL`.
 
-`Subscriber.close()` unregisters from the observer. See [`presence.md`](presence.md).
+`Subscriber.close()` unregisters from the observer. See [`presence.md`](../presence/presence.md).
 
 ## Encoding resolution (inbound)
 

@@ -1,11 +1,11 @@
 # zeared
 
 `zeared` is a typed [Zenoh](https://zenoh.io/) pub/sub wrapper built on top of
-[`seared`](https://www.github.com/bwiswell/seared). Declare a message class
+[`seared`](https://github.com/bwiswell/seared). Declare a message class
 once, get publish, subscribe, and topic routing for free.
 
 > Looking for the serialization library underneath? See its sister package
-> [`seared`](https://www.github.com/bwiswell/seared). Its entire public
+> [`seared`](https://github.com/bwiswell/seared). Its entire public
 > surface is re-exported from `zeared`, so `import zeared as z` is enough
 > for most use cases.
 
@@ -39,16 +39,40 @@ once, get publish, subscribe, and topic routing for free.
 
 ## Setup
 
-```sh
-# pip
-pip install git+https://www.github.com/bwiswell/zeared.git
+Each release is tagged `v<version>` on GitHub (the first is `v0.3.13`).
+Install one by its tag:
 
+```sh
 # uv
-uv add git+https://www.github.com/bwiswell/zeared.git
+uv add git+https://github.com/bwiswell/zeared --tag v0.3.13
+
+# pip
+pip install git+https://github.com/bwiswell/zeared.git@v0.3.13
+```
+
+`uv add` records the tag as the dependency's source:
+
+```toml
+[tool.uv.sources]
+zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.3.13" }
+```
+
+**The tag is the pin.** uv doesn't check a version specifier such as
+`zeared>=0.3,<0.4` against a git source: it takes whatever the source points
+at, and a source without a tag points at the tip of `master`. Moving to a new
+release means moving the tag.
+
+**zeared pins `seared` the same way,** to `v0.3.4`. A project that declares
+no `seared` source of its own gets zeared's. One that declares its own must
+pin the same tag, or uv refuses to resolve, reporting conflicting URLs for
+`seared`:
+
+```toml
+seared = { git = "https://github.com/bwiswell/seared", tag = "v0.3.4" }
 ```
 
 Requires Python ≥ 3.14. Pulls in
-[`seared`](https://www.github.com/bwiswell/seared), `eclipse-zenoh`, and
+[`seared`](https://github.com/bwiswell/seared), `eclipse-zenoh`, and
 `msgpack`.
 
 **Note:** if the consuming project uses `hatchling` as its build backend,
@@ -95,7 +119,7 @@ z.session.current.close()
 
 `z.Int`, `z.Float`, `z.Str`, `z.Zeared`, `z.ValidationError`, etc. are
 re-exports of the identically-named symbols in
-[`seared`](https://www.github.com/bwiswell/seared); the sole rename is
+[`seared`](https://github.com/bwiswell/seared); the sole rename is
 `z.zeared` (which is `seared.seared` under the hood). If you prefer the
 two-package style, `import seared as s; import zeared as z` still works
 exactly as it did before — and `@s.seared` remains available.
@@ -1102,24 +1126,24 @@ default vs. `marshmallow` + Zenoh on the same schema:
 <!-- bench:readme-headline -->
 | Strategy                        | pub/s | wire (B) |
 |---------------------------------|------:|---------:|
-| Zenoh + `marshmallow` (JSON)    | 3,960 | 796      |
-| `zeared` sync (msgpack, cached) | 6,826 | 533      |
+| Zenoh + `marshmallow` (JSON)    | 3,785 | 796      |
+| `zeared` sync (msgpack, cached) | 6,699 | 533      |
 <!-- /bench:readme-headline -->
 
-zeared is <!-- bench:readme-faster -->~72%<!-- /bench:readme-faster --> faster and <!-- bench:readme-smaller -->~33%<!-- /bench:readme-smaller --> smaller on the wire.
+zeared is <!-- bench:readme-faster -->~77%<!-- /bench:readme-faster --> faster and <!-- bench:readme-smaller -->~33%<!-- /bench:readme-smaller --> smaller on the wire.
 
 **"Pydantic + MQTT, or zeared?"** — the comparison people actually want, and
 one that splits into two independent questions. pydantic's compiled core
-beats pure-Python seared on serialization (<!-- bench:readme-codec -->~3.7x<!-- /bench:readme-codec -->); Zenoh beats a
-broker-mediated MQTT hop on transport (<!-- bench:readme-transport -->~2.6x<!-- /bench:readme-transport -->). Netted out at default
+beats pure-Python seared on serialization (<!-- bench:readme-codec -->~3.6x<!-- /bench:readme-codec -->); Zenoh beats a
+broker-mediated MQTT hop on transport (<!-- bench:readme-transport -->~2.3x<!-- /bench:readme-transport -->). Netted out at default
 configuration against MQTT QoS 0 <!-- bench:readme-runs -->(medians of three runs, here and below)<!-- /bench:readme-runs -->,
 **pydantic + MQTT comes out <!-- bench:readme-behind -->~1.4x<!-- /bench:readme-behind --> ahead** —
 the codec gap is the larger of the two, and pure Python doesn't make it back.
 
 Two things change that. Against **QoS 1** — at-least-once, what most
 production fleets actually run, and the closer analogue to Zenoh's reliable
-`put` — zeared is <!-- bench:readme-qos1 -->~2.2x<!-- /bench:readme-qos1 --> ahead. And with the optional `rusted` accelerator the
-codec gap closes and the ordering flips: <!-- bench:readme-rusted-q0 -->~1.5x<!-- /bench:readme-rusted-q0 --> against QoS 0, <!-- bench:readme-rusted-q1 -->~4.7x<!-- /bench:readme-rusted-q1 --> against
+`put` — zeared is <!-- bench:readme-qos1 -->~2.3x<!-- /bench:readme-qos1 --> ahead. And with the optional `rusted` accelerator the
+codec gap closes and the ordering flips: <!-- bench:readme-rusted-q0 -->~1.3x<!-- /bench:readme-rusted-q0 --> against QoS 0, <!-- bench:readme-rusted-q1 -->~4.2x<!-- /bench:readme-rusted-q1 --> against
 QoS 1.
 
 The full matrix (both axes isolated, sync + async variants, JSON / msgpack,
@@ -1243,7 +1267,7 @@ uv sync
 uv run pytest tests/
 ```
 
-Five checks gate every commit, wired as `prek` hooks — run
+Six checks gate every commit, wired as `prek` hooks — run
 `uv run prek install` once per clone:
 
 ```sh
@@ -1253,6 +1277,16 @@ uv run deptry .                      # dependency hygiene
 uv run ty check                      # type check
 uv run python -m bench.tables --check  # benchmark numbers match bench/results.json
 ```
+
+The sixth refuses any commit on `master`.
+
+**Releases.** `master` holds released commits only, and moves only by merge:
+- a release is a `version/x.y.z` branch off `master`, squash-merged back;
+- its version lives in `pyproject.toml` and `zeared/__init__.py` together,
+  and a test checks that they agree;
+- on the merge, the `Release Tag` workflow
+  (`.github/workflows/release-tag.yml`) tags it `v<version>` and publishes a
+  GitHub release.
 
 The benchmarks and their comparator libraries are repo-only, behind an
 opt-in extra. Every benchmark number in this README and in

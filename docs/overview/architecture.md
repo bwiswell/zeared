@@ -57,7 +57,7 @@ field's `deserialize`, merges them into the decoded payload dict, and
 finally calls `cls.load(merged)`. The decoded message looks exactly like
 one constructed directly.
 
-See [`_template.md`](../_template.md), [`message.md`](../message.md).
+See [`_template.md`](../_template/_template.md), [`message.md`](../message/message.md).
 
 ## Encoding layer
 

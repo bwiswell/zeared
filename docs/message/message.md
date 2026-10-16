@@ -74,11 +74,11 @@ renderers underneath; prefer `concrete_topic` over calling them through
 
 ## Subscribing — `on_message(cls, cb, *, session=None, on_error=None)`
 
-Returns a [`Subscriber`](subscriber.md) handle. The callback is inspected
+Returns a [`Subscriber`](../subscriber/subscriber.md) handle. The callback is inspected
 once at subscribe time:
 
 - `cb(msg)` — decoded message only.
-- `cb(msg, meta)` — `meta` is a [`ZenohMeta`](meta.md) built from the sample.
+- `cb(msg, meta)` — `meta` is a [`ZenohMeta`](../meta.md) built from the sample.
 
 Template-TOPICs auto-derive a wildcard for the subscribe call, so
 `Telemetry.on_message(cb)` sees *every* `robot/*/telemetry`.
@@ -90,9 +90,9 @@ Template-TOPICs auto-derive a wildcard for the subscribe call, so
 | `TOPIC` | `ClassVar[str]` | canonical static or format-string topic (used for publish by default) |
 | `EXTRA_TOPICS` | `ClassVar[tuple[str, ...]]` | additional topic templates the class also subscribes to; all must share the canonical's slot set |
 | `ENCODING` | `ClassVar[Literal['msgpack', 'json']]` | wire format, default `'msgpack'` |
-| `PUBLISHER` | `ClassVar[bool \| int]` | cache policy: `True` (default cap 256), `False` (disabled), `int` (explicit cap). See [`publisher.md`](publisher.md). |
-| `RETAINED` | `ClassVar[bool]` | opt in to MQTT-style retained-message emulation. Default `False`. See [`retention.md`](retention.md). |
-| `LIVELINESS` | `ClassVar[bool]` | opt in to presence / LWT — producers can `register_will()`, subscribers receive the will as a synthesised sample on peer death. Default `False`. See [`presence.md`](presence.md). |
+| `PUBLISHER` | `ClassVar[bool \| int]` | cache policy: `True` (default cap 256), `False` (disabled), `int` (explicit cap). See [`publisher.md`](../publisher.md). |
+| `RETAINED` | `ClassVar[bool]` | opt in to MQTT-style retained-message emulation. Default `False`. See [`retention.md`](../retention.md). |
+| `LIVELINESS` | `ClassVar[bool]` | opt in to presence / LWT — producers can `register_will()`, subscribers receive the will as a synthesised sample on peer death. Default `False`. See [`presence.md`](../presence/presence.md). |
 | `DEDUPE` | `ClassVar[bool]` | for `RETAINED` classes, dedupe retention-fetch replies against live publishes via `(key_expr, timestamp)`. Default `True`. Synthesised will samples (timestamp `None`) bypass dedupe. Per-subscriber override: `Cls.on_message(cb, dedupe=False)`. |
 | `DEDUPE_MAX_SKEW` | `ClassVar[float \| None]` | ceiling, in seconds, on how far ahead of the local clock a sample's HLC may be and still advance the dedupe watermark. A sample beyond it is still delivered; it just doesn't move the watermark. `None` disables the check. Default `300.0`. |
 | `RETENTION_TTL` | `ClassVar[float \| None]` | for `RETAINED` classes, lazy expiry in seconds: entries older than the TTL are skipped and pruned when a retained fetch is served. Default `None` (no expiry). See [`retention.md`](../retention.md). |
@@ -181,7 +181,7 @@ aren't declared become capture-only — they're surfaced on `meta.captures`
 (always populated, indexed by slot name, string-valued) but don't appear
 as attributes on the decoded instance. This is how routing-only
 identifiers (correlation IDs, trace UUIDs, stream names) stay off the
-payload schema. See [`meta.md`](meta.md) for examples.
+payload schema. See [`meta.md`](../meta.md) for examples.
 
 ## Retention (opt-in via `RETAINED = True`)
 
@@ -197,7 +197,7 @@ Telemetry.unretain(id=1)                                # class tombstone
 - `unretain()` and `unretain(**key_fields)` both require `RETAINED = True`.
 - Subscribers on a `RETAINED = True` class receive cached values from peers at subscribe time via `session.get(wildcard)` before live samples start flowing. DELETE samples (tombstones) are silently skipped.
 
-See [`retention.md`](retention.md).
+See [`retention.md`](../retention.md).
 
 ## Presence / LWT (opt-in via `LIVELINESS = True`)
 
@@ -217,7 +217,7 @@ PeerStatus.on_message(handler)
 - No auto-transition of retained state — retention and presence are orthogonal.
 - Non-subscribers never observe offline events.
 
-See [`presence.md`](presence.md).
+See [`presence.md`](../presence/presence.md).
 
 ## Async counterparts
 
@@ -232,7 +232,7 @@ Each sync method has an `a`-prefixed sibling:
 | `msg.register_will(...)` | `await msg.aregister_will(...)` |
 | `Cls.on_message(cb, ...)` | `async for msg in Cls.alisten(...):` |
 
-See [`async_.md`](async_.md).
+See [`async_.md`](../async_.md).
 
 ## Bulk sending — `send_batch(cls, items, *, session=None)`
 
