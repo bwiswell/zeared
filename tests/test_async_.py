@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import time
 
 import pytest
 from conftest import wait
@@ -518,3 +520,49 @@ class TestAlistenMeta:
 
         got = asyncio.run(main())
         assert got == [(10, z.Origin.REPLAY)]
+
+
+class TestBoundedAlisten:
+    def test_bounded_alisten_drops_with_queuefull_in_a_loop_callback(self, session):
+        """Pin (0.3.10): ``alisten(maxsize=N)`` drops what arrives while its queue is full.
+
+        Each drop is a ``QueueFull`` raised inside a loop callback, which asyncio reports
+        through the loop's exception handler (0.3.8 documented this). Changes with plan 11
+        B.4 in 0.4.0: drops are counted, and nothing is raised.
+
+        Deterministic by construction: the five sends happen on the loop thread, which then
+        blocks, so all five deliveries queue onto the loop before it runs again. The first
+        fills the queue and wakes the waiting consumer; that wake-up is queued behind the
+        other four, which each find the queue full.
+        """
+
+        @z.zeared
+        class Tick(z.Message):
+            TOPIC = 'aio/bounded'
+            n: int = z.Int(required=True)
+
+        async def main():
+            loop = asyncio.get_running_loop()
+            errors: list = []
+            loop.set_exception_handler(lambda _loop, ctx: errors.append(ctx.get('exception')))
+            agen = Tick.alisten(session=session, maxsize=1)
+            first = asyncio.ensure_future(anext(agen))
+            await asyncio.sleep(0.2)  # the subscription is declared, and waiting
+            for i in range(5):
+                Tick(n=i).send(session=session)
+            time.sleep(0.3)  # noqa: ASYNC251 — deliberately block the loop: all five deliveries queue behind it
+            await asyncio.sleep(0.1)
+            got = [(await first).n]
+            more = asyncio.ensure_future(anext(agen))
+            await asyncio.sleep(0.2)
+            nothing_else = not more.done()
+            more.cancel()
+            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+                await more
+            return got, errors, nothing_else
+
+        got, errors, nothing_else = asyncio.run(main())
+        assert got == [0]
+        assert nothing_else
+        assert len(errors) == 4
+        assert all(isinstance(e, asyncio.QueueFull) for e in errors)

@@ -10,30 +10,17 @@ message is proof of relay.
 
 from __future__ import annotations
 
-import socket
 import sys
 import threading
 
 import pytest
 import zenoh
-from conftest import wait
+from conftest import _endpoint, wait
 
 import zeared as z
 from zeared._factories import _build_config_for_router, _resolve_hub_listen
 from zeared.config import SessionConfig
 from zeared.hubd import run
-
-
-def _free_port() -> int:
-    s = socket.socket()
-    s.bind(('127.0.0.1', 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def _endpoint() -> str:
-    return f'tcp/127.0.0.1:{_free_port()}'
 
 
 def _raw_client(ep: str) -> zenoh.Session:

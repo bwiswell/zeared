@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.3.9"
+version = "0.3.10"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -159,3 +159,6 @@ exclude = [
 
 [tool.pytest.ini_options]
 pythonpath = ["tests"]
+markers = [
+    "restart: hub-restart characterisation tests (real sessions, about 6 s); deselect with -m 'not restart'",
+]

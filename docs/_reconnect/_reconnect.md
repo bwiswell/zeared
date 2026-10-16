@@ -43,6 +43,16 @@ Two paths feed into the same reconnect implementation:
    `_note_failure`. Catches the 0–`probe_interval` gap on
    publisher-heavy paths.
 
+Neither path sees a **lost router link**. A client whose hub goes away
+keeps an open session whose `zid()` still answers, and Zenoh re-dials the
+router by itself, so `state` stays `IDLE` and `on_reconnect` never fires
+across a hub restart. Subscribers and queryables survive the outage, but
+nothing replays what a restarted publisher retained or registered while the
+link was down; `Cls.fetch_retained()` recovers retained state.
+`tests/test_hub_restart.py` pins this behaviour (0.3.10). Detecting the
+re-attach, from `info.routers_zid()` or Zenoh's transport events, is 0.4.0
+work.
+
 Both feed `_reconnect`, which:
 
 1. CAS `state` IDLE → RECONNECTING.
