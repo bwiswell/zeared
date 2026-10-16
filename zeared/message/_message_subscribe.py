@@ -153,13 +153,14 @@ class _MessageSubscribeMixin:
         ``{reader_id}`` slot bound to ``z.Int`` comes back as ``int`` — and
         passes capture-only slots (no matching field) through unchanged.
         Handy for keying removal-reconcile on typed identity.
+
+        The result is keyed by attribute name (even for a field with a
+        ``data_key``), and is the same coercion the subscriber's own decode
+        applies to a live sample's key.
         """
-        spec_by_attr = {attr: f for attr, _, f in cls.__seared_fields__}
-        out: dict = {}
-        for name, raw_val in captures.items():
-            f = spec_by_attr.get(name)
-            out[name] = f.deserialize(raw_val, validate=True) if f is not None else raw_val
-        return out
+        from ._message_render import _coerce_captures
+
+        return _coerce_captures(cls, captures)
 
     @classmethod
     def fetch_retained(

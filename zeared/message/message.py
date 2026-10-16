@@ -1,8 +1,8 @@
 """``Message`` — the zeared message base class.
 
 Primary file of the ``message`` subdir. The class itself is slim:
-declared class attributes plus the ``unretain`` descriptor and the
-``_decode`` classmethod. Method clusters are extracted into sibling
+declared class attributes plus the ``unretain`` and ``concrete_topic``
+descriptors and the ``_decode`` classmethod. Method clusters are extracted into sibling
 modules as stateless mixins, composed here via the MRO so they stay
 methods rather than helper functions taking ``cls``:
 
@@ -19,7 +19,10 @@ methods rather than helper functions taking ``cls``:
 
 Plus ``_message_unretain.py`` for the ``_UnretainDescriptor`` and the
 shared ``_unretain_impl`` function (instance-vs-class ``unretain``
-dispatch).
+dispatch), ``_message_concrete_topic.py`` for the
+``_ConcreteTopicDescriptor`` (instance-vs-class ``concrete_topic``), and
+``_message_render.py`` for the canonical topic render and capture coercion
+every key-building path shares.
 """
 
 from __future__ import annotations
@@ -30,7 +33,9 @@ import seared as s
 
 from .. import _codec as codec
 from ._message_async import _MessageAsyncMixin
+from ._message_concrete_topic import _ConcreteTopicDescriptor
 from ._message_query import _MessageQueryMixin
+from ._message_render import _coerce_captures
 from ._message_send import _MessageSendMixin
 from ._message_subscribe import _MessageSubscribeMixin
 from ._message_topic import _MessageTopicMixin
@@ -118,6 +123,11 @@ class Message(
     #   Cls.unretain(**key_fields)        → uses explicit kwargs
     unretain = _UnretainDescriptor()
 
+    # ``concrete_topic`` dispatches the same way via _ConcreteTopicDescriptor.
+    #   msg.concrete_topic()              → the key msg.send() publishes on
+    #   Cls.concrete_topic(**slots)       → the key those slot values name
+    concrete_topic = _ConcreteTopicDescriptor()
+
     @classmethod
     def _decode(
         cls,
@@ -146,11 +156,15 @@ class Message(
                 msg = f'{cls.__name__}: key_expr {key_expr!r} does not match any declared topic'
                 raise ValueError(msg)
             _, captured = match
-            spec_by_attr = {attr: f for attr, _, f in cls.__seared_fields__}
-            for name, raw_val in captured.items():
-                f = spec_by_attr.get(name)
-                if f is not None:
-                    payload[name] = f.deserialize(raw_val, validate=True)
+            # Inject each field-backed capture under the field's *wire* key,
+            # which is what ``load`` reads (a ``data_key`` field is not stored
+            # under its attribute name). The key wins over a payload value
+            # for the same field: the key is authoritative for identity.
+            specs = cls._field_specs()
+            for name, value in _coerce_captures(cls, captured).items():
+                spec = specs.get(name)
+                if spec is not None:
+                    payload[spec.wire] = value
                 # else: capture-only; left to meta.captures
         # Thread ``format=`` into seared's load so native-bytes payloads
         # from msgpack carriers decode through ``Bytes.deserialize``'s

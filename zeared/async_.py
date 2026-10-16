@@ -279,9 +279,12 @@ async def alisten(
     ``loop.call_soon_threadsafe``. Cancellation or a break out of the loop
     undeclares the underlying subscriber cleanly.
 
-    ``maxsize=0`` (default) means an unbounded queue; set a positive value
-    to apply backpressure (delivery blocks when the queue is full, which
-    for Zenoh means dropping to zenoh's internal buffering).
+    ``maxsize=0`` (default) means an unbounded queue. A positive value bounds
+    the queue but does **not** apply backpressure: delivery is a
+    ``put_nowait`` scheduled from Zenoh's callback thread and never waits,
+    so a message that arrives while the queue is full is dropped. asyncio
+    logs each drop as an "Exception in callback" (``QueueFull``); there is
+    no drop counter.
 
     ``meta=True`` yields ``(msg, meta)`` tuples instead of bare messages —
     ``meta`` is the same ``ZenohMeta`` a 2-arg ``on_message`` callback

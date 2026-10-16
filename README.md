@@ -28,7 +28,7 @@ once, get publish, subscribe, and topic routing for free.
 - **Replay-vs-live signal.** `meta.origin` tells a subscriber how each sample arrived — `z.Origin.LIVE` (a real publish), `z.Origin.REPLAY` (delivered from a retention cache at subscribe time or after reconnect), or `z.Origin.WILL` (presence-synthesised). Determined by the local delivery path, never read from the wire. Live-only subscriptions via `on_message(cb, retained_fetch=False)`; async-iterator access via `Cls.alisten(meta=True)`.
 - **Sync + async.** Every send/subscribe has an `a`-prefixed sibling: `await msg.asend()`, `async for msg in Cls.alisten(): ...`, `async with z.abatch(): ...`. `on_message(cb)` detects `async def` callbacks and schedules them on the running loop.
 - **Batching primitives.** `with z.batch(): ...` collects sends for atomic flush-or-discard on exception; `Cls.send_batch(items)` is the homogeneous-bulk shortcut. `asyncio` tasks get per-task isolation via `contextvars`.
-- **Multi-session from day one.** Module-level default, thread-local scoped override via `with z.session(other): ...`, and per-call `session=` kwarg — all three resolve in a fixed precedence.
+- **Multi-session from day one.** Module-level default, context-local scoped override via `with z.session(other): ...` (per thread and per asyncio task, and honoured by the `a`-prefixed wrappers), and per-call `session=` kwarg — all three resolve in a fixed precedence.
 - **msgpack default, JSON opt-in.** `ENCODING = 'json'` per class for human-readable traffic, or `zeared.debug = True` globally to force JSON everywhere (handy during development).
 - **One-import ergonomics.** `import zeared as z` re-exports every `seared` field type, the decorator (`@z.zeared` — renamed for flavour), and the error hierarchy alongside the zeared surface.
 - **Transport-mode-agnostic.** Peer, router/client, whatever — you build the session; zeared takes it.
@@ -105,7 +105,7 @@ The common "this node owns network A and talks to an external node on network
 B" pattern is first-class. Three mechanisms resolve against a fixed precedence:
 
 1. Explicit `session=` kwarg on the call.
-2. Innermost `with z.session(sess):` block (thread-local stack).
+2. Innermost `with z.session(sess):` block (context-local stack).
 3. Module-level `z.session = sess` default.
 
 ```python
@@ -387,6 +387,55 @@ class Status(z.Message):
 
 `meta.captures` is always populated (at minimum an empty dict) on
 subscribers that receive a 2-arg callback.
+
+## How a slot value becomes a key segment
+
+Every path that builds a concrete key — `send`, `register_will`, a
+queryable's `ctx.reply`, `unretain` (both forms), the query getters'
+selectors, and `concrete_topic` — renders slots the same way (0.3.8):
+
+- **A slot's key segment is `str(field.serialize(value))`**: the field's
+  JSON-carrier string form. It's the same whatever the class's `ENCODING`
+  (a key is never msgpack), and it's exactly what a subscriber's capture
+  decodes back through the field's `deserialize`. So an `Enum` slot renders
+  its value (`'n'`, not `'Zone.NORTH'`), a `DateTime` its ISO form
+  (`2026-10-15T12:30:00+00:00`), a `TimeDelta` its seconds (`'5.0'`).
+- **This applies to values of the field's own type.** Any other value
+  renders as `str(value)`: strings pass through verbatim, so a selector
+  wildcard (`Cls.query(epc='E280*')`) or an already-rendered value
+  (`Cls.unretain(reader_id='7')`) keeps working. The type check is exact, so
+  a `bool` isn't an `int`.
+- **A slot field with a `data_key`** renders from its attribute and decodes
+  back under its wire key; the slot is stripped from the payload by that
+  wire key.
+
+`concrete_topic` exposes the render directly — use it instead of rendering
+a template yourself, so the key always matches what zeared publishes:
+
+```python
+@z.zeared
+class Sample(z.Message):
+    TOPIC = 'site/{site}/sensor/{sensor_id}'
+    EXTRA_TOPICS = ('legacy/sensor/{sensor_id}',)
+    site:      str   = z.Str(required=True)
+    sensor_id: int   = z.Int(required=True)
+    value:     float = z.Float(default=0.0)
+
+msg = Sample(site='north', sensor_id=7, value=1.5)
+msg.concrete_topic()                                  # 'site/north/sensor/7' — the key msg.send() uses
+msg.concrete_topic(topic='legacy/sensor/{sensor_id}')  # a declared EXTRA_TOPICS template
+
+Sample.concrete_topic(site='north', sensor_id=7)      # from slot values alone, no instance
+Sample.concrete_topic(**row)                          # non-slot keys are ignored
+Sample.concrete_topic(site='north')                   # TopicError: missing slot 'sensor_id'
+```
+
+The class form names exactly one key: a missing or `None` slot raises
+`TopicError` rather than widening to a wildcard (that's what the query
+getters do).
+
+`Bytes` and `Path` slots don't round-trip: base64 and paths can contain
+`/`, which splits the segment. Avoid them as single-segment slots.
 
 ## Tagged-union payloads (`z.Union`)
 
@@ -947,6 +996,10 @@ z.published_topics(session=external)
 
 Zero overhead for non-users: tracking is a single `set.add` per send.
 
+To compute the key a message *would* publish on (without sending), use
+`msg.concrete_topic()` / `Cls.concrete_topic(**slots)` — see
+[How a slot value becomes a key segment](#how-a-slot-value-becomes-a-key-segment).
+
 ## TypeScript types for browser consumers
 
 `zeared.doc` generates TypeScript types for your message classes, so a browser
@@ -1152,6 +1205,8 @@ prod_sub  = Telemetry.on_message(prod_cb)                 # class default (dedup
 - **Retention TTL is lazy.** `RETENTION_TTL = N` opts into time-based expiration of cached entries, but expiration is only checked when a subscriber issues a retained-fetch (`_handle_query`) — topics that nobody ever queries may keep stale entries in memory. Acceptable for typical use; no background sweeper.
 - **Retry only on `zenoh.open()` raise (without auto-reconnect).** Vanilla `z.peer()` / `z.client()` retry only on the initial open. With `auto_reconnect=True`, mid-flight session deaths are detected and rebuilt; without it, a session dying silently means the next send fails.
 - **`{name**}` and anonymous `**` are trailing-only.** Non-trailing multi-segment forms (`a/**/c`, `peer/{cluster**}/{host}/status`) remain backlog items.
+- **`Bytes` and `Path` slots don't round-trip.** Their key segment can contain `/` (base64, path separators), so it splits and matches no template. Accepted at class definition today; don't use them as single-segment slots.
+- **A bounded `alisten` drops, it doesn't block.** `alisten(maxsize=N)` drops messages that arrive while the queue is full (asyncio logs `QueueFull`); there's no backpressure and no drop counter.
 - **Format specs rejected in templates.** `{x:03d}` / `{x!r}` / `{x**:fmt}` raise `TopicError`. Plain `{name}` and `{name**}` are the only slot syntaxes.
 - **Publish-side `topic=` is restrictive.** The override must match one of the declared templates (`TOPIC` or an entry in `EXTRA_TOPICS`).
 - **One `z.Union` field per class.** Multiple would collide on top-level wire keys.

@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .. import _codec as codec
+from ._message_render import _render_instance, _slot_wire_keys
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -58,11 +59,15 @@ class _MessageSendMixin:
         # fields emit native bytes (no base64 overhead) for the msgpack
         # packer to consume directly. JSON path is unchanged.
         data = type(self).dump(self, format=encoding)
-        template = type(self)._templates().resolve_publish_topic(topic)  # noqa: SLF001
-        concrete_topic = template.render(data)
+        # The key renders from the instance's own slot values, through the
+        # canonical render shared with unretain / query / concrete_topic —
+        # not from ``data``, whose keys are wire keys and whose values are
+        # carrier-specific (native bytes under msgpack).
+        template, concrete_topic = _render_instance(self, topic)
 
         # Strip template fields from the payload — they live in the key.
-        payload_dict = {k: v for k, v in data.items() if k not in template.field_names}
+        slot_keys = _slot_wire_keys(type(self), template)
+        payload_dict = {k: v for k, v in data.items() if k not in slot_keys}
         raw = codec.pack(payload_dict, encoding)
 
         retain_mode = 'retain' if retain_flag else 'none'

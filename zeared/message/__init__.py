@@ -2,8 +2,8 @@
 
 Pattern B subdir using the mixin-extract variant. ``message.py`` holds
 the ``Message`` class itself with its class attributes, the ``unretain``
-descriptor, and the ``_decode`` classmethod. Method clusters extracted
-into mixins:
+and ``concrete_topic`` descriptors, and the ``_decode`` classmethod.
+Method clusters extracted into mixins:
 
 - ``_message_topic.py`` — ``_MessageTopicMixin`` (template parsing,
   schema attachment cache, multi-segment field-binding validation).
@@ -16,7 +16,11 @@ into mixins:
   ``published_topics``).
 
 Plus ``_message_unretain.py`` for the ``_UnretainDescriptor`` + the
-shared ``_unretain_impl`` (instance-vs-class ``unretain`` dispatch).
+shared ``_unretain_impl`` (instance-vs-class ``unretain`` dispatch),
+``_message_concrete_topic.py`` for the ``_ConcreteTopicDescriptor``
+(instance-vs-class ``concrete_topic``), and ``_message_render.py`` for the
+canonical topic render + capture coercion shared by every key-building
+path.
 
 Public surface unchanged: callers continue to write
 ``from zeared.message import Message``.

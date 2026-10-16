@@ -303,8 +303,8 @@ wheels = [
 
 [[package]]
 name = "seared"
-version = "0.3.2"
-source = { git = "https://github.com/bwiswell/seared#c3ea01ffc3f188141c46fcd9ba2b95e705bd4748" }
+version = "0.3.3"
+source = { git = "https://github.com/bwiswell/seared#10c59f5e55a9e1ae66aa87c4e68e7bc43a26261c" }
 
 [[package]]
 name = "tomli"
@@ -381,7 +381,7 @@ wheels = [
 
 [[package]]
 name = "zeared"
-version = "0.3.7"
+version = "0.3.8"
 source = { editable = "." }
 dependencies = [
     { name = "eclipse-zenoh" },

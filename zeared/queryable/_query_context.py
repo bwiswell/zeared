@@ -137,6 +137,8 @@ class QueryContext:
         """
         import zeared as z
 
+        from ..message._message_render import _render_instance_on, _slot_wire_keys
+
         enc = codec.effective_encoding(instance.ENCODING, z.debug)
         data = type(instance).dump(instance, format=enc)
         # Render on the template the query matched (so the reply key
@@ -146,8 +148,9 @@ class QueryContext:
         template = self._matched_template
         if template is None or type(instance) is not self._msg_cls:
             template = type(instance)._templates().resolve_publish_topic(None)  # noqa: SLF001
-        key = template.render(data)
-        payload_dict = {k: v for k, v in data.items() if k not in template.field_names}
+        key = _render_instance_on(instance, template)
+        slot_keys = _slot_wire_keys(type(instance), template)
+        payload_dict = {k: v for k, v in data.items() if k not in slot_keys}
         raw = codec.pack(payload_dict, enc)
         attachment = type(instance)._schema_attachment_bytes()  # noqa: SLF001
         self._query.reply(

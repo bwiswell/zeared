@@ -14,6 +14,8 @@ from .._template import Templates
 from ..errors import TopicError
 
 if TYPE_CHECKING:
+    from seared import FieldSpec
+
     from .message import Message
 
 
@@ -48,6 +50,22 @@ class _MessageTopicMixin:
         cls._validate_multi_segment_field_bindings(tpls)
         cls._TEMPLATES_CACHE = tpls
         return tpls
+
+    @classmethod
+    def _field_specs(cls) -> dict[str, FieldSpec]:
+        """Map each declared field's attribute name to its ``FieldSpec``, cached on the class.
+
+        The topic render and capture coercion (``_message_render.py``) look
+        slot fields up by attribute name on every send and every decode, so
+        the map is built once per class rather than per call. Same
+        ``cls.__dict__`` keying as ``_templates`` — a subclass gets its own.
+        """
+        cached = cls.__dict__.get('_FIELD_SPECS_CACHE')
+        if cached is not None:
+            return cached
+        specs = {spec.attr: spec for spec in getattr(cls, '__seared_fields__', ())}
+        cls._FIELD_SPECS_CACHE = specs
+        return specs
 
     @classmethod
     def _schema_attachment_bytes(cls: type[Message]) -> bytes | None:

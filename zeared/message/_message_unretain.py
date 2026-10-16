@@ -72,6 +72,7 @@ def _unretain_impl(
     from ..batch import current_buffer
     from ..errors import TopicError, ZearedError
     from ..retention import get_retention_cache
+    from ._message_render import _stringify_slots
 
     if not getattr(cls, 'RETAINED', False):
         msg = f'{cls.__name__}.unretain: class does not have RETAINED = True'
@@ -80,7 +81,9 @@ def _unretain_impl(
     sess = z.session.resolve(session)
     template = cls._templates().resolve_publish_topic(topic)
     try:
-        concrete_topic = template.render(key_fields)
+        # Canonical render: an ``Enum`` / ``DateTime`` slot value renders as
+        # its serialized form, so the DELETE lands on the key ``send`` used.
+        concrete_topic = template.render(_stringify_slots(cls, template, key_fields))
     except TopicError:
         raise
     except KeyError as e:

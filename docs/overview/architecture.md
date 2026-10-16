@@ -16,7 +16,8 @@ Every operation that touches a Zenoh session (`Message.send`,
 `Message.on_message`) resolves the session at call time in fixed precedence:
 
 1. An explicit `session=` kwarg passed to the call.
-2. The innermost active `with z.session(sess):` scope (thread-local).
+2. The innermost active `with z.session(sess):` scope (context-local: per
+   thread and per asyncio task, and followed into `asyncio.to_thread`).
 3. The module-level default set via `z.session = sess`.
 4. Otherwise — `NoSessionError`.
 
@@ -28,7 +29,7 @@ other for traffic that belongs there.
 never gets replaced. Assignment is intercepted at the module level
 (`_ZearedModule.__setattr__`) and redirected to the handle's internal default.
 Reads (`z.session.current`) see through the handle; calls
-(`z.session(other)`) produce a thread-local scope context manager.
+(`z.session(other)`) produce a context-local scope context manager.
 
 See [`_session.md`](../_session.md).
 
