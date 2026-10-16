@@ -19,7 +19,7 @@ import zenoh
 from conftest import wait
 
 import zeared as z
-from zeared._factories import _build_config_for_router
+from zeared._factories import _build_config_for_router, _resolve_hub_listen
 from zeared.config import SessionConfig
 from zeared.hubd import run
 
@@ -315,11 +315,188 @@ class TestHubDaemon:
         assert captured['zenoh_config'].get_json('transport/shared_memory/enabled') == 'false'
         assert captured['zenoh_config'].get_json('mode') == '"router"'  # the rest of the file stands
 
-    def test_main_defaults_listen(self, monkeypatch):
+    def test_main_leaves_listen_to_the_hub(self, monkeypatch):
+        """Pin (0.3.9): with no ``--listen``, ``main`` passes ``None``, so the hub binds its
+        ``--config`` file's listeners, or ``tcp/0.0.0.0:7447`` when there are none. Before
+        0.3.9 it passed the default itself, which overwrote the file's."""
         captured: dict = {}
         monkeypatch.setattr('zeared.hubd.run', lambda **kw: captured.update(kw))
         from zeared.hubd import main
 
         main([])
-        assert captured['listen'] == ['tcp/0.0.0.0:7447']
+        assert captured['listen'] is None
         assert captured['timestamping'] is True
+
+
+def _router_config(ep: str) -> zenoh.Config:
+    """A hub config that names its own listener (and nothing zeared would add)."""
+    c = zenoh.Config()
+    c.insert_json5('mode', '"router"')
+    c.insert_json5('scouting/multicast/enabled', 'false')
+    c.insert_json5('listen/endpoints', f'["{ep}"]')
+    return c
+
+
+def _relays(ep: str) -> bool:
+    """Two outbound-only clients on ``ep`` see each other's put: the hub there relays."""
+    a, b = _raw_client(ep), _raw_client(ep)
+    try:
+        wait(0.4)
+        got: list[bytes] = []
+        sub = b.declare_subscriber('keep/**', lambda s: got.append(bytes(s.payload)))
+        wait(0.2)
+        a.put('keep/x', b'relayed')
+        wait(0.4)
+        sub.undeclare()
+        return got == [b'relayed']
+    finally:
+        a.close()
+        b.close()
+
+
+class TestHubKeepsConfigListen:
+    """Pin (0.3.9): a hub binds its own config's listen endpoints when no listen is given.
+
+    Before 0.3.9 every hub path wrote ``listen/endpoints`` over the config, with
+    ``listen=`` or the ``tcp/0.0.0.0:7447`` default, so a config file's own
+    listeners (a TLS-only one, say) were never bound.
+    """
+
+    def test_hub_binds_a_raw_configs_listener(self):
+        ep = _endpoint()
+        h = z.hub(zenoh_config=_router_config(ep))
+        try:
+            assert _relays(ep)
+        finally:
+            h.close()
+
+    def test_open_binds_a_config_files_listener(self, tmp_path):
+        ep = _endpoint()
+        conf = tmp_path / 'hub.json5'
+        conf.write_text(f'{{ listen: {{ endpoints: ["{ep}"] }}, scouting: {{ multicast: {{ enabled: false }} }} }}')
+        h = z.open(SessionConfig(mode=z.Mode.ROUTER, zenoh_config_file=str(conf)))
+        try:
+            assert _relays(ep)
+        finally:
+            h.close()
+
+    def test_open_binds_an_overrides_listener(self):
+        ep = _endpoint()
+        h = z.open(SessionConfig(mode=z.Mode.ROUTER, zenoh_overrides={'listen/endpoints': [ep]}))
+        try:
+            assert _relays(ep)
+        finally:
+            h.close()
+
+
+class TestDaemonConfigFile:
+    """Pin (0.3.9): ``python -m zeared.hubd --config`` applies zeared's settings over the file.
+
+    Router mode, timestamping (unless ``--no-timestamping``) and shared memory off land over
+    the file, as they do over a ``SessionConfig.zenoh_config_file``. Before 0.3.9 only shared
+    memory did, so a file without ``mode`` opened a peer.
+    """
+
+    def test_a_modeless_file_runs_a_router(self, monkeypatch, tmp_path):
+        captured: dict = {}
+        monkeypatch.setattr('zeared.hubd.run', lambda **kw: captured.update(kw))
+        from zeared.hubd import main
+
+        conf = tmp_path / 'hub.json5'
+        conf.write_text('{ scouting: { multicast: { enabled: false } } }')
+        main(['--config', str(conf)])
+        cfg = captured['zenoh_config']
+        assert cfg.get_json('mode') == '"router"'
+        assert cfg.get_json('timestamping/enabled') == 'true'
+        assert cfg.get_json('scouting/multicast/enabled') == 'false'  # the rest of the file stands
+
+    def test_no_timestamping_is_honoured_with_a_file(self, monkeypatch, tmp_path):
+        captured: dict = {}
+        monkeypatch.setattr('zeared.hubd.run', lambda **kw: captured.update(kw))
+        from zeared.hubd import main
+
+        conf = tmp_path / 'hub.json5'
+        conf.write_text("{ mode: 'router' }")
+        main(['--config', str(conf), '--no-timestamping'])
+        assert captured['zenoh_config'].get_json('timestamping/enabled') != 'true'
+
+
+class TestDaemonLogging:
+    def test_logs_to_stdout(self, monkeypatch):
+        """Pin (0.3.9): the daemon logs to stdout (journald under systemd), as its docs say."""
+        seen: dict = {}
+        monkeypatch.setattr('zeared.hubd.run', lambda **kw: None)
+        monkeypatch.setattr('zeared.hubd.logging.basicConfig', lambda **kw: seen.update(kw))
+        from zeared.hubd import main
+
+        main([])
+        assert seen['stream'] is sys.stdout
+
+
+class TestResolveHubListen:
+    """Pin (0.3.9): which endpoints a hub binds, from every source, in order."""
+
+    def test_listen_kwarg_first(self):
+        cfg = SessionConfig(mode=z.Mode.ROUTER, listen=['tcp/127.0.0.1:1'])
+        assert _resolve_hub_listen(['tcp/127.0.0.1:2'], cfg, _router_config('tcp/127.0.0.1:3')) == (
+            ['tcp/127.0.0.1:2'],
+            ['tcp/127.0.0.1:2'],
+        )
+
+    def test_session_config_listen_next(self):
+        cfg = SessionConfig(mode=z.Mode.ROUTER, listen=['tcp/127.0.0.1:1'])
+        assert _resolve_hub_listen(None, cfg, _router_config('tcp/127.0.0.1:3')) == (
+            ['tcp/127.0.0.1:1'],
+            ['tcp/127.0.0.1:1'],
+        )
+
+    def test_the_configs_own_listeners_are_kept(self):
+        assert _resolve_hub_listen(None, None, _router_config('tls/0.0.0.0:7448')) == (None, ['tls/0.0.0.0:7448'])
+
+    def test_default_when_the_config_names_none(self):
+        c = zenoh.Config()
+        c.insert_json5('mode', '"router"')
+        assert _resolve_hub_listen(None, None, c) == (['tcp/0.0.0.0:7447'], ['tcp/0.0.0.0:7447'])
+
+    def test_default_when_there_is_no_config(self):
+        assert _resolve_hub_listen(None, None, None) == (['tcp/0.0.0.0:7447'], ['tcp/0.0.0.0:7447'])
+
+    def test_empty_listen_kwarg_counts_as_unset(self):
+        # As before 0.3.9: an empty ``listen=`` falls through to the next source.
+        assert _resolve_hub_listen([], None, None) == (['tcp/0.0.0.0:7447'], ['tcp/0.0.0.0:7447'])
+
+
+class TestBuildRouterConfigKeepsListen:
+    def test_none_keeps_the_configs_listen(self):
+        cfg = _build_config_for_router(None, None, _router_config('tls/0.0.0.0:7448'))
+        assert cfg.get_json('listen/endpoints') == '["tls/0.0.0.0:7448"]'
+
+    def test_explicit_listen_overrides_the_configs(self):
+        cfg = _build_config_for_router(['tcp/127.0.0.1:9'], None, _router_config('tls/0.0.0.0:7448'))
+        assert cfg.get_json('listen/endpoints') == '["tcp/127.0.0.1:9"]'
+
+
+class TestDaemonListenOverridesFile:
+    def test_listen_flag_wins_over_the_file(self, monkeypatch, tmp_path):
+        captured: dict = {}
+        monkeypatch.setattr('zeared.hubd.run', lambda **kw: captured.update(kw))
+        from zeared.hubd import main
+
+        conf = tmp_path / 'hub.json5'
+        conf.write_text('{ listen: { endpoints: ["tls/0.0.0.0:7448"] } }')
+        main(['--config', str(conf), '--listen', 'tcp/127.0.0.1:9'])
+        write, bound = _resolve_hub_listen(captured['listen'], None, captured['zenoh_config'])
+        assert write == bound == ['tcp/127.0.0.1:9']
+
+    def test_without_the_flag_the_files_listener_stands(self, monkeypatch, tmp_path):
+        captured: dict = {}
+        monkeypatch.setattr('zeared.hubd.run', lambda **kw: captured.update(kw))
+        from zeared.hubd import main
+
+        conf = tmp_path / 'hub.json5'
+        conf.write_text('{ listen: { endpoints: ["tls/0.0.0.0:7448"] } }')
+        main(['--config', str(conf)])
+        assert _resolve_hub_listen(captured['listen'], None, captured['zenoh_config']) == (
+            None,
+            ['tls/0.0.0.0:7448'],
+        )

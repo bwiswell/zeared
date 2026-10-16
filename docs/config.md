@@ -97,8 +97,10 @@ sess = z.client(config=cfg, retry=False)   # disable retry just this call
 
 ## `zenoh_config=` passthrough
 
-Use `zenoh_config: zenoh.Config` to layer raw Zenoh configuration overrides
-on top of whichever form you picked:
+Use `zenoh_config: zenoh.Config` to hand the factory a whole Zenoh config to
+start from, instead of the one zeared would build. zeared applies none of
+its own settings to it (mode, timestamping, shared memory off: it is taken
+as given), and writes only the endpoint fields over it, when they are set:
 
 ```python
 raw = zenoh.Config()
@@ -114,6 +116,7 @@ zeared's factory kwargs split into two categories:
 |----------|--------------------------------|
 | **Maps to a `zenoh.Config` field** (`timestamping`) | Silenced — you took over the Config; layer Config-level settings yourself or drop the high-level kwarg. |
 | **Out-of-band** (`retry`, `initial_backoff`, `max_backoff`, `max_attempts`, `auto_reconnect`, `probe_interval`, `gc_interval`) | Layered freely on top — they don't touch the `zenoh.Config`. |
+| **Endpoints** (`router`, `connect`, `listen`, as kwargs or `SessionConfig` fields) | Written over the Config when set; when unset, the endpoints the Config already names stand. A hub with listen endpoints nowhere binds `tcp/0.0.0.0:7447`; a client with connect endpoints nowhere raises `TypeError`. |
 
 ## Raw Zenoh settings: `zenoh_config_file` / `zenoh_overrides`
 
@@ -130,9 +133,19 @@ zenoh_overrides = { "scouting/multicast/enabled" = false }
 
 Precedence when the underlying `zenoh.Config` is built: **the file, then
 zeared's own `mode` / timestamping / shared memory off, then
-`zenoh_overrides`.** Overrides genuinely override — a `mode` set there beats
-`SessionConfig.mode`, and `{"transport/shared_memory/enabled" = true}` there
-is how a session opts back in to shared memory.
+`zenoh_overrides`, then the endpoint fields (`router`, `connect`, `listen`)
+where they are set.** Overrides beat the file and zeared's own settings: a
+`mode` set there beats `SessionConfig.mode` inside Zenoh, and
+`{"transport/shared_memory/enabled" = true}` there is how a session opts back
+in to shared memory. Endpoint fields beat everything, but only when set:
+leave them unset and the file's or the overrides' endpoints stand, in every
+mode (0.3.9). So a client can take its routers from the file alone, and a
+hub binds the file's listeners rather than `tcp/0.0.0.0:7447`.
+
+One corollary of a `mode` override: it changes the mode Zenoh runs in, but
+`z.open(cfg)` still picks the factory (`peer` / `client` / `hub`) from
+`SessionConfig.mode`, and with it the factory's own rules (a hub's listen
+default, a client's need for endpoints). Set both, or neither.
 
 An explicit `zenoh_config=<zenoh.Config>` factory kwarg still wins over
 both; it is the lower-level escape hatch, and a caller reaching for it has

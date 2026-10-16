@@ -98,7 +98,7 @@ from .queryable import Queryable, QueryContext, clear_queryable_cache
 from .retention import clear_retention_cache
 from .subscriber import Subscriber
 
-__version__ = '0.3.8'
+__version__ = '0.3.9'
 
 # Module-level defaults.
 # ``session`` is a dual-role handle (see ``_SessionHandle`` docstring) — the

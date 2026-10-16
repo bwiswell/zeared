@@ -19,13 +19,23 @@ so the package init stays a thin re-export module.
   Session` — a **router-mode** relay for NAT-gated nodes (see
   [`hubd.md`](hubd.md)). Relays pub/sub, queries, and liveliness in-process;
   no `zenohd` binary. Returns a raw `zenoh.Session` (a listener has no
-  zeared-owned resources to supervise). `listen` defaults to
-  `['tcp/0.0.0.0:7447']`; `connect` links to other hubs.
+  zeared-owned resources to supervise). Without `listen` (or
+  `config.listen`), the hub binds the listen endpoints its Zenoh config
+  already names, and `['tcp/0.0.0.0:7447']` only when nothing names any
+  (0.3.9); `connect` links to other hubs.
 - `open(cfg: SessionConfig) -> Session | ManagedSession` — dispatches
   on `cfg.mode` (`PEER` / `CLIENT` / `ROUTER`).
 
 `config=` provides a declarative base spec; explicit kwargs override
-per-call. `zenoh_config=` layers raw Zenoh overrides on top.
+per-call. `zenoh_config=` replaces the config zeared would build: it is
+taken as given, and only the endpoint fields are written over it.
+
+**Endpoints, in every mode** (0.3.9): an endpoint kwarg or field (`router`,
+`connect`, `listen`) is written over the Zenoh config when set; when unset,
+the endpoints the config already names stand, whether they came from
+`zenoh_config=`, a `zenoh_config_file` or `zenoh_overrides`. So `client()`
+opens on a config's own connect endpoints and raises `TypeError` only when
+there are none anywhere.
 `auto_reconnect=True` returns a `ManagedSession` wrapper instead of a
 raw `zenoh.Session`.
 
@@ -42,7 +52,17 @@ raw `zenoh.Session`.
   (`_apply_defaults`): the mode, `timestamping/enabled=true`
   (RETAINED + DEDUPE need it) and `transport/shared_memory/enabled=false`
   (see `config.md` → "Shared memory off"). When the user supplies a
-  config, we don't touch it (silent-respect).
+  config, we don't touch it (silent-respect), except to write endpoints
+  that were given. `_build_config_for_router(listen, connect,
+  zenoh_config, *, timestamping)` is the hub's; `listen=None` keeps the
+  config's own.
+- `_endpoints_set(c, key)` / `_config_endpoints(c, key)` — whether a
+  config names its own `listen/endpoints` or `connect/endpoints` (an unset
+  key reads back as Zenoh's default), and which.
+- `_resolve_hub_listen(listen, config, zenoh_config)` — a hub's listen
+  endpoints: `listen=`, then `config.listen`, then the config's own (left
+  in place), then `tcp/0.0.0.0:7447`. Returns `(to_write, bound)`; the
+  daemon logs `bound`.
 - `_resolve_retry_knobs(config, retry, initial_backoff, max_backoff,
   max_attempts)` — layer kwargs over the config's retry knobs; shared
   by `peer` / `client`.

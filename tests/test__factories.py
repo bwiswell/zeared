@@ -20,6 +20,7 @@ from zeared._factories import (
     _build_config_for_client,
     _build_config_for_peer,
     _resolve_retry_knobs,
+    _resolve_zenoh_config,
     client,
     peer,
 )
@@ -190,4 +191,79 @@ class TestClientRequiresEndpoint:
     def test_client_with_empty_config_raises(self):
         cfg = z.SessionConfig(mode=z.Mode.CLIENT)
         with pytest.raises(TypeError, match='router='):
+            client(config=cfg)
+
+
+class TestClientEndpointsFromConfig:
+    """Pin (0.3.9): a client with no ``router`` / ``connect`` opens on the connect endpoints its
+    Zenoh config already carries (a raw ``zenoh_config``, a ``zenoh_config_file`` or
+    ``zenoh_overrides``). Before 0.3.9 it raised ``TypeError`` regardless.
+    """
+
+    @pytest.fixture
+    def hub_ep(self):
+        import socket
+
+        s = socket.socket()
+        s.bind(('127.0.0.1', 0))
+        ep = f'tcp/127.0.0.1:{s.getsockname()[1]}'
+        s.close()
+        h = z.hub(listen=[ep])
+        try:
+            yield ep
+        finally:
+            h.close()
+
+    def test_opens_on_overrides_endpoints(self, hub_ep):
+        cfg = z.SessionConfig(mode=z.Mode.CLIENT, zenoh_overrides={'connect/endpoints': [hub_ep]})
+        sess = client(config=cfg)
+        try:
+            assert sess.zid() is not None
+        finally:
+            sess.close()
+
+    def test_opens_on_a_raw_configs_endpoints(self, hub_ep):
+        import zenoh
+
+        raw = zenoh.Config()
+        raw.insert_json5('mode', '"client"')
+        raw.insert_json5('connect/endpoints', f'["{hub_ep}"]')
+        sess = client(zenoh_config=raw)
+        try:
+            assert sess.zid() is not None
+        finally:
+            sess.close()
+
+
+class TestEndpointRule:
+    """Pin (0.3.9): one rule in every mode. An endpoint field is written over the Zenoh config
+    when it is set; when it isn't, the endpoints the config already names stand."""
+
+    OVERRIDES = {'connect/endpoints': ['tcp/override:1']}  # noqa: RUF012
+
+    def test_client_builder_keeps_the_configs_endpoints(self):
+        import zenoh
+
+        raw = zenoh.Config()
+        raw.insert_json5('connect/endpoints', '["tcp/own:1"]')
+        assert _build_config_for_client(None, raw).get_json('connect/endpoints') == '["tcp/own:1"]'
+
+    def test_client_router_field_beats_an_override(self):
+        cfg = z.SessionConfig(mode=z.Mode.CLIENT, router='tcp/field:1', zenoh_overrides=self.OVERRIDES)
+        built = _build_config_for_client(['tcp/field:1'], _resolve_zenoh_config(cfg, None))
+        assert built.get_json('connect/endpoints') == '["tcp/field:1"]'
+
+    def test_peer_connect_field_beats_an_override(self):
+        cfg = z.SessionConfig(mode=z.Mode.PEER, connect=['tcp/field:1'], zenoh_overrides=self.OVERRIDES)
+        built = _build_config_for_peer(['tcp/field:1'], None, _resolve_zenoh_config(cfg, None))
+        assert built.get_json('connect/endpoints') == '["tcp/field:1"]'
+
+    def test_peer_override_stands_without_a_field(self):
+        cfg = z.SessionConfig(mode=z.Mode.PEER, zenoh_overrides=self.OVERRIDES)
+        built = _build_config_for_peer(None, None, _resolve_zenoh_config(cfg, None))
+        assert built.get_json('connect/endpoints') == '["tcp/override:1"]'
+
+    def test_client_with_no_endpoints_anywhere_still_raises(self):
+        cfg = z.SessionConfig(mode=z.Mode.CLIENT, zenoh_overrides={'scouting/multicast/enabled': False})
+        with pytest.raises(TypeError, match='zenoh_config_file'):
             client(config=cfg)

@@ -19,17 +19,24 @@ python -m zeared.hubd [-l ENDPOINT ...] [-c ENDPOINT ...] \
                       [--config FILE] [--no-timestamping] [--log-level LEVEL]
 ```
 
-- `-l/--listen` — endpoint(s) to bind (repeatable; default `tcp/0.0.0.0:7447`).
+- `-l/--listen` — endpoint(s) to bind (repeatable). Without it, the hub
+  binds the `--config` file's listen endpoints, and `tcp/0.0.0.0:7447` only
+  when the file names none (or there is no file). Given, it overrides the
+  file's (0.3.9; before, the default overwrote the file's listeners).
 - `-c/--connect` — endpoint(s) of other hubs to link to (repeatable), for a
-  multi-hub mesh (HA / scale).
-- `--config` — a JSON5 Zenoh config file for **TLS / access-control**;
-  `--listen` / `--connect` still layer on top. Shared memory stays off
-  whatever the file says: a hub is where Zenoh's shared-memory transport
-  first starts silently dropping large messages (`config.md` →
-  "Shared memory off"). A hub embedded with `z.hub(zenoh_config=...)` is
-  taken as given, so set it off there.
-- `--no-timestamping` — disable the HLC timestamping that's on by default
-  (retention dedupe needs it).
+  multi-hub mesh (HA / scale). Given, it overrides the file's; without it,
+  the file's stand.
+- `--config` — a JSON5 Zenoh config file for **TLS / access-control**.
+  zeared's own settings land over it, as over a `SessionConfig.zenoh_config_file`
+  (0.3.9): **router mode** (this daemon is a router; before 0.3.9 a file
+  without `mode` opened a peer), **timestamping** unless `--no-timestamping`,
+  and **shared memory off**, whatever the file says: a hub is where Zenoh's
+  shared-memory transport first starts silently dropping large messages
+  (`config.md` → "Shared memory off"). A hub embedded with
+  `z.hub(zenoh_config=...)` is taken as given, so set router mode and shared
+  memory off there.
+- `--no-timestamping` — don't force on the HLC timestamping that's on by
+  default (retention dedupe needs it), with or without `--config`.
 
 Stops cleanly on `SIGINT` / `SIGTERM`.
 

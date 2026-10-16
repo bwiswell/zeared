@@ -42,6 +42,56 @@ _QUIET_ATTEMPTS = 3
 #: off keeps it off every link through the hub.
 _SHARED_MEMORY = 'transport/shared_memory/enabled'
 
+#: Where a hub listens when nothing names its endpoints: no ``listen=``, no
+#: ``SessionConfig.listen``, and a Zenoh config (if any) that leaves ``listen/endpoints`` unset.
+_DEFAULT_HUB_LISTEN = ('tcp/0.0.0.0:7447',)
+
+
+def _endpoints_set(c: zenoh.Config, key: str) -> bool:
+    """Whether config ``c`` names its own endpoints at ``key`` (``listen/endpoints`` / ``connect/endpoints``).
+
+    An unset key reads back as Zenoh's own default: a mode-keyed map for ``listen/endpoints``
+    (``{"router": [...], "peer": [...]}``) and ``[]`` for ``connect/endpoints``. An explicit one
+    reads back as a list. So "differs from a pristine config" is the test; an explicit ``[]``
+    counts as unset, which is what it means.
+    """
+    return json.loads(c.get_json(key)) != json.loads(zenoh.Config().get_json(key))
+
+
+def _config_endpoints(c: zenoh.Config | None, key: str) -> list:
+    """The endpoints config ``c`` names at ``key``, or ``[]`` when it names none (or there is no config)."""
+    if c is None or not _endpoints_set(c, key):
+        return []
+    value = json.loads(c.get_json(key))
+    return list(value) if isinstance(value, list) else [value]
+
+
+def _resolve_hub_listen(
+    listen: list | None,
+    config: SessionConfig | None,
+    zenoh_config: zenoh.Config | None,
+) -> tuple[list | None, list]:
+    """Pick a hub's listen endpoints: ``(to write over the config, that the hub will bind)``.
+
+    In order: ``listen=`` (when given and non-empty), then ``SessionConfig.listen``; else the
+    endpoints the resolved Zenoh config already names, left in place (nothing to write); else
+    ``tcp/0.0.0.0:7447``. ``zenoh_config`` is the *resolved* config: a raw one, or one built from
+    ``zenoh_config_file`` / ``zenoh_overrides``, or ``None`` when zeared builds the whole config.
+
+    Before 0.3.9 the last two steps didn't exist: every hub wrote ``listen/endpoints`` over its
+    config, so a config file's own listeners (a TLS-only one, say) were never bound.
+    """
+    explicit = list(config.listen) or None if config is not None else None
+    if listen is not None:
+        explicit = list(listen)
+    if explicit:
+        return explicit, explicit
+    own = _config_endpoints(zenoh_config, 'listen/endpoints')
+    if own:
+        return None, own
+    default = list(_DEFAULT_HUB_LISTEN)
+    return default, default
+
 
 def _apply_defaults(c: zenoh.Config, mode: str, *, timestamping: bool) -> None:
     """Set zeared's own settings on a config it builds: the mode, HLC timestamping, shared memory off.
@@ -164,20 +214,23 @@ def _build_config_for_peer(
 
 
 def _build_config_for_client(
-    endpoints: list,
+    endpoints: list | None,
     zenoh_config: zenoh.Config | None,
     *,
     timestamping: bool = True,
 ) -> zenoh.Config:
+    # Endpoints are written over the config only when given; otherwise the ones the
+    # config already names stand (``client()`` checks that there are some).
     c = zenoh_config if zenoh_config is not None else zenoh.Config()
     if zenoh_config is None:
         _apply_defaults(c, 'client', timestamping=timestamping)
-    c.insert_json5('connect/endpoints', json.dumps(endpoints))
+    if endpoints:
+        c.insert_json5('connect/endpoints', json.dumps(endpoints))
     return c
 
 
 def _build_config_for_router(
-    listen: list,
+    listen: list | None,
     connect: list | None,
     zenoh_config: zenoh.Config | None,
     *,
@@ -186,10 +239,13 @@ def _build_config_for_router(
     # A hub is a router that relays between nodes that can't reach each other
     # directly (e.g. both NAT-gated, outbound-only). It routes pub/sub,
     # queries, and liveliness in-process — no ``zenohd`` binary required.
+    # Endpoints are written over the config only when given: ``listen=None``
+    # keeps the config's own (``_resolve_hub_listen`` decides).
     c = zenoh_config if zenoh_config is not None else zenoh.Config()
     if zenoh_config is None:
         _apply_defaults(c, 'router', timestamping=timestamping)
-    c.insert_json5('listen/endpoints', json.dumps(listen))
+    if listen is not None:
+        c.insert_json5('listen/endpoints', json.dumps(listen))
     if connect:
         c.insert_json5('connect/endpoints', json.dumps(connect))
     return c
@@ -410,17 +466,24 @@ def client(  # noqa: PLR0913
     if router is not None:
         endpoints = [router] if isinstance(router, str) else list(router)
 
-    if not endpoints:
-        msg = 'client(): need either router=<endpoint(s)> or config=SessionConfig(... with connect/router)'
-        raise TypeError(msg)
-
     zenoh_config = _resolve_zenoh_config(config, zenoh_config)
 
-    label = f'client(connect={endpoints})'
+    # No endpoint fields: the connect endpoints the Zenoh config already names
+    # (a raw ``zenoh_config``, a ``zenoh_config_file`` or ``zenoh_overrides``)
+    # stand, as every other mode's do. Only with none anywhere is it an error.
+    effective = endpoints or _config_endpoints(zenoh_config, 'connect/endpoints')
+    if not effective:
+        msg = (
+            'client(): need router=<endpoint(s)>, config=SessionConfig(... with connect/router), '
+            'or connect endpoints in zenoh_config / zenoh_config_file / zenoh_overrides'
+        )
+        raise TypeError(msg)
+
+    label = f'client(connect={effective})'
 
     def _open() -> zenoh.Session:
         cfg = _build_config_for_client(
-            endpoints,
+            endpoints or None,
             zenoh_config,
             timestamping=timestamping,
         )
@@ -471,10 +534,12 @@ def hub(  # noqa: PLR0913
     external binary. The routing runs in Zenoh's Rust core, so throughput
     matches a standalone router.
 
-    ``listen`` is the set of endpoints the hub binds (default
-    ``['tcp/0.0.0.0:7447']`` when neither ``listen`` nor ``config`` supplies
-    any). ``connect`` optionally links this hub to other hubs for a
-    multi-hub mesh. Point nodes at it with ``z.client(router='tcp/host:7447')``
+    ``listen`` is the set of endpoints the hub binds. Without it (or
+    ``config.listen``), the hub binds the endpoints its Zenoh config already
+    names (from ``zenoh_config=``, ``zenoh_config_file`` or
+    ``zenoh_overrides``), and ``['tcp/0.0.0.0:7447']`` only when nothing names
+    any. ``connect`` optionally links this hub to other hubs for a multi-hub
+    mesh. Point nodes at it with ``z.client(router='tcp/host:7447')``
     — client mode routes everything through the hub and never attempts the
     direct peer links that would fail under NAT.
 
@@ -486,7 +551,6 @@ def hub(  # noqa: PLR0913
     ``transport/shared_memory/enabled`` false in it (the daemon does that for
     its file).
     """
-    base_listen = list(config.listen) or None if config is not None else None
     base_connect = list(config.connect) or None if config is not None else None
     retry_b, initial_b, max_b, max_a = _resolve_retry_knobs(
         config,
@@ -495,20 +559,18 @@ def hub(  # noqa: PLR0913
         max_backoff,
         max_attempts,
     )
-    if listen is not None:
-        base_listen = listen
     if connect is not None:
         base_connect = connect
-    if not base_listen:
-        base_listen = ['tcp/0.0.0.0:7447']
 
     zenoh_config = _resolve_zenoh_config(config, zenoh_config)
+    write_listen, effective_listen = _resolve_hub_listen(listen, config, zenoh_config)
+    effective_connect = base_connect or _config_endpoints(zenoh_config, 'connect/endpoints')
 
-    label = f'hub(listen={base_listen}, connect={base_connect or []})'
+    label = f'hub(listen={effective_listen}, connect={effective_connect})'
 
     def _open() -> zenoh.Session:
         cfg = _build_config_for_router(
-            base_listen,
+            write_listen,
             base_connect,
             zenoh_config,
             timestamping=timestamping,
