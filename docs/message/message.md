@@ -94,6 +94,10 @@ Template-TOPICs auto-derive a wildcard for the subscribe call, so
 | `RETAINED` | `ClassVar[bool]` | opt in to MQTT-style retained-message emulation. Default `False`. See [`retention.md`](retention.md). |
 | `LIVELINESS` | `ClassVar[bool]` | opt in to presence / LWT — producers can `register_will()`, subscribers receive the will as a synthesised sample on peer death. Default `False`. See [`presence.md`](presence.md). |
 | `DEDUPE` | `ClassVar[bool]` | for `RETAINED` classes, dedupe retention-fetch replies against live publishes via `(key_expr, timestamp)`. Default `True`. Synthesised will samples (timestamp `None`) bypass dedupe. Per-subscriber override: `Cls.on_message(cb, dedupe=False)`. |
+| `DEDUPE_MAX_SKEW` | `ClassVar[float \| None]` | ceiling, in seconds, on how far ahead of the local clock a sample's HLC may be and still advance the dedupe watermark. A sample beyond it is still delivered; it just doesn't move the watermark. `None` disables the check. Default `300.0`. |
+| `RETENTION_TTL` | `ClassVar[float \| None]` | for `RETAINED` classes, lazy expiry in seconds: entries older than the TTL are skipped and pruned when a retained fetch is served. Default `None` (no expiry). See [`retention.md`](../retention.md). |
+| `REQUEST` | `ClassVar[type \| None]` | typed request-payload class for `query` / `on_query`. Default `None`: the handler sees the raw payload bytes on `ctx.request`. See [`queryable.md`](../queryable/queryable.md). |
+| `EFFECT` | `ClassVar[Effect \| str \| None]` | doc-only: what acting on this contract does, as `z.Effect.READ` / `WRITE` / `ACTION` or its name. Never read at runtime; `zeared.doc` surfaces it and `z.effect_of` validates it. Default `None` (undeclared, never inferred). See [`effect.md`](../effect.md). (0.3.12) |
 | `SCHEMA` | `ClassVar[Optional[str]]` | optional schema-version marker (e.g. `'1.0'`, `'a3f72b1'`). When set, the value rides as a Zenoh sample attachment (msgpack-encoded `{schema: <value>}`); subscribers compare against their own `SCHEMA` and route mismatches via `on_error` as `SchemaMismatchError`. Default `None` (no stamping, no validation). |
 
 ### `SCHEMA` semantics

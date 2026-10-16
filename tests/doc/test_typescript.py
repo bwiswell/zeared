@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from doc.ts_models import Spectrum
-from zeared.doc.typescript import emit, generate, main, ts_type
+from doc.wire_models import Ping, SetMode
+from zeared.doc.typescript import emit, generate, main, render_interface, ts_type
 
 
 def _field(cls, attr):
@@ -103,6 +104,17 @@ class TestRequestClosure:
     def test_private_base_excluded(self):
         ts = generate('doc.wire_models')
         assert 'interface _CmdBase' not in ts
+
+
+class TestEffectJsdoc:
+    """``@effect`` appears only when a class declares ``EFFECT`` (0.3.12)."""
+
+    def test_declared_effect_follows_encoding(self):
+        assert ' * @encoding msgpack\n * @effect write\n */' in render_interface(SetMode)
+
+    def test_undeclared_has_no_effect_tag(self):
+        assert '@effect' not in render_interface(Ping)
+        assert '@effect' not in generate('doc.ts_models')
 
 
 class TestEmitDirect:

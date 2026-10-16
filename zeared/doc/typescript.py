@@ -189,6 +189,8 @@ def _interface_jsdoc(cls: type[Seared]) -> list[str]:
         if md.schema_version is not None:
             body.append(f'@schemaVersion {md.schema_version}')
         body.append(f'@encoding {md.encoding}')
+        if md.effect is not None:  # only when declared: undeclared output is unchanged
+            body.append(f'@effect {md.effect}')
     body = [b for b in body if b]
     if not body:
         return lines

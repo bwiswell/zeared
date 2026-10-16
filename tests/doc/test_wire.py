@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from doc.wire_models import Ping, PingRequest
+import pytest
+
+import zeared as z
+from doc.wire_models import Ping, PingRequest, SetMode
 from zeared.doc import (
     build_docs,
     document,
@@ -39,6 +42,32 @@ class TestIntrospectMessage:
             ('source', True),
             ('reader_id', True),
         ]
+
+
+class TestEffect:
+    """``EFFECT`` surfaces only when declared (0.3.12)."""
+
+    def test_introspected_and_normalised(self):
+        assert introspect_message(Ping).effect is None
+        assert introspect_message(SetMode).effect is z.Effect.WRITE  # declared as 'write'
+
+    def test_declared_effect_ends_the_wire_line(self):
+        page = render_message(SetMode)
+        line = next(ln for ln in page.splitlines() if ln.startswith('Encoding '))
+        assert line.endswith(' · Effect `write`')
+
+    def test_undeclared_page_has_no_effect(self):
+        assert 'Effect' not in render_message(Ping)
+
+    def test_invalid_effect_fails_introspection(self):
+        @z.zeared
+        class Typo(z.Message):
+            TOPIC = 'device/typo'
+            EFFECT = 'mutating'
+            x: int = z.Int(default=0)
+
+        with pytest.raises(ValueError, match=r"Typo\.EFFECT = 'mutating'"):
+            introspect_message(Typo)
 
 
 class TestRenderMessage:

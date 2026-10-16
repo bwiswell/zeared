@@ -32,6 +32,7 @@ from typing import ClassVar, Literal, Self
 import seared as s
 
 from .. import _codec as codec
+from ..effect import Effect, EffectName  # noqa: TC001
 from ._message_async import _MessageAsyncMixin
 from ._message_concrete_topic import _ConcreteTopicDescriptor
 from ._message_query import _MessageQueryMixin
@@ -109,6 +110,14 @@ class Message(
     # send a typed request: ``Cls.query(request=Req(...))`` packs it as the
     # query payload and the handler's ``ctx.request`` is a decoded ``Req``.
     REQUEST: ClassVar[type | None] = None
+    # Optional, doc-only: what acting on this contract does (see
+    # ``zeared.effect``), as an ``Effect`` or its name. ``None`` (default)
+    # means undeclared, never an inferred effect. zeared never reads it at
+    # runtime; ``zeared.doc`` surfaces it and ``z.effect_of`` validates it
+    # for policy layers. ``Effect`` is imported at runtime, not under
+    # ``TYPE_CHECKING``: ``typing.get_type_hints`` on any subclass evaluates
+    # this annotation.
+    EFFECT: ClassVar[Effect | EffectName | None] = None
     # Optional schema-version marker. ``None`` (default) opts the class
     # out of attachment-based schema stamping; any string value enables
     # it — the value rides as a Zenoh sample attachment (msgpack-encoded

@@ -31,3 +31,14 @@ class Ping(_CmdBase):
 
     reader_id: int = z.Int(required=True)
     note: str | None = z.Str(default=None, doc='free-text note')
+
+
+@z.zeared
+class SetMode(_CmdBase):
+    """Put a device into a named mode (a queryable that changes state)."""
+
+    TOPIC = 'device/command/mode/{source}/{device_id}'
+    EFFECT = 'write'  # declared by name, to exercise normalisation (0.3.12)
+
+    device_id: int = z.Int(required=True)
+    mode: str = z.Str(required=True)
