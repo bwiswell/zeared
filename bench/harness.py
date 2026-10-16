@@ -126,6 +126,9 @@ class Measurement(z.Zeared):
     metric: str = z.Str(required=True)
     value: float = z.Float(required=True)
     unit: str = z.Str(required=True)
+    # Which of the report's runs this came from. The default keeps an artifact
+    # recorded before runs were tagged loadable, as a single run.
+    run: int = z.Int(default=0, doc='0-based run index within the report')
 
 
 @z.zeared
@@ -138,6 +141,7 @@ class Report(z.Zeared):
     zenoh: str = z.Str(required=True)
     iterations: int = z.Int(required=True, doc='fixed-N suites')
     duration_s: float = z.Float(required=True, doc='publish window, duration suites')
+    runs: int = z.Int(default=1, doc='times every suite ran; tables quote the median')
     measurements: list[Measurement] = z.T(Measurement, many=True, required=True)
 
 
@@ -173,8 +177,8 @@ class Run:
         """Messages published but never delivered."""
         return self.sent - self.received
 
-    def to_measurements(self, suite: str) -> list[Measurement]:
-        """Expand into the long-form rows written to ``results.json``."""
+    def to_measurements(self, suite: str, run: int = 0) -> list[Measurement]:
+        """Expand into the long-form rows written to ``results.json``, tagged with ``run``."""
         rows = [
             ('pub_rate', self.pub_rate, 'msgs/s'),
             ('e2e_rate', self.e2e_rate, 'msgs/s'),
@@ -190,6 +194,7 @@ class Run:
                 metric=metric,
                 value=value,
                 unit=unit,
+                run=run,
             )
             for metric, value, unit in rows
         ]

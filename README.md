@@ -1096,25 +1096,27 @@ End-to-end publish → subscriber-received throughput on a single
 in-process Zenoh peer session. Headline numbers, msgpack-cached
 default vs. `marshmallow` + Zenoh on the same schema:
 
-| Strategy                          | pub/s | wire (B) |
-|-----------------------------------|------:|---------:|
-| Zenoh + `marshmallow` (JSON)      | 4,057 | 796      |
-| `zeared` sync (msgpack, cached)   | 7,670 | 533      |
+<!-- bench:readme-headline -->
+| Strategy                        | pub/s | wire (B) |
+|---------------------------------|------:|---------:|
+| Zenoh + `marshmallow` (JSON)    | 3,960 | 796      |
+| `zeared` sync (msgpack, cached) | 6,826 | 533      |
+<!-- /bench:readme-headline -->
 
-zeared is ~89% faster and ~33% smaller on the wire.
+zeared is <!-- bench:readme-faster -->~72%<!-- /bench:readme-faster --> faster and <!-- bench:readme-smaller -->~33%<!-- /bench:readme-smaller --> smaller on the wire.
 
 **"Pydantic + MQTT, or zeared?"** — the comparison people actually want, and
 one that splits into two independent questions. pydantic's compiled core
-beats pure-Python seared on serialization (~3.6x); Zenoh beats a
-broker-mediated MQTT hop on transport (~2.5x). Netted out at default
-configuration against MQTT QoS 0 (medians of three runs, here and below),
-**pydantic + MQTT comes out ~1.2x ahead** —
+beats pure-Python seared on serialization (<!-- bench:readme-codec -->~3.7x<!-- /bench:readme-codec -->); Zenoh beats a
+broker-mediated MQTT hop on transport (<!-- bench:readme-transport -->~2.6x<!-- /bench:readme-transport -->). Netted out at default
+configuration against MQTT QoS 0 <!-- bench:readme-runs -->(medians of three runs, here and below)<!-- /bench:readme-runs -->,
+**pydantic + MQTT comes out <!-- bench:readme-behind -->~1.4x<!-- /bench:readme-behind --> ahead** —
 the codec gap is the larger of the two, and pure Python doesn't make it back.
 
 Two things change that. Against **QoS 1** — at-least-once, what most
 production fleets actually run, and the closer analogue to Zenoh's reliable
-`put` — zeared is ~2.3x ahead. And with the optional `rusted` accelerator the
-codec gap closes and the ordering flips: ~1.6x against QoS 0, ~4.4x against
+`put` — zeared is <!-- bench:readme-qos1 -->~2.2x<!-- /bench:readme-qos1 --> ahead. And with the optional `rusted` accelerator the
+codec gap closes and the ordering flips: <!-- bench:readme-rusted-q0 -->~1.5x<!-- /bench:readme-rusted-q0 --> against QoS 0, <!-- bench:readme-rusted-q1 -->~4.7x<!-- /bench:readme-rusted-q1 --> against
 QoS 1.
 
 The full matrix (both axes isolated, sync + async variants, JSON / msgpack,
@@ -1238,23 +1240,33 @@ uv sync
 uv run pytest tests/
 ```
 
-Four checks gate every commit, wired as `prek` hooks — run
+Five checks gate every commit, wired as `prek` hooks — run
 `uv run prek install` once per clone:
 
 ```sh
-uv run ruff check          # lint
-uv run ruff format         # format
-uv run deptry .            # dependency hygiene
-uv run ty check            # type check
+uv run ruff check                    # lint
+uv run ruff format                   # format
+uv run deptry .                      # dependency hygiene
+uv run ty check                      # type check
+uv run python -m bench.tables --check  # benchmark numbers match bench/results.json
 ```
 
 The benchmarks and their comparator libraries are repo-only, behind an
-opt-in extra:
+opt-in extra. Every benchmark number in this README and in
+`docs/overview/benchmarks.md` is generated from the committed
+`bench/results.json`, as the median of its runs; recording a run re-renders
+them:
 
 ```sh
 uv sync --extra bench
-uv run python -m bench
+uv run python -m bench --runs 3      # how the committed artifact is recorded
 ```
+
+The accelerated rows need `rusted`, which zeared declares nowhere: install it
+for the run with `uv pip install ../rusted` (a sibling checkout), and record
+with `uv run --no-sync python -m bench --runs 3` so `uv` doesn't remove it.
+The MQTT comparison needs `mosquitto` on `PATH`; suites whose requirements
+are missing skip with a note.
 
 Tests mirror source layout exactly — one `test_*.py` per source file.
 Integration tests spin up real Zenoh peer sessions in-process; they cover the
