@@ -59,6 +59,12 @@ def main() -> None:
     parser.add_argument(
         '-d', '--duration', type=float, default=DEFAULT_DURATION_S, help='publish window for the duration suites'
     )
+    parser.add_argument(
+        '--runs',
+        type=int,
+        default=1,
+        help='run every suite this many times; the docs quote the median (the committed artifact uses 3)',
+    )
     parser.add_argument('--out', type=Path, default=_DEFAULT_OUT, help='results JSON path')
     parser.add_argument('--no-write', action='store_true', help='print the tables only; do not write the artifact')
     args = parser.parse_args()
@@ -69,16 +75,19 @@ def main() -> None:
     session = peer_session()
     measurements = []
     try:
-        for name, kind in _SUITES:
-            try:
-                module = importlib.import_module(f'.{name}', package=__package__)
-            except ImportError as exc:
-                print(f'{name}: skipped ({exc.name} not installed)')
-                continue
-            runs = module.run(session, args.iterations if kind == 'n' else args.duration)
-            _print_suite(name, runs)
-            for r in runs:
-                measurements.extend(r.to_measurements(module.SUITE))
+        for run in range(args.runs):
+            if args.runs > 1:
+                print(f'\n=== run {run + 1} of {args.runs} ===')
+            for name, kind in _SUITES:
+                try:
+                    module = importlib.import_module(f'.{name}', package=__package__)
+                except ImportError as exc:
+                    print(f'{name}: skipped ({exc.name} not installed)')
+                    continue
+                results = module.run(session, args.iterations if kind == 'n' else args.duration)
+                _print_suite(name, results)
+                for r in results:
+                    measurements.extend(r.to_measurements(module.SUITE, run))
     finally:
         session.close()
 
@@ -93,10 +102,19 @@ def main() -> None:
         zenoh=dist_version('eclipse-zenoh'),
         iterations=args.iterations,
         duration_s=args.duration,
+        runs=args.runs,
         measurements=measurements,
     )
     args.out.write_text(Report.dumps(report) + '\n', encoding='utf-8')
     print(f'\nwrote {args.out} ({len(measurements)} measurements)')
+
+    # A recorded run to the committed artifact re-renders the docs from it; a
+    # scratch ``--out`` leaves them alone.
+    if args.out.resolve() == _DEFAULT_OUT.resolve():
+        from .tables import update
+
+        for path in update(report):
+            print(f'updated {path.relative_to(_DEFAULT_OUT.parent.parent)}')
 
 
 if __name__ == '__main__':

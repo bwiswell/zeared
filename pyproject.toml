@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.3.10"
+version = "0.3.11"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -158,7 +158,9 @@ exclude = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["tests"]
+# The repo root too, so the tests of `bench/tables.py` can import the repo-only
+# `bench` package (`tests/` has no `__init__.py`, so pytest adds only `tests/`).
+pythonpath = ["tests", "."]
 markers = [
     "restart: hub-restart characterisation tests (real sessions, about 6 s); deselect with -m 'not restart'",
 ]

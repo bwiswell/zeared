@@ -3,7 +3,9 @@
 # format, clean dependency hygiene, and a clean `ty` check. Order follows
 # ruff's own guidance: lint first, formatter last so it tidies anything the
 # lint pass touched. `deptry` and `ty` are whole-project checks, so they take
-# no filenames.
+# no filenames. `bench-tables` re-renders the benchmark numbers from the
+# committed `bench/results.json` and fails if a doc has drifted from them; it
+# reads only the artifact, so it needs no brokers and runs in a moment.
 repos:
   - repo: local
     hooks:
@@ -29,3 +31,9 @@ repos:
         language: system
         pass_filenames: false
         types: [python]
+      - id: bench-tables
+        name: bench tables up to date
+        entry: uv run python -m bench.tables --check
+        language: system
+        pass_filenames: false
+        files: ^(README\.md|docs/overview/benchmarks\.md|bench/.*)$
