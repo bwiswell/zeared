@@ -584,7 +584,7 @@ Telemetry.on_message(
 dedicated watchdog thread — not the Zenoh delivery thread — so code that
 mutates shared state needs to handle that.
 
-Only **live** samples feed the watchdog (0.3.0): a retained replay
+Only **live** samples feed the watchdog (0.2.9): a retained replay
 can't establish cadence from stale cached data, and a synthesised will
 — the producer died — can't reset the quiet timer. A `startup_grace`
 subscriber whose only traffic was the subscribe-time replay correctly
@@ -888,8 +888,8 @@ python -m zeared.hubd --listen tcp/0.0.0.0:7447
 
 ```bash
 python -m zeared.hubd \
-  --listen tcp/0.0.0.0:7447 \
-  --connect tcp/hub-b.example.com:7447 \   # link to another hub (multi-hub mesh)
+  --listen tls/0.0.0.0:7447 \
+  --connect tls/hub-b.example.com:7447 \   # link to another hub (multi-hub mesh)
   --config /etc/zeared/hub.json5           # TLS / access-control config
 ```
 
@@ -902,7 +902,8 @@ Notes and limits:
 - **Secure a public hub.** An open relay is reachable by anyone who can hit
   the port. Configure Zenoh **TLS/mTLS + access-control** via `--config`
   (a JSON5 Zenoh config) or `z.hub(zenoh_config=...)`. `--listen`/`--connect`
-  layer on top of a `--config` file.
+  override the file's endpoints when given; without them, the file's stand
+  (and a hub with listen endpoints nowhere binds `tcp/0.0.0.0:7447`).
 - **Single hub is a SPOF.** For HA, run multiple hubs and link them
   (`--connect` / `z.hub(connect=[...])`); nodes can list several routers.
 - **Hub returns a raw `zenoh.Session`** — a listener has no zeared-owned
@@ -1031,15 +1032,16 @@ Mapping: scalars → `number`/`string`/`boolean`; `Enum` → literal unions
 `z.T(Nested)` → an interface reference; `z.Union` → a discriminated union;
 `z.Tuple` → a TS tuple. Keys are **wire keys** (`data_key` when set). `required`
 → no `?`; a default → `?`; `X | None` → `?: T | null`. `dump=False` fields are
-omitted. `Bytes` is base64 (`string`) on the JSON wire; frames/ndarrays are
-`unknown` — decode them in your bridge. Also available programmatically:
+omitted. `Bytes` is base64 (`string`) on the JSON wire, and `TimeDelta` is its
+seconds (`number`); frames/ndarrays are `unknown` — decode them in your bridge.
+Also available programmatically:
+`from zeared.doc import generate_ts; generate_ts('rio_protocol')` returns the
+`.ts` source as a string.
+
 A downstream package can give a custom field its own TypeScript spelling: subclass a
 seared field and set `TS_TYPE = 'SecretRef'` (the type the member gets) and, optionally,
 `TS_PRELUDE = 'export type SecretRef = string & {...};'` (an alias emitted once, before the
 interfaces). Fields without `TS_TYPE` map by class name as before.
-
-`from zeared.doc import generate_ts; generate_ts('rio_protocol')` returns the
-`.ts` source as a string.
 
 ## Errors
 
@@ -1095,7 +1097,8 @@ zeared is ~89% faster and ~33% smaller on the wire.
 one that splits into two independent questions. pydantic's compiled core
 beats pure-Python seared on serialization (~3.6x); Zenoh beats a
 broker-mediated MQTT hop on transport (~2.5x). Netted out at default
-configuration against MQTT QoS 0, **pydantic + MQTT comes out ~1.2x ahead** —
+configuration against MQTT QoS 0 (medians of three runs, here and below),
+**pydantic + MQTT comes out ~1.2x ahead** —
 the codec gap is the larger of the two, and pure Python doesn't make it back.
 
 Two things change that. Against **QoS 1** — at-least-once, what most

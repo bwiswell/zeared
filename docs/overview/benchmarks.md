@@ -4,9 +4,10 @@ End-to-end publish → subscriber-received throughput on a single in-process
 Zenoh peer session, compared against `marshmallow` + raw Zenoh to measure
 zeared's overhead relative to the prior pattern.
 
-All numbers below come from the committed `bench/results.json` artifact —
+All tables below come from the committed `bench/results.json` artifact —
 zeared 0.3.0, seared 0.3.0, `rusted` 0.2.0, `eclipse-zenoh` 1.9.0, CPython
-3.14.3. Regenerate with:
+3.14.3 — except *Run-to-run variance* and *The answer*, which are medians of
+three runs the artifact doesn't store. Regenerate with:
 
 ```bash
 uv run python -m bench
@@ -84,16 +85,16 @@ for the same payload.
 | `asend` + `alisten` (JSON) | 2,389 | 2,365 | 1.90 | 796 |
 | sync `send` + `async def` `on_message` (msgpack) | 4,878 | 4,828 | 2.60 | 533 |
 
-Relative to the fastest row (sync msgpack — the default):
+Relative to the fastest row (sync msgpack — the default), end to end:
 
-- **`marshmallow` is ~52% slower and ~50% larger on the wire.**
-- **Sync JSON is ~11% slower** — same wire, slower codec.
-- **`await asend()` pays a per-call `asyncio.to_thread` hop and is ~62%
+- **`marshmallow` is ~43% slower and ~50% larger on the wire.**
+- **Sync JSON is ~2% slower** — same wire, slower codec.
+- **`await asend()` pays a per-call `asyncio.to_thread` hop and is ~60%
   slower** than the sync loop. Reach for it when keeping the event loop
   responsive matters more than raw throughput.
-- **`alisten` with sync `send` is ~23% slower** — a cheap way to go async on
+- **`alisten` with sync `send` is ~9% slower** — a cheap way to go async on
   the consumer side without a publish-side tax.
-- **`async def` callbacks via `on_message` are ~34% slower** — the publish
+- **`async def` callbacks via `on_message` are ~26% slower** — the publish
   path stays sync-fast; each handler dispatches one coroutine per message.
 
 The pub/s vs e2e/s gap stays under 5% everywhere: the in-process subscriber
@@ -114,16 +115,16 @@ for free. Nothing in zeared declares or imports it.
 | `zeared` + `rusted` (JSON, cached) | 12,226 | 12,151 | 9.73 | 796 |
 | `zeared` + `rusted` (msgpack, cached) | 15,232 | 15,208 | 8.12 | 533 |
 
-Against the same strategies on the pure-Python path, that is **1.70× on the
-JSON path and 1.86× on msgpack**, end to end — serialization is a large
+Against the same strategies on the pure-Python path, that is **1.76× on the
+JSON path and 2.00× on msgpack**, end to end — serialization is a large
 enough share of zeared's per-message cost that removing most of it moves the
 whole wire path. Wire sizes are unchanged, as expected: the accelerator
 changes how bytes are produced, not what they are.
 
 `rusted` is not a zeared dependency and is not on PyPI yet. Until wheels
 ship, the accelerated suite runs only where it is already installed, and
-skips with a note everywhere else. These numbers were taken against
-`rusted 0.1.2`; the artifact records the exact versions behind every row.
+skips with a note everywhere else. The artifact records the exact versions
+behind every row.
 
 ## Pydantic + MQTT, or zeared?
 
@@ -236,9 +237,10 @@ Two things change it:
 - The raw rows (`pydantic + …`, `seared + … raw`) publish bytes directly with
   no `Message` class — no topic templating, publisher cache, or schema
   attachment. They exist to isolate an axis, not as a usage recommendation.
-- Throughput is one axis of a stack choice. Retained messages, liveliness,
-  queryables, and the peer topology itself are zeared features with no MQTT
-  equivalent, and they don't appear in any of these numbers.
+- Throughput is one axis of a stack choice. MQTT has its own retained
+  messages and Last Will, and MQTT 5 has request/response; only the peer
+  topology has no MQTT equivalent. How each side's versions of those compare
+  doesn't appear in any of these numbers.
 
 ## Why zeared beats `marshmallow` + Zenoh
 

@@ -57,6 +57,7 @@ class Spectrum(z.Message):
     blob: bytes = z.Bytes(required=True)  # base64 → string
     price: object = z.Decimal(as_number=True, required=True)  # number
     label: object = z.Decimal(required=True)  # string (default form)
+    window: object = z.TimeDelta(required=True)  # number (seconds)
 
     # collections
     tags: list = z.Str(many=True, default_factory=list)  # string[]

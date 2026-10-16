@@ -19,6 +19,7 @@ class TestTsType:
         assert ts_type(_field(Spectrum, 'name')) == 'string'
         assert ts_type(_field(Spectrum, 'flag')) == 'boolean'
         assert ts_type(_field(Spectrum, 'blob')) == 'string'  # bytes → base64
+        assert ts_type(_field(Spectrum, 'window')) == 'number'  # timedelta → seconds (0.3.9)
 
     def test_decimal_as_number_vs_string(self):
         assert ts_type(_field(Spectrum, 'price')) == 'number'  # as_number=True

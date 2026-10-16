@@ -50,7 +50,7 @@ _SCALAR: dict[str, str] = {
     'Date': 'string',
     'DateTime': 'string',
     'Time': 'string',
-    'TimeDelta': 'string',
+    'TimeDelta': 'number',  # seconds: seared serializes total_seconds()
     'Bytes': 'string',  # base64 on the JSON wire
     'Dict': 'Record<string, unknown>',
     'NDArray': 'unknown',

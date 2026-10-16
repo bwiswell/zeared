@@ -92,7 +92,7 @@ each drop as an "Exception in callback" (`QueueFull`); there is no drop
 counter. A consumer that can't afford silent loss should stay unbounded and
 keep up, or bridge `on_message` into its own queue and count what it drops.
 
-`meta=True` (0.3.0) yields `(msg, meta)` tuples instead of bare
+`meta=True` (0.2.9) yields `(msg, meta)` tuples instead of bare
 messages — `meta` is the same `ZenohMeta` a 2-arg `on_message` callback
 receives (captures, schema, `origin`, ...). This is the async-iterator
 path's access to the replay-vs-live signal:

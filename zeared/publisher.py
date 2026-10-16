@@ -136,7 +136,7 @@ class _PublisherCache:
         except Exception as e:
             self.drop()
             msg = f'{self._cls.__name__}: session.put failed on {topic!r}: {e}'
-            raise ZearedError(msg) from e
+            raise self._send_failure(msg, e) from e
 
     def _pub_put(
         self,
@@ -156,14 +156,24 @@ class _PublisherCache:
             self.drop()
             self._note_session_failure(e)
             msg = f'{self._cls.__name__}: cached publisher put failed on {topic!r} (session likely closed): {e}'
-            # ``_note_failure`` above CASes a dying ManagedSession into
-            # RECONNECTING synchronously, so this read is current. Raising
-            # the specific error lets the documented retry/queue handler
-            # catch it; ``SessionDeadError`` subclasses ``ZearedError``, so
-            # existing generic handlers are unaffected.
-            if getattr(self._session, 'state', None) in ('RECONNECTING', 'DEAD'):
-                raise SessionDeadError(msg) from e
-            raise ZearedError(msg) from e
+            raise self._send_failure(msg, e) from e
+
+    def _send_failure(self, msg: str, exc: Exception) -> ZearedError:
+        """The error a failed send raises: ``SessionDeadError`` when the managed session is down.
+
+        Shared by both send paths so they can't drift. On the uncached path,
+        ``ManagedSession.put``'s guard raises ``SessionDeadError`` itself while
+        the session is ``RECONNECTING`` / ``DEAD``. On the cached path,
+        ``_note_session_failure`` has just CASed a dying session into
+        ``RECONNECTING`` synchronously, so the state read is current. Either
+        way the specific error lets the documented retry/queue handler catch
+        it; ``SessionDeadError`` subclasses ``ZearedError``, so generic
+        handlers are unaffected. A raw ``zenoh.Session`` has no state to
+        consult and gets a plain ``ZearedError``.
+        """
+        if isinstance(exc, SessionDeadError) or getattr(self._session, 'state', None) in ('RECONNECTING', 'DEAD'):
+            return SessionDeadError(msg)
+        return ZearedError(msg)
 
     def _note_session_failure(self, exc: Exception) -> None:
         """Report a send failure to the session so lazy reconnect detection fires.

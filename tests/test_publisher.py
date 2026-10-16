@@ -549,3 +549,77 @@ class TestCachedPublisherFailureDetection:
         with pytest.raises(ZearedError) as exc_info:
             M(v=2).send()
         assert not isinstance(exc_info.value, SessionDeadError)
+
+
+class TestUncachedSendDuringReconnect:
+    """Pin (0.3.9): an uncached send raises ``SessionDeadError`` while the
+    managed session is reconnecting or dead, as the cached path has since
+    0.3.1.
+
+    ``_session_put`` used to wrap every exception in a plain ``ZearedError``,
+    including the ``SessionDeadError`` that ``ManagedSession.put``'s guard
+    raises, so the retry/queue handler the README tells callers to write
+    never caught it. That path serves ``PUBLISHER = False`` classes and any
+    class past its publisher cap.
+    """
+
+    def _managed(self, raw):
+        return ManagedSession(
+            raw,
+            lambda: raw,
+            endpoint_label='uncached-dead',
+            probe_interval=0,
+            initial_backoff=0.001,
+            max_backoff=0.005,
+            max_attempts=None,
+        )
+
+    @pytest.mark.parametrize('state', ['RECONNECTING', 'DEAD'])
+    def test_publisher_false_raises_session_dead_error(self, state):
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'uncached/dead'
+            PUBLISHER = False
+            v: int = z.Int(required=True)
+
+        raw = _peer_session()
+        m = self._managed(raw)
+        try:
+            M(v=1).send(session=m)
+            m._set_state(state)
+            with pytest.raises(SessionDeadError):
+                M(v=2).send(session=m)
+        finally:
+            m._teardown(call_close=True)
+
+    def test_over_cap_fallback_raises_session_dead_error(self):
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'uncached/cap/{n}'
+            PUBLISHER = 1
+            n: int = z.Int(required=True)
+
+        raw = _peer_session()
+        m = self._managed(raw)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')  # the one-time over-cap warning
+                M(n=1).send(session=m)  # takes the one cached publisher
+                m._set_state('RECONNECTING')
+                with pytest.raises(SessionDeadError):
+                    M(n=2).send(session=m)  # past the cap: session.put
+        finally:
+            m._teardown(call_close=True)
+
+    def test_raw_session_failure_still_raises_plain_zeared_error(self, session):
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'uncached/raw'
+            PUBLISHER = False
+            v: int = z.Int(required=True)
+
+        M(v=1).send(session=session)
+        session.close()
+        with pytest.raises(ZearedError) as exc_info:
+            M(v=2).send(session=session)
+        assert not isinstance(exc_info.value, SessionDeadError)

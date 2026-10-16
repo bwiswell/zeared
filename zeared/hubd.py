@@ -22,12 +22,13 @@ import argparse
 import contextlib
 import logging
 import signal
+import sys
 import threading
 from typing import TYPE_CHECKING
 
 import zenoh
 
-from ._factories import _SHARED_MEMORY
+from ._factories import _DEFAULT_HUB_LISTEN, _apply_defaults, _config_endpoints, _resolve_hub_listen
 from ._factories import hub as _open_hub
 
 if TYPE_CHECKING:
@@ -35,8 +36,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 _log = logging.getLogger('zeared.hub')
-
-_DEFAULT_LISTEN = 'tcp/0.0.0.0:7447'
 
 
 def _install_signal_stop(stop: threading.Event) -> None:
@@ -70,18 +69,17 @@ def run(  # noqa: PLR0913
     fires with the live session once it's up — handy for tests that need the
     endpoints/zid before connecting.
     """
+    # What the hub will bind, worked out before opening (opening writes any
+    # explicit endpoints into ``zenoh_config``), so the log names the real ones.
+    _, bound = _resolve_hub_listen(listen, None, zenoh_config)
+    linked = connect or _config_endpoints(zenoh_config, 'connect/endpoints')
     sess = _open_hub(
         listen=listen,
         connect=connect,
         timestamping=timestamping,
         zenoh_config=zenoh_config,
     )
-    _log.info(
-        'hub up: zid=%s listen=%s connect=%s',
-        sess.zid(),
-        listen or [_DEFAULT_LISTEN],
-        connect or [],
-    )
+    _log.info('hub up: zid=%s listen=%s connect=%s', sess.zid(), bound, linked)
     if on_ready is not None:
         on_ready(sess)
 
@@ -110,7 +108,10 @@ def main(argv: list[str] | None = None) -> int:
         '--listen',
         action='append',
         metavar='ENDPOINT',
-        help=f'endpoint to bind (repeatable; default {_DEFAULT_LISTEN})',
+        help=(
+            "endpoint to bind (repeatable; default: the --config file's listen endpoints, "
+            f'else {_DEFAULT_HUB_LISTEN[0]})'
+        ),
     )
     parser.add_argument(
         '-c',
@@ -123,8 +124,9 @@ def main(argv: list[str] | None = None) -> int:
         '--config',
         metavar='FILE',
         help=(
-            'JSON5 Zenoh config file (for TLS / access-control); listen/connect flags still layer on '
-            'top, and shared memory stays off whatever it says'
+            'JSON5 Zenoh config file (for TLS / access-control). --listen / --connect override its '
+            'endpoints when given; router mode, timestamping (unless --no-timestamping) and shared '
+            'memory off are applied over it'
         ),
     )
     parser.add_argument(
@@ -139,20 +141,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # stdout, which systemd hands to journald: the house convention for daemons.
+    # ``basicConfig``'s own default would be stderr.
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+        stream=sys.stdout,
     )
 
     zenoh_config = None
     if args.config:
         zenoh_config = zenoh.Config.from_file(args.config)
-        # The file brings TLS and access control; it cannot bring shared memory back. A hub is
-        # where Zenoh's shared-memory leak bites first (see ``_SHARED_MEMORY``).
-        zenoh_config.insert_json5(_SHARED_MEMORY, 'false')
+        # The file brings TLS and access control; zeared's settings land over it, as over a
+        # ``SessionConfig.zenoh_config_file``: router mode (this daemon *is* a router; a file
+        # without ``mode`` would otherwise open a peer), timestamping unless --no-timestamping,
+        # and shared memory off (a hub is where Zenoh's shared-memory leak bites first).
+        _apply_defaults(zenoh_config, 'router', timestamping=not args.no_timestamping)
 
     run(
-        listen=args.listen or [_DEFAULT_LISTEN],
+        listen=args.listen,
         connect=args.connect,
         timestamping=not args.no_timestamping,
         zenoh_config=zenoh_config,
