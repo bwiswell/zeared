@@ -940,6 +940,16 @@ Detection: an active probe (`is_closed()` / `zid()` poll) catches dead
 sessions on subscriber-only daemons; send-failure detection catches the
 gap between probe ticks for publisher-heavy paths.
 
+**A lost router link is not a dead session.** If a client's hub restarts,
+the client's own session stays open and Zenoh re-dials the router by
+itself: auto-reconnect sees nothing, `on_reconnect` doesn't fire, and
+subscribers keep working once the link is back. What doesn't happen is
+replay: a value retained, or a will registered, by a publisher that
+restarted while the link was down never reaches the client, and that is
+every restart when the hub is the publisher. Call `Cls.fetch_retained()`
+after a hub restart (a boot id that changes is a reliable trigger) to
+recover retained state. Detecting the link's re-attach is planned for 0.4.0.
+
 Restoration: cached publishers are invalidated (the next `send()`
 re-declares against the new raw, so nothing is dropped on the far side of
 a reconnect), subscribers and queryables are re-declared against the new
@@ -1217,6 +1227,7 @@ prod_sub  = Telemetry.on_message(prod_cb)                 # class default (dedup
 - **Presence is subscriber-synthesised.** Non-subscribers never observe the offline event. Graceful close fires the will the same as a crash — if you need distinct wire values, publish explicitly before close.
 - **`origin_zid` is attribution, not authentication.** The zid comes from the sample's HLC, and `put(timestamp=...)` lets a publisher claim any value. Enforce origin at the router (Zenoh access control on a TLS certificate), not from this field.
 - **Dedupe tolerates a bounded clock skew.** A sample whose HLC is more than `DEDUPE_MAX_SKEW` seconds (default 300) ahead of local time is delivered but does not advance the dedupe watermark — otherwise one far-future timestamp blinds the subscriber to that key until restart. Set `None` to disable.
+- **`on_reconnect` doesn't cover a hub outage.** Auto-reconnect detects a dead local session, not a lost router link: across a hub restart nothing fires, and state retained or wills registered by a publisher that restarted meanwhile aren't replayed. Re-fetch with `Cls.fetch_retained()`; see *Auto-reconnect*.
 - **`send()` raises during the reconnect window.** With `auto_reconnect=True`, ops on a session in `RECONNECTING` or `DEAD` state raise `SessionDeadError`. No buffering / blocking — callers that want either build it on top.
 - **Raw `threading.Thread` doesn't propagate batch context.** `with z.batch():` + raw thread spawn means the worker bypasses the batch. Use `asyncio.to_thread()` or `contextvars.copy_context().run()` for thread-spawned workers. See `docs/batch.md`.
 
