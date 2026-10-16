@@ -52,6 +52,9 @@ def render_wire(md: MessageDoc, link_for: LinkFor = _default_link) -> str:
     ]
     if md.request is not None:
         bits.append(f'Request [`{md.request.__name__}`]({link_for(md.request)})')
+    # Only when declared, so an undeclared page renders as it did before 0.3.12.
+    if md.effect is not None:
+        bits.append(f'Effect `{md.effect}`')
     return ' · '.join(bits)
 
 

@@ -149,6 +149,28 @@ Without `REQUEST`, `ctx.request` is the raw payload bytes (or `None`). Use
 `params=` for lightweight scalar filters (`?k=v`) that don't warrant a
 typed body.
 
+### Declaring effect
+
+Set `EFFECT` to say what serving a query does (0.3.12):
+- `z.Effect.READ`: it changes nothing;
+- `WRITE`: it changes state, and repeating it is harmless;
+- `ACTION`: anything else.
+
+Declare it on the class you call `on_query` / `query` on, the one with
+the `TOPIC`; it doesn't go on the `REQUEST` class. If different requests
+have different effects, declare the strongest.
+
+zeared never reads `EFFECT` at runtime. It's surfaced in the generated docs
+and read by `z.effect_of` for policy layers. See [`effect.md`](../effect.md).
+
+```python
+@z.zeared
+class TagState(z.Message):
+    TOPIC  = 'rio/state/tag/{epc}'
+    EFFECT = z.Effect.READ
+    ...
+```
+
 ## Lifecycle & reconnect
 
 Queryables are registered per `id(session)` in a module-level registry.

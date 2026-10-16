@@ -76,6 +76,7 @@ from .async_ import (
 )
 from .batch import batch
 from .config import SessionConfig
+from .effect import Effect, effect_of
 from .errors import (
     CallbackError,
     DecodeError,
@@ -98,7 +99,7 @@ from .queryable import Queryable, QueryContext, clear_queryable_cache
 from .retention import clear_retention_cache
 from .subscriber import Subscriber
 
-__version__ = '0.3.11'
+__version__ = '0.3.12'
 
 # Module-level defaults.
 # ``session`` is a dual-role handle (see ``_SessionHandle`` docstring) — the
@@ -125,6 +126,7 @@ __all__ = [
     'Decimal',
     'DecodeError',
     'Dict',
+    'Effect',
     'Enum',
     'Float',
     'Int',
@@ -183,6 +185,7 @@ __all__ = [
     'client',
     'codec',
     'debug',
+    'effect_of',
     'hub',
     'open',
     'peer',

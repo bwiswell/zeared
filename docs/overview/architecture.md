@@ -114,6 +114,7 @@ zeared/
 ├── _template.py    # Template + Templates (canonical + extras)
 ├── async_.py       # asend / alisten / abatch / apeer / aclient
 ├── batch.py        # z.batch() context manager, ContextVar-backed buffer stack
+├── effect.py       # Effect (READ < WRITE < ACTION) + effect_of: the doc-only EFFECT vocabulary
 ├── errors.py       # ZearedError + NoSessionError / TopicError / SubscriptionError
 ├── message.py      # Message base class (sync + async methods)
 ├── meta.py         # ZenohMeta seared dataclass + from_sample helper

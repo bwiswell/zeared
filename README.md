@@ -21,6 +21,7 @@ once, get publish, subscribe, and topic routing for free.
 - **Retained messages (MQTT-style).** Opt in with `RETAINED = True`: publishers cache the last payload per concrete topic and answer peer `session.get()` queries; late subscribers automatically fetch cached values at subscribe time. Tombstones via `msg.unretain()` / `Cls.unretain(**fields)`; consume removals with `on_message(cb, on_remove=...)` or reconcile against `Cls.fetch_retained()`.
 - **Presence / Last-Will-Testament.** Opt in with `LIVELINESS = True` + `msg.register_will()`: the session declares a Zenoh liveliness token, subscribers synthesise the will as a regular sample when the producer's session disappears (graceful close OR crash). The graceful-vs-crashed-shutdown distinction stops being your problem.
 - **Queries / queryables (request/response).** `Cls.on_query(handler)` serves computed replies to peer `session.get()`; `Cls.query(...)` / `Cls.query_one(...)` return typed instances. The compute-serving generalization of `RETAINED`. Typed request payloads via `REQUEST`; async via `z.aon_query` / `z.aquery`.
+- **Declared effect (doc-only).** `EFFECT` (`z.Effect.READ`, `WRITE` or `ACTION`) says what acting on a contract does. It's shown in the generated docs and TypeScript, and read by `z.effect_of(cls)` for policy layers (gateways, MCP or MQTT bridges). zeared never reads it at runtime.
 - **Subscriber watchdog.** Optional per-subscription freshness detector — `Cls.on_message(cb, expected_interval=N, on_quiet=, on_active=)` fires callbacks when a subscription goes silent and again when it resumes. Optimistic by default (waits for first message); `startup_grace=N` opts into "tell me if I haven't heard within N seconds of subscribing."
 - **Unified shutdown.** `z.release(session=sess)` walks every zeared-owned resource for the session in the right order — subscribers, queryables, publisher cache, retention queryable, presence observer, presence state, then `session.close()`. The graceful-shutdown path that used to take six separate calls is one.
 - **Zenoh shared memory off.** Every config zeared builds sets `transport/shared_memory/enabled=false` (the hub daemon does too, over its `--config` file). Zenoh's default would carry large same-host messages through a shared-memory pool whose locked pages leak per session until messages are silently dropped. Opt back in through `zenoh_overrides`.
@@ -1044,7 +1045,9 @@ Mapping: scalars → `number`/`string`/`boolean`; `Enum` → literal unions
 → no `?`; a default → `?`; `X | None` → `?: T | null`. `dump=False` fields are
 omitted. `Bytes` is base64 (`string`) on the JSON wire, and `TimeDelta` is its
 seconds (`number`); frames/ndarrays are `unknown` — decode them in your bridge.
-Also available programmatically:
+Each message interface carries its wire contract as JSDoc: `@topic`,
+`@extraTopic`, `@schemaVersion`, `@encoding`, and `@effect` when the class
+declares `EFFECT`. Also available programmatically:
 `from zeared.doc import generate_ts; generate_ts('rio_protocol')` returns the
 `.ts` source as a string.
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import typing
+
 import pytest
 
 import zeared as z
@@ -203,6 +205,57 @@ class TestSendWithoutSession:
         z.session._set_default(None)
         with pytest.raises(z.NoSessionError):
             Telemetry(id=1, x=2.0).send()
+
+
+class TestEffectIsDocOnly:
+    """``EFFECT`` is read by ``zeared.doc`` and ``z.effect_of``, never at runtime (0.3.12)."""
+
+    def test_defaults_to_undeclared(self):
+        assert z.Message.EFFECT is None
+
+    def test_annotation_resolves_on_subclasses(self):
+        """``Effect`` is imported at runtime, so ``get_type_hints`` keeps working on every subclass."""
+
+        @z.zeared
+        class Hinted(z.Message):
+            TOPIC = 'effect/hinted'
+            x: int = z.Int(default=0)
+
+        assert 'EFFECT' in typing.get_type_hints(Hinted)
+
+    def test_invalid_effect_still_sends_and_receives(self, session):
+        @z.zeared
+        class Typo(z.Message):
+            TOPIC = 'effect/typo/{id}'
+            EFFECT = 'mutating'  # invalid: only effect_of / zeared.doc object
+            id: int = z.Int(required=True)
+
+        received: list[int] = []
+        z.session = session
+        sub = Typo.on_message(lambda m: received.append(m.id))
+        wait()
+        Typo(id=7).send()
+        wait()
+        sub.close()
+
+        assert received == [7]
+        with pytest.raises(ValueError, match='mutating'):
+            z.effect_of(Typo)
+
+    def test_invalid_effect_still_serves_queries(self, session):
+        @z.zeared
+        class Lookup(z.Message):
+            TOPIC = 'effect/lookup/{id}'
+            EFFECT = 3  # invalid type: still never read at runtime
+            id: int = z.Int(required=True)
+
+        z.session = session
+        with Lookup.on_query(lambda ctx: Lookup(id=int(ctx.captures['id']))):
+            wait()
+            reply = Lookup.query_one(id=4, timeout=2.0)
+
+        assert reply is not None
+        assert reply.id == 4
 
 
 class TestSearedReExports:

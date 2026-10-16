@@ -2,7 +2,7 @@
 
 Wire-aware introspection: a :class:`MessageDoc` = seared's ``SchemaDoc`` plus the
 ``Message`` ClassVar contract (topic, schema version, encoding, retention, request
-payload).
+payload, declared effect).
 
 Reuses ``seared.doc.introspect`` for the field/enum/variant half; adds only
 the zeared-specific wire metadata.
@@ -17,6 +17,7 @@ from typing import Any, TypeGuard
 from seared.doc import SchemaDoc
 from seared.doc import introspect as _seared_introspect
 
+from ..effect import Effect, effect_of
 from ..message import Message
 
 _SLOT = re.compile(r'\{(\w+)\}')
@@ -42,6 +43,7 @@ class MessageDoc:
     dedupe: bool
     retention_ttl: float | None
     request: type | None
+    effect: Effect | None = None  # 0.3.12; ``None`` when undeclared, never inferred
 
 
 def is_message_class(obj: Any) -> TypeGuard[type[Message]]:
@@ -76,4 +78,6 @@ def introspect_message(cls: type[Message]) -> MessageDoc:
         dedupe=bool(getattr(cls, 'DEDUPE', True)),
         retention_ttl=getattr(cls, 'RETENTION_TTL', None),
         request=getattr(cls, 'REQUEST', None),
+        # Validates: a bad ``EFFECT`` fails doc generation and ``--check``.
+        effect=effect_of(cls),
     )
