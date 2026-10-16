@@ -138,7 +138,14 @@ def _member(attr: str, wire_key: str, f: Any) -> list[str]:  # noqa: ARG001  (at
     """Emit the interface member line(s) for one field (with JSDoc)."""
     required = bool(f.required)
     has_factory = getattr(f, 'default_factory', None) is not None
-    default_val = getattr(f, 'missing', None)
+    # ``f.default`` holds a ``default=`` value directly. ``missing`` is
+    # seared's deprecated alias (0.3.x folds ``default=`` into it; 0.4.0
+    # removes the slot), read only as a fallback for a field still declared
+    # with ``missing=``. Reading ``missing`` alone would make every
+    # defaulted optional field ``| null`` once the slot is gone.
+    default_val = getattr(f, 'default', None)
+    if default_val is None:
+        default_val = getattr(f, 'missing', None)
     nullable = (not required) and (not has_factory) and (default_val is None)
 
     key = _key_token(wire_key)

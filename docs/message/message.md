@@ -40,6 +40,38 @@ Telemetry(id=7, x=1.0, y=2.0).send()                    # default session
 Telemetry(id=8, x=0.0, y=0.0).send(session=external)    # one-off override
 ```
 
+## Concrete topics — `concrete_topic` (0.3.8)
+
+One canonical render builds every concrete key: `send`, `register_will`,
+`QueryContext.reply`, `unretain` (both forms), the query getters'
+selectors, and `concrete_topic` itself (`_message_render.py`). A slot's key
+segment is `str(field.serialize(value))` for a value of the field's own
+(exact) type, with no `format=` hint, so it's the field's JSON-carrier
+string form whatever the class `ENCODING`, and exactly what a subscriber's
+capture decodes back. Any other value renders as `str(value)`, so strings
+pass through verbatim (selector wildcards, pre-rendered values). A slot
+field with a `data_key` renders from its attribute, decodes under its wire
+key, and is stripped from the payload by that wire key.
+
+`concrete_topic` is a descriptor (`_message_concrete_topic.py`), dispatching
+like `unretain`:
+
+- `msg.concrete_topic(*, topic=None)` — the key `msg.send(topic=topic)`
+  publishes on. A `None` slot raises `TopicError`, as `send` does.
+- `Cls.concrete_topic(*, topic=None, **slots)` — the key those slot values
+  name, without an instance. Every slot must be supplied (a missing or
+  `None` slot raises `TopicError`; it never widens to a wildcard). Non-slot
+  keyword arguments are ignored, so a full field dict can be passed.
+
+```python
+Telemetry(id=7, x=1.0, y=2.0).concrete_topic()   # 'robot/7/telemetry'
+Telemetry.concrete_topic(id=7)                   # 'robot/7/telemetry'
+```
+
+`Template.render` / `Template.render_selector` stay plain `str.format`
+renderers underneath; prefer `concrete_topic` over calling them through
+`_templates()`.
+
 ## Subscribing — `on_message(cls, cb, *, session=None, on_error=None)`
 
 Returns a [`Subscriber`](subscriber.md) handle. The callback is inspected
@@ -214,4 +246,5 @@ Telemetry.send_batch(
 ## Internal helpers
 
 - `_template()` — lazy template parser, cached on the class.
-- `_decode(raw, key_expr, encoding)` — reconstruct an instance from bytes + key expression; merges template captures into the payload before calling `cls.load`.
+- `_field_specs()` — attribute name → seared `FieldSpec` map, cached on the class (0.3.8); the render and capture coercion look slot fields up through it.
+- `_decode(raw, key_expr, encoding)` — reconstruct an instance from bytes + key expression; coerces template captures (the same coercion as `coerce_captures`) and merges them into the payload under each field's wire key before calling `cls.load`. A capture overrides a payload value for the same field.

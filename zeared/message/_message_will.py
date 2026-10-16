@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from .. import _codec as codec
 from ..errors import TopicError
+from ._message_render import _render_instance, _slot_wire_keys
 
 if TYPE_CHECKING:
     import zenoh
@@ -51,9 +52,9 @@ class _MessageWillMixin:
         # Thread ``format=`` into seared's dump so binary fields use
         # native bytes under msgpack — same logic as ``send``.
         data = type(self).dump(self, format=encoding)
-        template = type(self)._templates().resolve_publish_topic(topic)  # noqa: SLF001
-        concrete_topic = template.render(data)
-        payload_dict = {k: v for k, v in data.items() if k not in template.field_names}
+        template, concrete_topic = _render_instance(self, topic)
+        slot_keys = _slot_wire_keys(type(self), template)
+        payload_dict = {k: v for k, v in data.items() if k not in slot_keys}
         raw = codec.pack(payload_dict, encoding)
 
         envelope = _WillEnvelope(

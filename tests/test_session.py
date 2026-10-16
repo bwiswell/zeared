@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import threading
 
 import pytest
+from conftest import wait
 
 import zeared as z
 from zeared._session import _SessionHandle
@@ -101,6 +104,118 @@ class TestScopeStack:
         except RuntimeError:
             pass
         assert z.session.current == 'base'
+
+
+class TestScopeIsContextLocal:
+    """Pin (0.3.8): the scope stack is context-local, not thread-local.
+
+    It follows ``asyncio.to_thread`` into the worker, so the async wrappers
+    honour it; each asyncio task gets its own copy; plain threads still
+    start empty (``TestScopeStack.test_scope_stack_is_thread_local``).
+    """
+
+    def test_to_thread_worker_sees_scope(self):
+        z.session = 'base'
+
+        async def main():
+            with z.session('scoped'):
+                return await asyncio.to_thread(lambda: z.session.current)
+
+        assert asyncio.run(main()) == 'scoped'
+
+    def test_interleaved_tasks_keep_their_own_scope(self):
+        z.session = 'base'
+
+        async def worker(name: str) -> list:
+            seen = []
+            with z.session(name):
+                for _ in range(3):
+                    await asyncio.sleep(0)
+                    seen.append(z.session.current)
+            seen.append(z.session.current)
+            return seen
+
+        async def main():
+            return await asyncio.gather(worker('a'), worker('b'))
+
+        assert asyncio.run(main()) == [['a', 'a', 'a', 'base'], ['b', 'b', 'b', 'base']]
+
+    def test_task_created_in_scope_keeps_it(self):
+        z.session = 'base'
+
+        async def main():
+            with z.session('scoped'):
+                task = asyncio.create_task(asyncio.sleep(0.01, result=None))
+                probe = asyncio.create_task(_current_after(0.01))
+            await task
+            return await probe, z.session.current
+
+        async def _current_after(delay: float):
+            await asyncio.sleep(delay)
+            return z.session.current
+
+        assert asyncio.run(main()) == ('scoped', 'base')
+
+    def test_reentering_one_scope_object_unwinds(self):
+        z.session = 'base'
+        scope = z.session('scoped')
+        with scope:
+            with scope:
+                assert z.session.current == 'scoped'
+            assert z.session.current == 'scoped'
+        assert z.session.current == 'base'
+
+    def test_exit_in_another_context_raises(self):
+        scope = z.session('scoped')
+        scope.__enter__()
+        try:
+            with pytest.raises(ValueError, match='different Context'):
+                contextvars.copy_context().run(scope.__exit__, None, None, None)
+        finally:
+            scope.__exit__(None, None, None)
+        assert z.session.current is None
+
+    def test_asend_inside_scope_publishes_on_scoped_session(self, session_pair):
+        a, b = session_pair
+
+        @z.zeared
+        class Ping(z.Message):
+            TOPIC = 'scope/ping/{n}'
+            n: int = z.Int(required=True)
+
+        got_a: list[int] = []
+        got_b: list[int] = []
+        Ping.on_message(lambda m: got_a.append(m.n), session=a)
+        Ping.on_message(lambda m: got_b.append(m.n), session=b)
+        wait()
+        z.session = a
+
+        async def main():
+            with z.session(b):
+                await Ping(n=1).asend()
+
+        asyncio.run(main())
+        wait(0.2)
+        assert (got_a, got_b) == ([], [1])
+
+    def test_afetch_retained_inside_scope_reads_scoped_session(self, session_pair):
+        a, b = session_pair
+
+        @z.zeared
+        class Held(z.Message):
+            TOPIC = 'scope/held/{n}'
+            RETAINED = True
+            n: int = z.Int(required=True)
+
+        Held(n=1).send(session=b)
+        wait(0.2)
+        z.session = a
+
+        async def main():
+            with z.session(b):
+                return await z.afetch_retained(Held)
+
+        assert [m.n for m in asyncio.run(main())] == [1]
 
 
 class TestCurrent:

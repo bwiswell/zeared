@@ -165,3 +165,26 @@ class TestCustomFieldTypes:
         assert out.index('export type Branded') < out.index('export interface Uses')
         assert '  ref?: Branded | null;' in out
         assert '  other: Branded;' in out
+
+
+class TestDefaultRead:
+    """Pin (0.3.8): nullability reads ``f.default``, with ``missing`` only as
+    a fallback, so a defaulted optional field stays non-nullable once seared
+    0.4.0 removes the ``missing`` slot."""
+
+    def test_default_without_missing_slot_is_not_nullable(self):
+        from types import SimpleNamespace
+
+        from zeared.doc.typescript import _member
+
+        # Shaped like a seared 0.4.0 field: a default, and no ``missing``.
+        f = SimpleNamespace(required=False, default=5, default_factory=None, doc=None)
+        assert _member('n', 'n', f) == ['  n?: unknown;']
+
+    def test_no_default_is_nullable(self):
+        from types import SimpleNamespace
+
+        from zeared.doc.typescript import _member
+
+        f = SimpleNamespace(required=False, default=None, default_factory=None, doc=None)
+        assert _member('n', 'n', f) == ['  n?: unknown | null;']

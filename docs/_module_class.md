@@ -21,7 +21,7 @@ object identity that other parts of the package hold references to.
 
 Without the swap, `zeared.session = my_session` would replace the
 `_SessionHandle` with the user's raw session, breaking the scope-stack
-+ thread-local mechanism entirely.
++ context-local mechanism entirely.
 
 ## Why a separate file
 

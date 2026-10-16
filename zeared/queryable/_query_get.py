@@ -37,10 +37,15 @@ def _build_selector(msg_cls: type[Message], key_fields: dict, params: dict | Non
     """Render a selector from the canonical template + key fields + params.
 
     Missing key slots widen to wildcards (see ``Template.render_selector``).
+    Supplied slots go through the canonical render first, so an ``Enum`` or
+    ``DateTime`` value selects the key ``send`` published on; strings
+    (including embedded ``*`` wildcards) pass through verbatim.
     ``params`` (a ``{str: str}`` mapping) is appended as ``?k=v&…``.
     """
+    from ..message._message_render import _stringify_slots
+
     template = msg_cls._templates().canonical  # noqa: SLF001
-    key = template.render_selector(key_fields)
+    key = template.render_selector(_stringify_slots(msg_cls, template, key_fields))
     if params:
         from urllib.parse import urlencode
 

@@ -84,9 +84,13 @@ Breaking out of the `async for` (or cancelling the consuming task) runs
 the generator's `finally`, which calls `Subscriber.close()` under the
 hood. No explicit cleanup required.
 
-`maxsize=0` (default) gives an unbounded `asyncio.Queue`. Pass a positive
-integer for backpressure — delivery into the queue blocks when full, at
-which point Zenoh's internal buffering takes over.
+`maxsize=0` (default) gives an unbounded `asyncio.Queue`. A positive
+integer bounds the queue but does **not** apply backpressure: delivery is a
+`put_nowait` scheduled from Zenoh's callback thread and never waits, so a
+message that arrives while the queue is full is **dropped**. asyncio logs
+each drop as an "Exception in callback" (`QueueFull`); there is no drop
+counter. A consumer that can't afford silent loss should stay unbounded and
+keep up, or bridge `on_message` into its own queue and count what it drops.
 
 `meta=True` (0.3.0) yields `(msg, meta)` tuples instead of bare
 messages — `meta` is the same `ZenohMeta` a 2-arg `on_message` callback

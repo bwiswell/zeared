@@ -94,3 +94,32 @@ class TestMultiSegmentFieldValidation:
                 tail: int = z.Int(required=True)
 
             M._templates()
+
+
+class TestFieldSpecs:
+    """Pin (0.3.8): ``_field_specs`` maps attribute name → ``FieldSpec``,
+    built once per class (a subclass gets its own)."""
+
+    def test_maps_attr_to_spec_with_wire_key(self):
+        @z.zeared
+        class Dev(z.Message):
+            TOPIC = 'fs/dev/{dev}'
+            dev: str = z.Str(required=True, data_key='device')
+
+        spec = Dev._field_specs()['dev']
+        assert (spec.attr, spec.wire) == ('dev', 'device')
+
+    def test_cached_per_class(self):
+        @z.zeared
+        class Base(z.Message):
+            TOPIC = 'fs/base/{n}'
+            n: int = z.Int(required=True)
+
+        @z.zeared
+        class Child(Base):
+            TOPIC = 'fs/child/{n}'
+            extra: str = z.Str(default='')
+
+        assert Base._field_specs() is Base._field_specs()
+        assert set(Base._field_specs()) == {'n'}
+        assert set(Child._field_specs()) == {'n', 'extra'}
