@@ -88,6 +88,14 @@ class TestBlocks:
             'the median of 3 runs, recorded 2026-10-16'
         )
 
+    def test_mqtt_enqueue_overstatement_is_publish_over_e2e(self):
+        rows = _row('stacks', 'pydantic + MQTT (QoS 0)', [500.0], pub=1000.0)
+        rows += _row('stacks', 'pydantic + MQTT (QoS 1)', [100.0], pub=600.0)
+        out = blocks(_report(rows))
+        assert out['mqtt-enqueue-q0'] == '~2x'
+        assert out['mqtt-enqueue-q1'] == '~6x'
+        assert blocks(_report(_row('wire', 'w', [1.0])))['mqtt-enqueue-q0'] == 'n/a'
+
     def test_one_run_says_so(self):
         out = blocks(_report(_row('wire', 'w', [1.0])))
         assert out['run'].endswith('; one run, recorded 2026-10-16')

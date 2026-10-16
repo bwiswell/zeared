@@ -33,7 +33,7 @@ offline signal in zeared must subscribe.
 
 ## New zid on auto-reconnect
 
-A `ManagedSession` (see [`_managed_session.md`](_managed_session.md))
+A `ManagedSession` (see [`_managed_session.md`](../_managed_session/_managed_session.md))
 gets a fresh Zenoh `zid` on each underlying `zenoh.open()` — this is
 how Zenoh works, not a bug. On reconnect:
 
@@ -115,7 +115,7 @@ pre-0.2.4 peers (which omit the key) decodable.
   `session.get(__zeared/will/**)` at observer startup and fetch already-
   registered wills across the network. Query-time matching uses the trie
   rather than an O(N) iterate-and-intersect loop. See
-  [`_prefix_index.md`](_prefix_index.md).
+  [`_prefix_index.md`](../_prefix_index.md).
 
 ### `_PresenceObserver` — per-session subscriber-side machinery
 

@@ -1,7 +1,7 @@
 # `_prefix_index.py`
 
 Internal trie-based index of path-segmented topics. Used by
-[`retention`](retention.md) and [`presence`](presence.md) queryable
+[`retention`](retention.md) and [`presence`](presence/presence.md) queryable
 handlers to avoid the O(N) iterate-and-intersect loop on every incoming
 query.
 
