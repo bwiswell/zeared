@@ -9,6 +9,29 @@ nodes on other versions, retained state and access rules can see.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.4.2 — unreleased
+
+**On seared 0.4.2, with a strict `SessionConfig`.**
+
+### Added
+
+- **`--require-docs` for `python -m zeared.doc`**, from seared 0.4.1, whose CLI zeared's runs: before writing or
+  checking anything, it lists each field without a `doc=`, Message classes' included, and exits 1.
+
+### Changed
+
+- **Breaking:** `SessionConfig` refuses a key it doesn't declare. `load`, `loads` and the `from_*` readers raise one
+  `ValidationError` naming every unknown key, so `auto_reconect = true` in a `[zenoh]` table fails at load, where it
+  used to be dropped and leave reconnect off. `zenoh_overrides` paths aren't checked, `from_env` reads only the
+  variables it knows, and `load(data, unknown='ignore')` still tolerates them for one call.
+- **Breaking:** `typing.get_type_hints()` raises `NameError` on a Message class, as on any class subclassing
+  `s.Seared`: since seared 0.4.1 the base annotates an attribute with a type it imports only for type checking.
+  zeared's own annotations still resolve (`annotationlib.get_annotations(z.Message)`); the fix is seared's.
+- **Dependencies:** seared `>=0.4.2,<0.5.0`, pinned to `tag = "v0.4.2"`. seared 0.4.1 adds `unknown=`, which a
+  Message class can now take, though on the wire it costs reading a newer publisher (`docs/message/message.md`);
+  0.4.2 adds `s.field_kind` and `seared.doc.json_schema`. Neither changes what `load` or `dump` does; see its
+  changelog.
+
 ## 0.4.1 — 2026-10-17
 
 **A failed query reply no longer holds the query open.**

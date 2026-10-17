@@ -502,8 +502,8 @@ wheels = [
 
 [[package]]
 name = "seared"
-version = "0.4.0"
-source = { git = "https://github.com/bwiswell/seared?tag=v0.4.0#c98f7d449a41a2fb84dc4a940dcf67fa3f4e5fdd" }
+version = "0.4.2"
+source = { git = "https://github.com/bwiswell/seared?tag=v0.4.2#e7553a51aef955bb2d2ac9eeb81586795f972b7c" }
 
 [package.optional-dependencies]
 pandas = [
@@ -659,7 +659,7 @@ requires-dist = [
     { name = "msgpack", specifier = ">=1.1.2" },
     { name = "paho-mqtt", marker = "extra == 'bench'", specifier = ">=2.1,<3.0" },
     { name = "pydantic", marker = "extra == 'bench'", specifier = ">=2.11,<3.0" },
-    { name = "seared", git = "https://github.com/bwiswell/seared?tag=v0.4.0" },
+    { name = "seared", git = "https://github.com/bwiswell/seared?tag=v0.4.2" },
 ]
 provides-extras = ["bench"]
 
@@ -669,6 +669,6 @@ dev = [
     { name = "prek" },
     { name = "pytest", specifier = ">=8.0,<10.0" },
     { name = "ruff" },
-    { name = "seared", extras = ["yaml", "pandas", "polars"], git = "https://github.com/bwiswell/seared?tag=v0.4.0" },
+    { name = "seared", extras = ["yaml", "pandas", "polars"], git = "https://github.com/bwiswell/seared?tag=v0.4.2" },
     { name = "ty" },
 ]

@@ -252,6 +252,28 @@ empty optional fields fall back to seared defaults; missing required
 install hint if missing). Top-level YAML must be a mapping; values
 flow into `SessionConfig.load`.
 
+### Unknown keys are refused (0.4.2)
+
+`SessionConfig` is declared `@seared(unknown='raise')`, so `load`, `loads`
+and every `from_*` reader refuse a key it doesn't declare, naming every
+one in a single `ValidationError`:
+
+```python
+z.SessionConfig.load({'mode': 'peer', 'auto_reconect': True, 'retyr': True})
+# ValidationError: SessionConfig.auto_reconect: unknown key (1 more: retyr)
+```
+
+Until 0.4.2 a misspelt key was dropped, and its setting quietly kept its
+default: the session above opened without reconnecting. A `[zenoh]` table
+that a service loads through `SessionConfig` is checked the same way.
+
+- **`zenoh_overrides`** keys are Zenoh config paths, not fields, so they
+  aren't checked.
+- **`from_env`** reads only the variables it knows, so a misspelt variable
+  is never read rather than refused.
+- **One call can still ignore them,** with `SessionConfig.load(data,
+  unknown='ignore')`.
+
 `gc_interval=`, the presence observer's GC period, was removed in 0.4.0
 along with the observer: presence is a liveliness token now, with no
 stash to sweep.
