@@ -33,7 +33,13 @@ so the package init stays a thin re-export module.
 
 `config=` provides a declarative base spec; explicit kwargs override
 per-call. `zenoh_config=` replaces the config zeared would build: it is
-taken as given, and only the endpoint fields are written over it.
+taken as given, and only the endpoint fields are written over it, and its
+mode when it sets none (0.4.2). Each factory opens its own mode: `peer`
+a peer, `client` a client, `hub` a router. A raw config without a mode
+gets the factory's, and one naming another raises `ValueError`, naming
+the factory that opens it, before anything opens (`_claim_mode`). Until
+0.4.2 a config without a mode opened Zenoh's default, a peer, from
+`client()` or `hub()`.
 
 **Endpoints, in every mode** (0.3.9): an endpoint kwarg or field (`router`,
 `connect`, `listen`) is written over the Zenoh config when set; when unset,

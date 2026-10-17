@@ -23,6 +23,7 @@ from zeared._factories import (
     _resolve_session_knobs,
     _resolve_zenoh_config,
     client,
+    hub,
     peer,
 )
 from zeared._factories import (
@@ -234,6 +235,80 @@ class TestClientEndpointsFromConfig:
             assert sess.zid() is not None
         finally:
             sess.close()
+
+
+class TestRawConfigMode:
+    """0.4.2: a raw ``zenoh_config=`` gets the factory's own mode when it sets none.
+
+    Everything else in a raw config is taken as given, but a config without a
+    mode used to open Zenoh's default, a peer, from ``client()`` or ``hub()``.
+    """
+
+    @pytest.fixture
+    def opened(self, monkeypatch):
+        """Each config the factories hand to ``zenoh.open``, which opens nothing here."""
+        import zenoh
+
+        seen: list = []
+
+        def fake_open(cfg):
+            seen.append(cfg)
+            return object()
+
+        monkeypatch.setattr(zenoh, 'open', fake_open)
+        return seen
+
+    @staticmethod
+    def _mode(cfg):
+        import json
+
+        return json.loads(cfg.get_json('mode'))
+
+    @pytest.mark.parametrize(
+        ('factory', 'kwargs', 'mode'),
+        [(peer, {}, 'peer'), (client, {'router': 'tcp/127.0.0.1:7447'}, 'client'), (hub, {}, 'router')],
+        ids=['peer', 'client', 'hub'],
+    )
+    def test_a_raw_config_without_a_mode_opens_the_factorys_own(self, opened, factory, kwargs, mode):
+        import zenoh
+
+        raw = zenoh.Config()
+        factory(zenoh_config=raw, **kwargs)
+        assert [self._mode(cfg) for cfg in opened] == [mode]
+
+    def test_a_raw_config_naming_its_own_mode_keeps_it(self, opened):
+        import zenoh
+
+        raw = zenoh.Config()
+        raw.insert_json5('mode', '"client"')
+        client(zenoh_config=raw, router='tcp/127.0.0.1:7447')
+        assert self._mode(opened[0]) == 'client'
+
+    @pytest.mark.parametrize(
+        ('factory', 'kwargs', 'mode', 'other'),
+        [
+            (client, {'router': 'tcp/127.0.0.1:7447'}, 'peer', 'peer'),
+            (hub, {}, 'client', 'client'),
+            (peer, {}, 'router', 'hub'),
+        ],
+        ids=['client-given-peer', 'hub-given-client', 'peer-given-router'],
+    )
+    def test_a_raw_config_naming_another_mode_is_refused_before_opening(self, opened, factory, kwargs, mode, other):
+        import zenoh
+
+        raw = zenoh.Config()
+        raw.insert_json5('mode', f'"{mode}"')
+        with pytest.raises(ValueError, match=rf"sets mode '{mode}', but .*open it with {other}\(\)"):
+            factory(zenoh_config=raw, **kwargs)
+        assert opened == []
+
+    def test_a_session_configs_override_still_sets_the_mode(self, opened):
+        # Not a raw config: ``zenoh_overrides`` may set ``mode`` and beat
+        # ``SessionConfig.mode``, as documented, so it isn't checked.
+        overrides = {'mode': 'client', 'connect/endpoints': ['tcp/127.0.0.1:7447']}
+        cfg = z.SessionConfig(mode=z.Mode.PEER, zenoh_overrides=overrides)
+        peer(config=cfg)
+        assert self._mode(opened[0]) == 'client'
 
 
 class TestEndpointRule:
