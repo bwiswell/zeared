@@ -442,6 +442,36 @@ class TestQueryAnswersCachedValues:
         keys = sorted(str(r.ok.key_expr) for r in replies if r.ok is not None)
         assert keys == ['ret/query/1', 'ret/query/2']
 
+    def test_a_wildcard_within_a_chunk_narrows(self, session):
+        # Until 0.4.2 the answer was empty: the index looked `r-$*` up as a
+        # literal chunk, though `query()` documents `$*` as narrowing.
+        @z.zeared
+        class Status(z.Message):
+            TOPIC = 'ret/partial/{robot}/status'
+            RETAINED = True
+            robot: str = z.Str(required=True)
+
+        z.session = session
+        for robot in ('r-1', 'r-2', 'x-1'):
+            Status(robot=robot).send()
+
+        assert sorted(m.robot for m in Status.query(robot='r-$*', timeout=2.0)) == ['r-1', 'r-2']
+        assert [m.robot for m in Status.query(robot='x-1', timeout=2.0)] == ['x-1']
+
+    def test_a_trailing_double_star_reaches_the_key_at_its_prefix(self, session):
+        # Zenoh's `**` matches no chunk too, so a getter on `ret/at/**` reaches
+        # the value retained at `ret/at`, as a subscriber on it would.
+        @z.zeared
+        class Here(z.Message):
+            TOPIC = 'ret/at'
+            RETAINED = True
+            v: int = z.Int(required=True)
+
+        z.session = session
+        Here(v=1).send()
+        replies = list(session.get('ret/at/**'))
+        assert [str(r.ok.key_expr) for r in replies if r.ok is not None] == ['ret/at']
+
 
 class TestClearRetentionCache:
     def test_clear_all_undeclares(self, session):

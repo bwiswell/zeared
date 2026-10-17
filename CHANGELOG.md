@@ -39,6 +39,17 @@ lines as it lands, and the entry is dated when that version is released.
   0.4.2 adds `s.field_kind` and `seared.doc.json_schema`. Neither changes what `load` or `dump` does; see its
   changelog.
 
+### Fixed
+
+- **A retained class answers a query with `$*` in a chunk.** `Status.query(robot='r-$*')`, which `query()` documents
+  as narrowing to the keys whose chunk starts `r-`, got no retained values: the retention index looked `r-$*` up as
+  a literal chunk. Since 0.1.0.
+- **A query ending `/**` reaches the value retained at its prefix,** as Zenoh's `**` matches no chunk too: a getter
+  on `fleet/**` now gets the value at `fleet`, which a subscriber on `fleet/**` already received. The index now only
+  narrows the candidates, and `zeared.keyexpr.intersects` decides, so retention answers exactly what Zenoh routes. A
+  query with two `**` (`**/a/**`) also had some values replied to more than once; each is now replied to once. Since
+  0.1.0.
+
 ## 0.4.1 — 2026-10-17
 
 **A failed query reply no longer holds the query open.**
