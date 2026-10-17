@@ -47,7 +47,7 @@ class _MessageTopicMixin:
             raise TopicError(msg)
         extras = tuple(getattr(cls, 'EXTRA_TOPICS', ()) or ())
         tpls = Templates.build(topic, extras)
-        cls._validate_multi_segment_field_bindings(tpls)
+        cls._validate_slot_field_bindings(tpls)
         cls._TEMPLATES_CACHE = tpls
         return tpls
 
@@ -91,15 +91,19 @@ class _MessageTopicMixin:
         return attachment
 
     @classmethod
-    def _validate_multi_segment_field_bindings(cls, tpls: Templates) -> None:
-        """Reject {name**} slots whose declared field can't hold a path-tail string.
+    def _validate_slot_field_bindings(cls, tpls: Templates) -> None:
+        """Reject slot bindings whose field can't render as its key segment(s).
 
-        Path tails are slash-containing strings; only z.Str(many=False, keyed=False)
-        makes sense. Catching this here (first _templates() call) beats waiting for a
-        runtime coercion failure on a peer in production.
+        - ``{name**}`` (multi-segment): path tails are slash-containing strings,
+          so only ``z.Str(many=False, keyed=False)`` makes sense.
+        - ``{name}`` (single-segment, 0.4.0): the field's string form must never
+          contain ``/``, or the rendered key splits and matches no template.
+          ``Path`` can, and so can ``Bytes`` in its default base64 form;
+          ``Bytes(encoding='hex')`` can't.
+
+        Catching this here (first ``_templates()`` call) beats a key that
+        silently matches nothing, or a coercion failure, on a peer in production.
         """
-        if not tpls.multi_field_names:
-            return
         specs = getattr(cls, '__seared_fields__', ())
         if not specs:
             return
@@ -118,3 +122,20 @@ class _MessageTopicMixin:
                     f'{"(keyed=True)" if getattr(f, "keyed", False) else ""}'
                 )
                 raise TopicError(msg)
+        single = {n for t in tpls.all for n in t.field_names if n != t._named_multi}  # noqa: SLF001
+        for name in sorted(single):
+            f = spec_by_attr.get(name)
+            if f is None:
+                continue
+            kind = type(f).__name__
+            if kind == 'Path':
+                hint = 'bind it to z.Str, or use a trailing {' + name + '**} slot for a path tail'
+            elif kind == 'Bytes' and getattr(f, 'encoding', 'base64') != 'hex':
+                hint = "use z.Bytes(encoding='hex'), whose string form is segment-safe"
+            else:
+                continue
+            msg = (
+                f'{cls.__name__}: single-segment slot {name!r} is bound to {kind}, whose string form '
+                f"can contain '/' and split the key; {hint}"
+            )
+            raise TopicError(msg)

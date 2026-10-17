@@ -11,7 +11,8 @@ lines as it lands, and the entry is dated when that version is released.
 
 ## 0.4.0 — unreleased
 
-**seared 0.4.0, TypeScript `| null` only where the wire can carry one, and the changelog in the repository.**
+**seared 0.4.0, TypeScript `| null` only where the wire can carry one, single-segment slots that can't split their
+key, and the changelog in the repository.**
 
 ### Added
 
@@ -31,6 +32,12 @@ lines as it lands, and the entry is dated when that version is released.
   commit, until seared 0.4.0 is tagged. seared 0.4.0 reads a wire `null` on a field that isn't nullable as absent,
   refuses lossy numeric coercion (a fractional float into an `Int`, a `2` into a `Bool`), prefixes validation errors
   with their location and renames `Union(default=)` to `fallback=`; see its changelog.
+- **Breaking:** a single-segment slot bound to `Path`, or to `Bytes` in its default base64 form, raises
+  `TopicError` at first use, since either can render a `/` and split the key. Use `Bytes(encoding='hex')` or a
+  `Str` slot, or a trailing `{name**}` slot for a path.
+- **Breaking:** publishing with a `/` inside a single-segment slot value raises `TopicError`, from `send`,
+  `unretain`, `concrete_topic`, `register_will` and a queryable's replies, where the message had gone out on a key
+  no template matched. The query getters' selectors don't check, since they embed wildcards deliberately.
 
 ## 0.3.13 — 2026-10-16
 

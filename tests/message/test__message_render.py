@@ -147,40 +147,50 @@ class TestKeyIsTheStringForm:
     class ``ENCODING`` — the only form a capture can decode."""
 
     @pytest.mark.parametrize('encoding', ['json', 'msgpack'])
-    def test_bytes_key_is_base64_under_both_encodings(self, encoding):
+    def test_hex_bytes_key_is_its_hex_form_under_both_encodings(self, encoding):
         @z.zeared
         class Blob(z.Message):
             TOPIC = 'render/bytes/{k}'
             ENCODING = encoding
-            k: bytes = z.Bytes(required=True)
+            k: bytes = z.Bytes(required=True, encoding='hex')
 
         # Before 0.3.8, msgpack rendered the Python repr (``b'\\xfb\\xff\\x00'``).
-        # base64 is still not a usable single segment (it contains ``/``);
-        # see TestBytesSlotsAreBroken.
-        assert Blob(k=b'\xfb\xff\x00').concrete_topic() == 'render/bytes/+/8A'
+        assert Blob(k=b'\xfb\xff\x00').concrete_topic() == 'render/bytes/fbff00'
 
 
-class TestBytesSlotsAreBroken:
-    """Pin: a ``Bytes`` topic slot cannot round-trip, under either encoding.
+class TestSegmentUnsafeSlotsAreRejected:
+    """0.4.0: a single-segment slot bound to a kind whose string form can hold
+    ``/`` raises ``TopicError`` at first use. Flipped from 0.3.8's strict xfails
+    (``TestBytesSlotsAreBroken``), which proved a base64 ``Bytes`` slot can't
+    round-trip: ``b'\\xfb\\xff\\x00'`` renders ``+/8A`` and splits the key."""
 
-    Under msgpack the key segment was the Python repr of the bytes; under
-    JSON (and now under both) it's base64, whose alphabet includes ``/``, so
-    the segment splits and the key matches no template. Rejecting ``Bytes``
-    (and ``Path``) slots at class definition is planned for 0.4.0; until then
-    this documents the breakage and flips loudly when it's resolved.
-    """
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason='Bytes slots cannot round-trip: base64 contains "/" (rejection planned for 0.4.0)',
+    @pytest.mark.parametrize(
+        ('make_field', 'hint'),
+        [
+            (lambda: z.Bytes(required=True), "z.Bytes(encoding='hex')"),
+            (lambda: z.Path(required=True), 'z.Str'),
+        ],
+        ids=['bytes-base64', 'path'],
     )
+    def test_rejected_at_first_use(self, make_field, hint):
+        class Bad(z.Message):
+            TOPIC = 'render/unsafe/{k}'
+
+        Bad.__annotations__ = {'k': Any}
+        Bad.k = make_field()
+        Bad = z.zeared(Bad)
+
+        with pytest.raises(z.TopicError, match=r"single-segment slot 'k' is bound to") as info:
+            Bad._templates()
+        assert hint in str(info.value)
+
     @pytest.mark.parametrize('encoding', ['json', 'msgpack'])
-    def test_bytes_slot_round_trip(self, session, encoding):
+    def test_hex_bytes_slot_round_trips(self, session, encoding):
         @z.zeared
         class Blob(z.Message):
-            TOPIC = 'render/bytes/{k}'
+            TOPIC = 'render/hexbytes/{k}'
             ENCODING = encoding
-            k: bytes = z.Bytes(required=True)
+            k: bytes = z.Bytes(required=True, encoding='hex')
             n: int = z.Int(default=0)
 
         got: list[bytes] = []
@@ -189,6 +199,80 @@ class TestBytesSlotsAreBroken:
         Blob(k=b'\xfb\xff\x00', n=1).send(session=session)
         wait(0.3)
         assert got == [b'\xfb\xff\x00']
+
+
+class TestSlashInASingleSegmentValue:
+    """0.4.0: publish renders refuse a ``/`` in a single-segment slot value,
+    which would land the message on a key no template matches. Selector
+    renders don't check: they embed wildcards deliberately."""
+
+    @pytest.fixture
+    def named(self):
+        @z.zeared
+        class Named(z.Message):
+            TOPIC = 'render/slash/{name}'
+            RETAINED = True
+            name: str = z.Str(required=True)
+            v: int = z.Int(default=0)
+
+        return Named
+
+    def test_send_raises(self, session, named):
+        with pytest.raises(z.TopicError, match='contains "/"'):
+            named(name='a/b').send(session=session)
+
+    def test_concrete_topic_raises_both_ways(self, named):
+        with pytest.raises(z.TopicError, match='contains "/"'):
+            named(name='a/b').concrete_topic()
+        with pytest.raises(z.TopicError, match='contains "/"'):
+            named.concrete_topic(name='a/b')
+
+    def test_unretain_raises(self, session, named):
+        with pytest.raises(z.TopicError, match='contains "/"'):
+            named.unretain(name='a/b', session=session)
+
+    def test_register_will_raises(self, session):
+        @z.zeared
+        class Alive(z.Message):
+            TOPIC = 'render/slash/alive/{dev}'
+            LIVELINESS = True
+            dev: str = z.Str(required=True)
+
+        with pytest.raises(z.TopicError, match='contains "/"'):
+            Alive(dev='a/b').register_will(session=session)
+
+    def test_selector_does_not_check(self, named):
+        assert _build_selector(named, {'name': 'a/b'}, None) == 'render/slash/a/b'
+
+    def test_multi_segment_slot_accepts_slashes(self):
+        @z.zeared
+        class Log(z.Message):
+            TOPIC = 'render/log/{tail**}'
+            tail: str = z.Str(required=True)
+
+        assert Log(tail='a/b/c').concrete_topic() == 'render/log/a/b/c'
+
+    def test_query_reply_raises(self, session):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'render/slashq/{id}'
+            id: str = z.Str(required=True)
+
+        errors: list[Exception] = []
+
+        def handler(ctx):
+            try:
+                ctx.reply(Row(id='a/b'))
+            except z.TopicError as exc:
+                errors.append(exc)
+
+        z.session = session
+        qbl = Row.on_query(handler)
+        wait()
+        assert Row.query(id='x', timeout=1.0) == []
+        qbl.close()
+        assert len(errors) == 1
+        assert 'contains "/"' in str(errors[0])
 
 
 class TestDataKeySlots:
