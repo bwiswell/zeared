@@ -96,7 +96,9 @@ def _resolve_hub_listen(
 def _apply_defaults(c: zenoh.Config, mode: str, *, timestamping: bool) -> None:
     """Set zeared's own settings on a config it builds: the mode, HLC timestamping, shared memory off.
 
-    Timestamping is on unless opted out (RETAINED + DEDUPE need the HLC).
+    Timestamping is on unless opted out: dedupe of live samples,
+    ``meta.issued_at`` and ``meta.origin_zid`` read the HLC. (Retained sends
+    stamp their own puts since 0.4.0, so retained replies dedupe either way.)
     """
     c.insert_json5('mode', json.dumps(mode))
     if timestamping:
@@ -403,7 +405,10 @@ def peer(  # noqa: PLR0913
 
     Pass ``config=<Config>`` for a declarative base spec, then layer any
     explicit kwargs on top — kwargs win when both are supplied.
-    ``zenoh_config=<zenoh.Config>`` layers raw Zenoh overrides on top.
+    ``zenoh_config=<zenoh.Config>`` replaces the config zeared would build:
+    it's taken as given, with no timestamping or shared-memory default
+    applied, and wins over ``config=``'s ``zenoh_config_file`` /
+    ``zenoh_overrides``. Endpoints given here are still written onto it.
     """
     base_connect = list(config.connect) or None if config is not None else None
     base_listen = list(config.listen) or None if config is not None else None
@@ -484,7 +489,8 @@ def client(  # noqa: PLR0913
 
     Pass ``config=<Config>`` for a declarative base spec, then layer any
     explicit kwargs on top — kwargs win when both are supplied.
-    ``zenoh_config=`` layers raw Zenoh overrides on top.
+    ``zenoh_config=`` replaces the config zeared would build, as for
+    :func:`peer`.
     """
     if config is not None:
         endpoints = list(config.connect)
@@ -574,8 +580,8 @@ def hub(  # noqa: PLR0913
     A hub lets nodes that can't reach each other directly still communicate:
     each connects **outbound** to the hub (e.g. two peers behind NAT, both
     outbound-only), and the hub routes pub/sub, queries, and liveliness
-    between them — everything zeared needs (retention/queryables and
-    presence/LWT included). This is the ``zenohd`` role, run in-process; no
+    between them — everything zeared needs (retention, queryables and
+    presence included). This is the ``zenohd`` role, run in-process; no
     external binary. The routing runs in Zenoh's Rust core, so throughput
     matches a standalone router.
 

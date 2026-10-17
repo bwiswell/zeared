@@ -45,7 +45,7 @@ def _resolve_retention_ttl(cls: type[Message], session: SessionLike) -> float | 
 # the original publish (or ``None`` when the class sets no ``SCHEMA``) — it
 # MUST ride back out on the queryable reply so a late subscriber's
 # retained-fetch / ``fetch_retained`` can pass the schema check and decode
-# the snapshot. The monotonic timestamp drives ``_RETENTION_TTL``
+# the snapshot. The monotonic timestamp drives ``RETENTION_TTL``
 # enforcement at query time and is immune to wall-clock jumps. ``timestamp``
 # (0.4.0) is the Zenoh timestamp the value was published with, or ``None``;
 # the republish on link restore re-puts the value with it, so a subscriber
@@ -56,10 +56,9 @@ _CacheValue = tuple[bytes, codec.Encoding, bytes | None, float, 'zenoh.Timestamp
 class _RetentionCache:
     """Per-(cls, session) cache of last retained payload per concrete topic.
 
-    Holds a single ``zenoh.Queryable`` spanning every declared template
-    wildcard on the class; the queryable's handler enumerates cached
-    concrete topics that intersect the incoming query's key-expr and
-    replies to each.
+    Holds one ``zenoh.Queryable`` per declared template wildcard on the
+    class; each handler enumerates the cached concrete topics that
+    intersect the incoming query's key-expr and replies to each.
     """
 
     __slots__ = (

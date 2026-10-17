@@ -20,9 +20,12 @@ _log = logging.getLogger('zeared.meta')
 class Origin(enum.StrEnum):
     """Provenance of a dispatched sample — how it reached this subscriber.
 
-    Determined entirely by the local delivery path (never read from the
-    wire): the live ``zenoh.Subscriber`` callback, a retained-fetch
-    ``session.get`` reply, or a presence event (0.4.0).
+    Determined by the local delivery path: the live ``zenoh.Subscriber``
+    callback, a retained-fetch ``session.get`` reply (at subscribe time,
+    after a reconnect, or from the re-attach walk), or a presence event
+    (0.4.0). One signal does ride the wire: a publisher's republish after
+    its link comes back marks its attachment ``replay``, and the subscriber
+    delivers that sample as ``REPLAY`` (0.4.0).
 
     On the presence feed (``on_online`` / ``on_offline``), online arrives as
     ``REPLAY`` for a key already online when the subscriber (re)started and
@@ -30,7 +33,7 @@ class Origin(enum.StrEnum):
     """
 
     LIVE = 'live'  # delivered by the live zenoh subscriber
-    REPLAY = 'replay'  # from a retention cache, or a key already online (subscribe-time or post-reconnect)
+    REPLAY = 'replay'  # a retained value delivered again (fetch or republish), or a key already online
     WILL = 'will'  # a presence key going offline (on_offline)
 
 
@@ -64,10 +67,11 @@ class ZenohMeta(s.Seared):
     ``None`` when the sample carries no timestamp.
 
     ``origin`` is the sample's provenance — ``Origin.LIVE`` for a real
-    publish through the live subscriber, ``Origin.REPLAY`` for a
-    retained-fetch delivery (subscribe-time or post-reconnect). On the
-    presence feed it marks a key already online (``REPLAY``), coming online
-    (``LIVE``) or going offline (``WILL``). Set by the dispatch layer;
+    publish through the live subscriber, ``Origin.REPLAY`` for a retained
+    value delivered again (a retained-fetch reply at subscribe time, after
+    a reconnect or from the re-attach walk, or a publisher's republish). On
+    the presence feed it marks a key already online (``REPLAY``), coming
+    online (``LIVE``) or going offline (``WILL``). Set by the dispatch layer;
     ``from_sample`` defaults it to ``LIVE``.
     """
 

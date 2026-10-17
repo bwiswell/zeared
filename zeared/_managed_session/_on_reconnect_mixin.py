@@ -92,7 +92,8 @@ class _OnReconnectMixin:
         Fires when the session's routers drop to none while the raw session
         lives (a hub outage), or when the raw session is found dead, before
         the reconnect starts. Never twice without an ``on_link_restored`` in
-        between; a session that never had a router never fires it. Same
+        between. The probe's link watch never fires it for a session that
+        never had a router, but a reconnect fires the pair in any mode. Same
         threading, async and error rules as ``on_reconnect``.
         """
         return self._register('link_lost', cb)

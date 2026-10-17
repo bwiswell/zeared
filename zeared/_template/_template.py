@@ -54,9 +54,10 @@ class Template:
         raw: original template string.
         field_names: ordered tuple of all capture slot names (single + multi).
         wildcard: Zenoh key expression for subscribe-side use.
-        publishable: ``False`` only if the template contains anonymous
-                     ``*`` or ``**`` segments. Named ``{name}`` and
-                     ``{name**}`` are both publishable.
+        publishable: ``False`` only if the template contains an anonymous
+                     ``**`` segment. Named ``{name}`` and ``{name**}`` are
+                     both publishable, and so is an anonymous ``*``: the
+                     key it sends on keeps the ``*``.
         _regex: compiled regex with named captures for each slot.
         _named_multi: name of the trailing ``{name**}`` slot, if any.
     """

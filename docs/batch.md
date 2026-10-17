@@ -2,13 +2,16 @@
 
 ## `z.batch() -> _BatchContext`
 
-Context manager that defers `msg.send()` calls until the outermost `__exit__`.
+Context manager that defers `msg.send()` calls, and `unretain()`
+tombstones, until the outermost `__exit__`. Sends inside the block go
+through the usual `msg.send()` / `Cls.send_batch()`; the handle the block
+binds only has `flush()`.
 
 ```python
-with z.batch() as b:
-    a.send()
-    b.send()
-    # b.flush()        # optional: drain pending sends now, keep collecting
+with z.batch() as handle:
+    first.send()
+    second.send()
+    # handle.flush()   # optional: drain pending sends now, keep collecting
 # all buffered sends flush here
 ```
 
@@ -17,19 +20,20 @@ with z.batch() as b:
 | Behaviour | |
 |-----------|---|
 | **Flat nesting** | An inner `with z.batch():` shares the outer buffer; it neither flushes nor discards on its own exit. |
-| **Discard on exception** | An exception escaping the outermost block drops the buffer without flushing. Use `b.flush()` mid-block if you want a partial send. |
+| **Discard on exception** | An exception escaping the outermost block drops the buffer without flushing. Use `handle.flush()` mid-block if you want a partial send. |
 | **Context-scoped** | Buffer is stored in a `contextvars.ContextVar`. Each thread starts empty; each `asyncio` task gets a per-task copy — sibling tasks don't accidentally share a batch. |
-| **Mixed sessions** | `send(session=X)` inside a batch records the explicit target; flush partitions by `(cls, session)` and hands each partition to the corresponding `_PublisherCache`. |
+| **Mixed sessions** | `send(session=X)` inside a batch records the explicit target on its entry. The flush walks the entries in send order and hands each to the `_PublisherCache` (and, for a retained send, the `_RetentionCache`) of its own `(cls, session)`. |
 
-### Reconnect during flush
+### Send failure during flush
 
-If the underlying session is a `ManagedSession` and enters
-`RECONNECTING` mid-flush (active probe or send-failure detection), the
-in-progress send raises `SessionDeadError`. Per batch's discard-on-
-exception contract, any remaining buffered sends are dropped. Daemons
-doing bulk-publish-on-failover should size batches to fit comfortably
-inside one reconnect window or wrap the batch context in a try/except
-for `SessionDeadError`:
+A send or tombstone that fails during the flush raises out of it, and the
+rest of the buffer is dropped (the entries before it already went out).
+Since 0.4.0 the error is `SessionDeadError` while a managed session is
+down (`RECONNECTING` / `DEAD`, via `publisher.send_error`); a raw
+session's failure is a plain `ZearedError`, which `SessionDeadError`
+subclasses. Daemons doing bulk-publish-on-failover should size batches to
+fit comfortably inside one reconnect window or wrap the batch context in a
+try/except for `SessionDeadError`:
 
 ```python
 try:
@@ -41,12 +45,15 @@ except z.SessionDeadError:
 ```
 
 The buffer itself doesn't care about session identity — it holds
-`(cls, session_ref, topic, bytes, encoding, retain_mode)` tuples — so
+`(cls, session_ref, topic, bytes, encoding, retain_mode, attachment)`
+tuples, where `retain_mode` is `'none'`, `'retain'` or `'tombstone'` (a
+buffered `unretain()`, whose bytes are unused) and `attachment` is the
+class's `SCHEMA` attachment (always `None` for a tombstone) — so
 flushing AFTER a reconnect completes (e.g. the buffer was built
-pre-reconnect, the block exits post-reconnect) works correctly: the
-flush partitions by `(cls, session)` and hands each partition to the
-corresponding `_PublisherCache`, which lazy-rebuilds against the new
-raw on the first `send()`.
+pre-reconnect, the block exits post-reconnect) works correctly: each
+entry goes to its `(cls, session)`'s `_PublisherCache`, which
+lazy-rebuilds against the new raw on the first `send()`. A retained
+entry's timestamp is taken at flush time.
 
 ## `_BatchHandle.flush() -> None`
 

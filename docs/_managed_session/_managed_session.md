@@ -2,7 +2,7 @@
 
 Reconnect-aware wrapper around `zenoh.Session`, plus the detection +
 restoration machinery. Opt-in via `auto_reconnect=True` on the session
-factories.
+factories, or `SessionConfig.auto_reconnect` (0.4.0).
 
 ## User surface
 
@@ -29,8 +29,12 @@ reconnects. Exceptions inside the block don't suppress; release runs
 unconditionally.
 
 `auto_reconnect=False` returns a raw `zenoh.Session`; the `with` form
-works through Zenoh's own context-manager protocol (which calls
-`session.close()` on exit — no zeared-level state to clean up).
+works through Zenoh's own context-manager protocol, which only calls
+`session.close()` on exit. A raw session used with `send` / `on_message`
+still has zeared state keyed on `id(session)` (subscribers, queryables,
+publisher and retention caches, presence), and only `z.release` clears
+it, so end a raw session with `z.release(session=sess)` too; it closes the
+session as well.
 
 ### Manual lifecycle
 
@@ -61,7 +65,8 @@ Two detection paths feed one reconnect:
 1. **Active probe** — daemon thread per `ManagedSession`, polls
    `is_closed()` (or `zid()` fallback) every `probe_interval` seconds.
    Required for subscriber-only daemons that never call `put`.
-   `probe_interval=0` or `None` disables the active path entirely.
+   `probe_interval=0` or `None` disables the active path entirely,
+   router-link detection included (below).
 2. **Send-failure fallback** — `put` / `get` / `delete` exceptions on a
    dead raw trigger `_trigger_reconnect` immediately. Catches the
    0–`probe_interval` gap on publisher-heavy paths.
@@ -76,22 +81,36 @@ re-attach walk and fires `on_link_restored` itself — see
 
 ## Restoration
 
-After the new raw session opens (with backoff via
+`on_link_lost` fires first, unless the link was already down. After the
+new raw session opens (with backoff via
 `SessionConfig.{initial_backoff, max_backoff, max_attempts}`):
 
 1. Atomically swap the wrapper's raw reference (`_swap_raw`).
-2. Walk the subscriber registry keyed on `id(managed_session)` and call
+2. Invalidate the cached publishers bound to the session; the next
+   `send()` re-declares against the new raw.
+3. Redeclare the retention queryables on every cache bound to the
+   session.
+4. Walk the subscriber registry keyed on `id(managed_session)` and call
    `Subscriber._redeclare(new_raw, managed)` on each. Re-fires retained
    fetch (dedupe-safe via 0.0.9 `DEDUPE`); re-declares the presence
    watch, if any.
-3. Walk presence state: `_SessionPresence.replay_to(managed)` re-declares
+5. Walk the queryable registry and re-declare each `Cls.on_query`
+   queryable.
+6. Walk presence state: `_SessionPresence.replay_to(managed)` re-declares
    every held presence token on the new raw (0.4.0). Peers see the keys go
    offline, then online.
-4. Quietly close the old raw.
+7. Quietly close the old raw.
+8. Fire the `on_reconnect` callbacks.
+9. The republish, then `on_link_restored` (no re-attach walk: step 4
+   already re-fetched).
+
+See [`_reconnect.md`](../_reconnect/_reconnect.md#restoration-order) for
+why the walks run in this order.
 
 Subscribers opted out via `Cls.on_message(cb, auto_reconnect=False)`
-are skipped during the walk — their `_zenoh_subs` stay bound to the
-dead raw. Power users who need manual control retain it.
+(and queryables via `Cls.on_query(handler, auto_reconnect=False)`) are
+skipped during the walk — their Zenoh handles stay bound to the dead raw.
+Power users who need manual control retain it.
 
 ## State machine
 
@@ -122,8 +141,9 @@ Three registries share one driver (0.4.0):
 | `on_link_restored` | after the re-attach walk, or after a reconnect's walks and `on_reconnect`'s callbacks; only after a loss, never on `DEAD` |
 | `on_reconnect` | the raw session was swapped and every restore walk ran |
 
-The link pair never fires twice in a row, and a session that never had a
-router never fires it. It doesn't care what caused the loss, so "re-sync
+The link pair never fires twice in a row. The probe's link watch never
+fires it for a session that never had a router; a reconnect fires the
+pair in any mode. It doesn't care what caused the loss, so "re-sync
 now" is one registration on `on_link_restored`.
 
 Daemons that need to know a reconnect happened — to log it, refresh
@@ -178,7 +198,7 @@ steer users toward the wrappers that DO compose with reconnect:
 | Subscribe to a class | `Cls.on_message(cb)` | Subscriber registry walked on reconnect; `_redeclare` rebuilds against new raw. |
 | Publish a class    | `msg.send()` | Publisher cache rebuilds lazily; retention queryables rebuilt eagerly. |
 | Bulk publish       | `Cls.send_batch(items)` / `with z.batch(): ...` | Batch buffer survives reconnect; mid-flush ops raise `SessionDeadError`. |
-| Custom queryable   | Re-declare inside an `on_reconnect(cb)` hook. | No first-class wrapper today — register via the hook. |
+| Serve queries      | `Cls.on_query(handler)` | Queryable registry walked on reconnect; `_redeclare` rebuilds against new raw. A raw `declare_queryable` handle still needs re-declaring in an `on_reconnect(cb)` hook. |
 
 `sess.raw().declare_publisher(...)` is the explicit opt-in to the
 raw-only contract: you're telling zeared you want the dead-on-reconnect
@@ -237,10 +257,9 @@ the only knob for them.
 | Re-attach walk pool | one walk | Up to `resync_concurrency` short-lived workers (`zeared-resync-*`), only while a walk re-fetches; joined before `on_link_restored` fires. |
 | Reconnect worker | start_probe → _probe_cancel | Single long-lived daemon; blocks on `_reconnect_signal`; runs `_reconnect` on each wake. Coalesces concurrent triggers via Event semantics. |
 
-Test paths that bypass `start_probe` and call `_trigger_reconnect`
-directly fall back to a one-shot reconnect thread — preserves the
-orchestration-driven test ergonomics without holding a worker for
-short-lived test fixtures.
+`_trigger_reconnect` only signals the reconnect worker, so
+`start_probe` must have run first. The factories do this; a test that
+drives `_trigger_reconnect` directly calls `start_probe` itself.
 
 ## `raw()` — escape hatch
 
@@ -276,17 +295,18 @@ offline signal; it's a feature.
 | Event | Probe | Raw |
 |-------|-------|-----|
 | `peer(auto_reconnect=True)` succeeds  | thread declared, started | held |
-| Probe / send-failure detects death    | wakes; CAS into RECONNECTING; spawns reconnect thread | unchanged until swap |
+| Probe / send-failure detects death    | wakes; CAS into RECONNECTING; signals the reconnect worker | unchanged until swap |
 | Reconnect open succeeds               | continues | atomic swap; old raw closed quietly |
 | Reconnect open exhausts `max_attempts`| `state = DEAD`; cancel set; thread exits | unchanged |
 | `z.release(session=managed)`          | cancel set; thread joined (1s) | closed |
 
 ## Caveats
 
-- **Lazy publisher / queryable rebuild.** Cached publishers and
-  retention queryables are not proactively re-declared during reconnect
-  restoration; the next `send()` / next incoming query rebuilds them on
-  demand. Keeps the restoration walk cheap.
+- **Lazy publisher rebuild.** Cached publishers are invalidated, not
+  re-declared, during reconnect restoration; the next `send()` rebuilds
+  them on demand. Keeps the restoration walk cheap. Retention queryables
+  are the exception: they are re-declared eagerly, before the subscribers'
+  retained fetch needs them.
 - **Send during reconnect window: raise.** No buffering or blocking.
   Callers that want either build it on top of the `SessionDeadError`
   contract.

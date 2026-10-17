@@ -1,9 +1,12 @@
 # `subscriber.py`
 
-`Subscriber` is the handle returned by `Message.on_message(...)`. It wraps an
-underlying `zenoh.Subscriber` and handles the decode + dispatch loop.
+`Subscriber` is the handle returned by `Message.on_message(...)`. It wraps
+one `zenoh.Subscriber` per declared template (plus the presence feed's
+liveliness subscribers when `on_online` / `on_offline` are given) and
+handles the decode + dispatch loop.
 
-The class is parameterised in the message type via `typing.Generic[M]` —
+The class is generic in the message type, declared with PEP 695 syntax
+(`class Subscriber[M: Message]`) —
 `Cls.on_message(cb)` is typed as returning `Subscriber[Cls]`, giving IDE
 + type-checker visibility into which kind of subscriber a given handle
 represents. Runtime is identical with or without the parameter; bare
@@ -39,7 +42,7 @@ If `cb` is an `async def` function, `Subscriber._declare` captures the
 running event loop at subscribe time and wraps the callback in a sync
 shim that schedules the coroutine via `asyncio.run_coroutine_threadsafe`
 on each sample. If there's no running loop, `SubscriptionError` is
-raised — use `Cls.alisten()` instead.
+raised — subscribe from inside a running loop, or pass a sync callback.
 
 ## Auto-reconnect interaction
 
@@ -47,20 +50,41 @@ When the resolved session is a `ManagedSession`
 (see [`_managed_session.md`](../_managed_session/_managed_session.md)), the reconnect
 machinery walks the per-session subscriber registry on every successful
 swap and calls `Subscriber._redeclare(new_raw, managed)` on each. The
-user's `Subscriber` handle stays valid across the boundary — internally
-its `_zenoh_subs` tuple is rebuilt against the new raw and any
-retained-fetch / presence-dispatcher state is re-wired.
+user's `Subscriber` handle stays valid across the boundary. `_redeclare`:
 
-Per-subscriber opt-out:
+1. clears the schema-mismatch warn-once cache (peer zids may have changed);
+2. rebuilds the `_zenoh_subs` tuple against the new raw, on the same
+   dispatch closure;
+3. re-runs the retained fetch (`RETAINED` classes, unless
+   `retained_fetch=False`), dedupe-safe;
+4. re-declares the presence watch when there is one: `_watch_presence`
+   declares fresh liveliness subscribers (and their `history=True`
+   keepers) and replays the keys online now as `REPLAY`.
+
+A redeclare that fails is logged and closes the handle.
+
+### The re-attach walk (0.4.0)
+
+A hub restart can drop a managed session's router link without killing
+the session, so nothing is redeclared: the Zenoh subscribers survive the
+outage. When the link comes back, the session's re-attach walk calls
+`_replay_retained(raw)` on every subscriber whose `_wants_replay()`
+holds (open, `RETAINED`, `retained_fetch=True` and
+`auto_reconnect=True`). That re-runs the retained fetch through the same
+dispatch, as `REPLAY` and dedupe-safe. See
+[`_reconnect.md`](../_reconnect/_reconnect.md#link-re-attach-040).
+
+### Opting out
 
 ```python
 sub = MyMessage.on_message(cb, auto_reconnect=False)
 ```
 
-A subscriber opted out is skipped during the restoration walk; its
-`_zenoh_subs` stay bound to the dead raw. Power users who need to
-manage subscriber lifecycle explicitly across reconnects keep that
-control.
+A subscriber opted out is skipped by both the restoration walk and the
+re-attach walk; after a reconnect its `_zenoh_subs` stay bound to the
+dead raw. Power users who need to manage subscriber lifecycle explicitly
+across reconnects keep that control. `retained_fetch=False` keeps the
+redeclare but skips every replay.
 
 ## Multi-topic subscriptions
 
@@ -79,6 +103,10 @@ through the same dispatch function used for live samples, marked
 state from live traffic (see [`../meta.md`](../meta.md)). Decode failures
 route through the unified `on_error` hook. See [`retention.md`](../retention.md).
 
+A publisher's republish after its link comes back (0.4.0) arrives
+through the live subscriber, but its attachment carries the `replay`
+marker, so the dispatch delivers it as `REPLAY` too.
+
 The fetch drains synchronously inside `_declare`, so by the time
 `on_message` returns every subscribe-time replay has been delivered (or
 dedupe-suppressed) — the initial-sync boundary. Live samples that
@@ -90,9 +118,10 @@ Per-subscription opt-out — a **live-only** subscriber:
 sub = Telemetry.on_message(cb, retained_fetch=False)
 ```
 
-No cached values replay at subscribe time or after a reconnect, and the
-blocking `session.get()` those fetches issue is skipped entirely. The
-flag is stored on the handle so `_redeclare` honours it too.
+No cached values replay at subscribe time, after a reconnect or on the
+re-attach walk, and the blocking `session.get()` those fetches issue is
+skipped entirely. The flag is stored on the handle so `_redeclare` and
+the walk honour it too.
 
 `Cls.fetch_retained()` exposes the same `session.get()` sweep as a
 standalone, one-shot call that **returns** the decoded instances instead of
@@ -130,12 +159,13 @@ the class has `LIVELINESS = True`), `Subscriber._declare` additionally:
    (online) or `WILL` (offline).
 2. Declares one liveliness subscriber per template wildcard, then queries
    the tokens already live and reports them as online with
-   `origin = REPLAY`.
+   `origin = REPLAY`, then declares a `history=True` keeper per template
+   (`_watch_presence`).
 
 `cb` never sees presence events, and `on_remove` keeps its tombstone
-meaning. `_redeclare` rebuilds the liveliness subscribers after a
-reconnect (replaying the keys online then), and `Subscriber.close()`
-undeclares them. See [`presence.md`](../presence/presence.md).
+meaning. `_redeclare` re-runs `_watch_presence` after a reconnect
+(replaying the keys online then), and `Subscriber.close()` undeclares
+them all. See [`presence.md`](../presence/presence.md).
 
 ## Encoding resolution (inbound)
 
@@ -150,9 +180,11 @@ and a single subscriber will decode both correctly.
 
 ## Per-subscriber dedupe override
 
-Class-level `DEDUPE` controls whether retention-fetch replays are
-deduplicated against live samples (default `True` for `RETAINED`
-classes). A specific subscriber can override:
+Class-level `DEDUPE` (default `True`) turns on, for `RETAINED` classes,
+a per-key timestamp watermark that drops a replay of a value already
+held, and any re-delivered or out-of-order sample (see
+[`retention.md`](../retention.md#deduplication)). A specific subscriber
+can override:
 
 ```python
 sub = Telemetry.on_message(cb, dedupe=False)   # this sub sees every replay
@@ -173,7 +205,10 @@ drop the sample and route via `on_error` as `SchemaMismatchError`
 `(sender_zid, observed_schema)` pairs — the first mismatch from any
 given pair fires `on_error`; subsequent samples from the same pair
 drop silently to avoid log spam from a misaligned peer publishing
-continuously. Cache cleared on `Subscriber.close()`.
+continuously. The sender is the zid in the sample's HLC timestamp (0.4.0;
+`''` for an unstamped sample). The cache is a bounded LRU (1024 pairs; an
+evicted pair warns again), cleared only by `_redeclare` after a reconnect,
+since peer zids may have changed.
 
 Subscriber classes with `SCHEMA = None` (default) skip the check;
 `meta.schema` still populates from the wire if present.
@@ -190,5 +225,15 @@ A bad sample never takes the subscriber down.
 
 ## Attributes (internal)
 
-- `_zenoh_sub: zenoh.Subscriber`
+- `_zenoh_subs: tuple` — one `zenoh.Subscriber` per declared template;
+  rebuilt by `_redeclare`.
+- `_presence_subs: tuple` — the presence feed's liveliness subscribers and
+  their keepers (empty without `on_online` / `on_offline`).
+- `_presence_handler` — the presence handler, or `None`.
+- `_session` — the session it was declared on (its registry key).
+- `_watchdog` — the `_SubscriberWatchdog`, or `None`.
 - `_closed: bool`
+- `_msg_cls`, `_dispatch`, `_on_error`, `_auto_reconnect`,
+  `_retained_fetch` — redeclaration state, set by `_declare`.
+- `_seen_mismatches` — the dispatch closure's schema-mismatch cache (an
+  `OrderedDict`), held so `_redeclare` can clear it.

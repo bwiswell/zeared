@@ -14,7 +14,7 @@ once, get publish, subscribe, and topic routing for free.
 - **Typed messages.** Messages are ordinary `@z.zeared` dataclasses with a `TOPIC` class attribute. `send()` publishes; `on_message(cb)` subscribes with a typed callback.
 - **Format-string topics.** `TOPIC = 'robot/{id}/telemetry'` auto-derives the Zenoh wildcard `robot/*/telemetry` for subscribers and populates `msg.id` from the actual key expression on receive.
 - **Multi-topic classes.** Declare `EXTRA_TOPICS = (...)` to subscribe to several wildcards with one class; a restrictive `send(topic=...)` override lets you publish to any declared template.
-- **Multi-segment wildcards.** Trailing `**` in a template matches any number of path segments (MQTT `#` equivalent). Classes with `**` in a template are subscribe-only for that template.
+- **Multi-segment wildcards.** Trailing `**` in a template matches one or more trailing path segments (the MQTT `#` counterpart). An anonymous `**` makes that template subscribe-only; a named `{name**}` slot is publishable.
 - **Capture-only slots.** Template slots that aren't declared as seared fields become routing-only captures — always surfaced via `meta.captures: dict[str, str]`, never on the payload schema.
 - **Tagged-union payloads.** `s.Union` encodes `{action, args}`-style envelopes and decodes to a typed variant instance — pattern-match on `msg.action` at the dispatch site.
 - **Long-lived publishers by default.** Every message class transparently caches `zenoh.Publisher` instances per concrete topic (soft-capped, user-overridable). No `Publisher` ceremony — `msg.send()` is the one path.
@@ -24,16 +24,16 @@ once, get publish, subscribe, and topic routing for free.
 - **Declared effect (doc-only).** `EFFECT` (`z.Effect.READ`, `WRITE` or `ACTION`) says what acting on a contract does. It's shown in the generated docs and TypeScript, and read by `z.effect_of(cls)` for policy layers (gateways, MCP or MQTT bridges). zeared never reads it at runtime.
 - **Subscriber watchdog.** Optional per-subscription freshness detector — `Cls.on_message(cb, expected_interval=N, on_quiet=, on_active=)` fires callbacks when a subscription goes silent and again when it resumes. Optimistic by default (waits for first message); `startup_grace=N` opts into "tell me if I haven't heard within N seconds of subscribing."
 - **Unified shutdown.** `z.release(session=sess)` walks every zeared-owned resource for the session in the right order — subscribers, queryables, publisher cache, retention queryable, presence tokens, then `session.close()`. The graceful-shutdown path that used to take several separate calls is one.
-- **Zenoh shared memory off.** Every config zeared builds sets `transport/shared_memory/enabled=false` (the hub daemon does too, over its `--config` file). Zenoh's default would carry large same-host messages through a shared-memory pool whose locked pages leak per session until messages are silently dropped. Opt back in through `zenoh_overrides`.
+- **Zenoh shared memory off.** Every config zeared builds sets `transport/shared_memory/enabled=false` (the hub daemon does too, over its `--config` file). Zenoh's default would carry large same-host messages through a shared-memory pool whose locked pages leak per session until messages are silently dropped. Opt back in through `zenoh_overrides`. A raw `zenoh_config=` is taken as given, so set it there yourself.
 - **Retention dedupe by default.** `RETAINED` classes auto-deduplicate retention-fetch replies against live publishes via `(key_expr, timestamp)`: a replay of a value the subscriber already holds is dropped. (Since 0.4.0 — before it, replies carried no timestamp and every replay was delivered.) Opt out per class with `DEDUPE = False`.
-- **Replay-vs-live signal.** `meta.origin` tells a subscriber how each sample arrived — `z.Origin.LIVE` (a real publish), `z.Origin.REPLAY` (delivered from a retention cache at subscribe time or after reconnect); on the presence feed, `z.Origin.WILL` marks a key going offline. Determined by the local delivery path, never read from the wire. Live-only subscriptions via `on_message(cb, retained_fetch=False)`; async-iterator access via `Cls.alisten(meta=True)`.
-- **Sync + async.** Every send/subscribe has an `a`-prefixed sibling: `await msg.asend()`, `async for msg in Cls.alisten(): ...`, `async with z.abatch(): ...`. `on_message(cb)` detects `async def` callbacks and schedules them on the running loop.
-- **Batching primitives.** `with z.batch(): ...` collects sends for atomic flush-or-discard on exception; `Cls.send_batch(items)` is the homogeneous-bulk shortcut. `asyncio` tasks get per-task isolation via `contextvars`.
+- **Replay-vs-live signal.** `meta.origin` tells a subscriber how each sample arrived — `z.Origin.LIVE` (a real publish), `z.Origin.REPLAY` (a retained value delivered again: a retention-fetch reply at subscribe time, after a reconnect or from the re-attach walk, or a publisher's republish after its link comes back); on the presence feed, `REPLAY` marks a key already online at subscribe time and `z.Origin.WILL` a key going offline. Set by the local delivery path, except the republish, which carries a `replay` marker in its attachment (0.4.0). Live-only subscriptions via `on_message(cb, retained_fetch=False)`; async-iterator access via `Cls.alisten(meta=True)`.
+- **Sync + async.** The send, subscribe, query and session calls have `a`-prefixed siblings: `await msg.asend()`, `async for msg in Cls.alisten(): ...`, `async with z.abatch(): ...`. `on_message(cb)` detects `async def` callbacks and schedules them on the running loop.
+- **Batching primitives.** `with z.batch(): ...` collects sends and flushes them on exit, or discards them all if the block raises; `Cls.send_batch(items)` is the homogeneous-bulk shortcut. `asyncio` tasks get per-task isolation via `contextvars`.
 - **Multi-session from day one.** Module-level default, context-local scoped override via `with z.session(other): ...` (per thread and per asyncio task, and honoured by the `a`-prefixed wrappers), and per-call `session=` kwarg — all three resolve in a fixed precedence.
 - **msgpack default, JSON opt-in.** `ENCODING = 'json'` per class for human-readable traffic, or `zeared.debug = True` globally to force JSON everywhere (handy during development).
 - **One-import ergonomics.** `import zeared as z` re-exports every `seared` field type, the decorator (`@z.zeared` — renamed for flavour), and the error hierarchy alongside the zeared surface.
 - **Transport-mode-agnostic.** Peer, router/client, whatever — you build the session; zeared takes it.
-- **Declarative connection specs.** `z.SessionConfig` is a seared dataclass for the full connection spec; pass it via `config=` to `z.peer()` / `z.client()` / `z.open()`. Shareable, loggable, diffable.
+- **Declarative connection specs.** `z.SessionConfig` is a seared dataclass for the full connection spec; pass it via `config=` to `z.peer()` / `z.client()` / `z.hub()`, or open it directly with `z.open(cfg)`. Shareable, loggable, diffable.
 - **Connect-with-retry built in.** `z.client('tcp/router:7447', retry=True, max_backoff=30)` wraps `zenoh.open()` in an exponential-backoff loop — the boilerplate every daemon writes, now one kwarg.
 - **Topic introspection.** `Cls.published_topics()` and `z.published_topics()` surface the set of concrete keys emitted during the process lifetime — for dashboards, diagnostics, and audit tooling.
 
@@ -95,8 +95,11 @@ The full list is in [`CHANGELOG.md`](CHANGELOG.md).
 Presence no longer uses `__zeared/alive/<zid>` or `__zeared/will/**`; both
 key spaces are gone. A session that declares presence holds a liveliness
 token on each contract key, so grant `liveliness_token` on those keys and
-drop the `__zeared/will` / `__zeared/alive` grants. Taps that watched those
-keys watch the contract keys' liveliness instead.
+drop the `__zeared/will` / `__zeared/alive` grants. A subscriber with
+`on_online` / `on_offline` declares liveliness subscribers on the contract
+keys and runs a liveliness query on them, so it needs
+`declare_liveliness_subscriber` and `liveliness_query` there. Taps that
+watched the old keys watch the contract keys' liveliness instead.
 
 **2. Presence.**
 - `msg.register_will()` / `aregister_will()` → `Cls.declare_presence(**slots)`
@@ -133,20 +136,31 @@ arrive, as `REPLAY`. Before 0.4.0 replies carried no timestamp and every
 replay was delivered. A subscriber that relied on that passes
 `dedupe=False`, or calls `Cls.fetch_retained()` for the whole set.
 
-**5. Link signals and the re-attach walk.** After a hub restart, a
+**5. Republished retained values carry `replay: true` (wire change).** When
+a `ManagedSession`'s router link comes back, it re-puts its retained values
+with their original timestamps and `replay: true` next to `schema` in the
+attachment. A 0.4.0 subscriber dedupes the copy or delivers it as `REPLAY`;
+a 0.3.x subscriber ignores the key and treats the copy as a live publish.
+
+**6. Link signals and the re-attach walk.** After a hub restart, a
 `ManagedSession` re-fetches retained values and fires `on_link_restored`;
 `on_reconnect` still means only "the session was swapped". A config-opened
 session needs `auto_reconnect = true` in its `SessionConfig` to get any of
 this — without it `z.open` / `z.aopen` return a plain session, as before.
 `OnReconnectHandle` is now `z.CallbackHandle` (the old name is an alias).
 
-**6. Slots.** A single-segment slot bound to `Path`, or to base64 `Bytes`,
+**7. Factory keywords defer to `config=`.** `z.peer` / `z.client` (and
+`z.apeer` / `z.aclient`) given a `config=` but no `auto_reconnect=` or
+`probe_interval=` take those from the `SessionConfig`, so a config that sets
+them now applies. Pass the keyword to override it.
+
+**8. Slots.** A single-segment slot bound to `Path`, or to base64 `Bytes`,
 raises `TopicError` at first use: use `z.Bytes(encoding='hex')` or a `Str`
 slot. Publishing (`send`, `unretain`, `concrete_topic`, `ctx.reply`,
 `declare_presence`) with a `/` inside a single-segment value raises, where
 it used to go out on a key nobody received.
 
-**7. seared 0.4.0.** A wire `null` on a field that isn't `nullable=True`
+**9. seared 0.4.0.** A wire `null` on a field that isn't `nullable=True`
 reads as absent; a strict `Int` refuses a fractional float, and a strict
 `Bool` an int other than `0` or `1`; `ValidationError` messages gain a
 `Cls.path:` prefix; `Union(default=)` is `Union(fallback=)`; seared's
@@ -156,15 +170,13 @@ zeared's generated TypeScript writes `| null` only for `nullable=True`
 fields, and generated docs show `None` defaults: regenerate committed docs
 (`python -m zeared.doc … -o docs`) and types.
 
-**8. Pins.** Move both together: `zeared` to `tag = "v0.4.0"` and `seared` to
+**10. Pins.** Move both together: `zeared` to `tag = "v0.4.0"` and `seared` to
 `tag = "v0.4.0"`. uv reports conflicting URLs until the seared pin matches
 zeared's.
 
 ## Quick start
 
 ```python
-from typing import Optional
-
 import zeared as z
 
 
@@ -178,7 +190,8 @@ class Telemetry(z.Message):
 
 
 # Open a session and set it as the default.
-z.session = z.peer()
+sess = z.peer()
+z.session = sess
 
 # Subscribe before publishing.
 sub = Telemetry.on_message(
@@ -190,7 +203,7 @@ Telemetry(id=1,  x=1.5, y=2.5).send()
 Telemetry(id=42, x=0.0, y=0.0, label='home').send()
 
 sub.close()
-z.session.current.close()
+z.release(session=sess)    # zeared's cleanup, then session.close()
 ```
 
 `z.Int`, `z.Float`, `z.Str`, `z.Zeared`, `z.ValidationError`, etc. are
@@ -228,12 +241,29 @@ Telemetry(id=3, x=0.0, y=0.0).send(session=external)
 
 ## Async
 
-Every sync primitive has an `a`-prefixed sibling. Zenoh's Python bindings
-aren't natively async, so these wrap sync calls in `asyncio.to_thread`
-(for publishes and session-opens) and bridge the Zenoh callback thread to
-a `z.Stream` (for `alisten` and `aquery_iter`). Your event loop stays
-unblocked. A stream is bounded (`maxsize=1024` by default), drops its oldest
-message when full and counts the drop on `stream.dropped` (0.4.0); see
+Most of the sync surface has an `a`-prefixed sibling. On the class:
+`asend`, `asend_batch`, `aunretain`, `alisten` and `adeclare_presence`. On
+the module: `asend`, `asend_batch`, `aunretain` and `alisten` again, plus
+`aquery`, `aquery_one`, `aquery_iter`, `aon_query` and `afetch_retained`
+(each taking the class first); `abatch`; and the session openers `apeer`,
+`aclient` and `aopen`, which return async context managers.
+`concrete_topic`, `published_topics`, `release` and `hub` have none.
+
+Zenoh's Python bindings aren't natively async, so these wrap sync calls in
+`asyncio.to_thread` (for publishes, queries and session-opens) and bridge
+the Zenoh callback thread to a `z.Stream` (for `alisten` and `aquery_iter`).
+Your event loop stays unblocked, with three exceptions: `alisten` declares
+its subscriber on the loop thread, so on a `RETAINED` class the
+subscribe-time retained fetch (a blocking `session.get`) runs there too;
+`aon_query` declares inline, so an `async def` handler captures the loop;
+and leaving `async with z.abatch()` flushes its sends on the loop thread.
+
+`alisten`'s stream is bounded (`maxsize=1024` by default; `0` is
+unbounded), drops its oldest message when full and counts the drop on
+`stream.dropped` (0.4.0). `aquery_iter`'s stream is unbounded and takes no
+`maxsize`: a query ends, and its `timeout` is the bound. A stream exposes
+`maxsize` and `dropped`; `await stream.aclose()`, or leaving
+`async with stream:`, releases its subscriber or stops the query worker. See
 [`docs/stream.md`](docs/stream.md).
 
 ```python
@@ -249,24 +279,26 @@ class Telemetry(z.Message):
 
 
 async def main():
-    z.session = await z.apeer()              # async session factory
+    async with z.apeer() as sess:            # async session factory
+        z.session = sess
 
-    async def producer():
-        for i in range(100):
-            await Telemetry(id=i, x=float(i)).asend()
+        async def producer():
+            for i in range(100):
+                await Telemetry(id=i, x=float(i)).asend()
 
-    async def consumer():
-        async for msg in Telemetry.alisten():
-            print(msg.id, msg.x)
-            if msg.id == 99:
-                break                         # closes the subscriber
+        async def consumer():
+            async for msg in Telemetry.alisten():
+                print(msg.id, msg.x)
+                if msg.id == 99:
+                    break                     # closes the subscriber
 
-    # Or group into an atomic batch
-    async with z.abatch():
-        await Telemetry(id=42, x=1.0).asend()
-        await Telemetry(id=43, x=2.0).asend()
+        # Or group sends into a batch: flushed on exit, discarded on exception
+        async with z.abatch():
+            await Telemetry(id=42, x=1.0).asend()
+            await Telemetry(id=43, x=2.0).asend()
 
-    await asyncio.gather(producer(), consumer())
+        await asyncio.gather(producer(), consumer())
+    # z.release(session=sess) ran on block exit.
 
 
 asyncio.run(main())
@@ -331,7 +363,7 @@ Rules:
 - `send(retain=False)` on a `RETAINED = True` class publishes live without touching the cache.
 - `unretain()` requires `RETAINED = True`; the wire signal is a native Zenoh `DELETE` sample. `on_message`'s `cb` never sees DELETEs — register `on_message(cb, on_remove=...)` for the tombstone feed (below).
 - Queryables are declared lazily on the first retained publish — a class that declares `RETAINED = True` but never sends wastes nothing.
-- Retained fetches are deduplicated against the live stream by default — a retained reply whose wire payload matches the most recent live sample for the same concrete topic is suppressed. Set `DEDUPE = False` on the subscriber class to opt out.
+- Deliveries are deduplicated by default: per concrete key, the subscriber keeps the HLC timestamp of the newest sample it has delivered and drops any sample, live or replay, whose timestamp isn't newer. A retained reply carries its value's original timestamp, so a replay of a value the subscriber already holds is suppressed. A sample with no timestamp always passes. Set `DEDUPE = False` on the subscriber class to opt out (or `on_message(cb, dedupe=False)` for one subscriber).
 - Retained-fetch deliveries are marked `meta.origin = z.Origin.REPLAY` (live samples are `LIVE`), so a 2-arg callback can seed state from replays without re-acting on them. The fetch drains before `on_message` returns — after that, everything is live or marked. A subscription that never wants replay passes `retained_fetch=False` (skips the fetch — and its blocking `session.get` — at subscribe time and on every reconnect).
 - TTL via `RETENTION_TTL = N` (seconds) on the class, or `peer(retention_ttl=N)` for a session-wide fallback (`auto_reconnect=True` only). Class-level always wins; session-level fills in for unconfigured classes. Lazy expiration — entries are checked + pruned on the next subscriber retained-fetch.
 
@@ -397,15 +429,15 @@ all_ = Position.query(timeout=2.0)                     # omitted slots → '*'
 The handler either **returns** an instance / iterable / `None`, or replies
 explicitly with `ctx.reply(...)` / `ctx.reply_err(...)` / `ctx.reply_del(...)`
 for multi-reply, streaming, or error cases. `QueryContext` exposes the
-request: `key_expr`, parsed selector `params`, template `captures`, and a
-decoded `request` payload.
+request: `key_expr`, the full `selector` and its raw `parameters` string,
+the parsed `params`, template `captures`, and a decoded `request` payload.
 
 Rules:
 
 - `query()` blocks up to `timeout` and returns only successfully decoded OK replies. Error replies (`reply_err`) and decode failures route to `on_error=` (else log), each surfaced as a `z.QueryError`.
-- `query()` defaults to **no consolidation** — a query is a fan-out and each queryable may reply more than once; Zenoh's default consolidation would collapse same-key replies. Pass `consolidation=` to opt into dedup.
+- `query()` defaults to **no consolidation** — a query is a fan-out and each queryable may reply more than once; Zenoh's default consolidation would collapse same-key replies. Pass `consolidation=` to opt into dedup. `target=` (a `zenoh.QueryTarget`) passes through to `session.get` the same way.
 - Omitted key slots widen to `*`, and so does a value of `'*'`. To match part of one segment, put Zenoh's `$*` in the value (`robot='r-$*'`); a bare `*` must be a whole segment, and `'r-*'` is a Zenoh error. `params=` appends `?k=v`; `REQUEST = SomeClass` + `request=` sends a typed request payload.
-- `async def` handlers: register via `z.aon_query(Cls, handler)`; the query stays live until the coroutine resolves. Async getters: `z.aquery` / `z.aquery_one` / `z.aquery_iter` — generic in the message class since 0.3.5, so they return `list[Cls]` / `Cls | None` / `AsyncIterator[Cls]` and callers need no `cast`.
+- `async def` handlers: register via `z.aon_query(Cls, handler)`; the query stays live until the coroutine resolves. Async getters: `z.aquery` / `z.aquery_one` / `z.aquery_iter` — generic in the message class since 0.3.5, so they return `list[Cls]` / `Cls | None` / `z.Stream[Cls]` and callers need no `cast`.
 - **Streaming getters (0.3.4).** `Cls.iter_query(...)` and `z.aquery_iter(...)` yield each reply as it lands instead of collecting the window; `query` is `list()` over the same path. Pair with a generator handler for a query that is O(1) on both ends. `timeout` is the total duration and starts when the getter is *called*, not when iteration begins; `on_error` fires as you consume, so an iterator nobody iterates reports nothing.
 - **`query_one` short-circuits (0.3.4).** It returns at the first decoded reply rather than waiting out `timeout`. Consequence: `on_error` sees only failures arriving before that first good reply — use `query()` for the complete error picture.
 - **Generator handlers stream.** A `handler` that `yield`s replies each instance as it is produced, so serving a large result set never materialises it — `async def` generators included (0.3.2). A generator that raises part-way through routes to `on_error` and sends an error reply, so the getter knows the stream was truncated.
@@ -435,10 +467,12 @@ def on_request(msg: CliRequest, meta: z.ZenohMeta):
     handle(msg.cmd, correlation=corr_id)
 ```
 
-Anonymous trailing `**` matches one-or-more path segments (MQTT `#`
-equivalent). Templates with anonymous `**` are subscribe-only — `send()`
-on a non-publishable template raises `TopicError`. Useful as a catch-all
-subscriber:
+Anonymous trailing `**` matches one or more trailing path segments (the
+MQTT `#` counterpart). Zenoh's `**` also matches zero, so a sample on the
+bare prefix (`peer`, for `peer/**`) reaches the subscriber, matches no
+template and goes to `on_error` as a `DecodeError`. Templates with
+anonymous `**` are subscribe-only — `send()` on a non-publishable template
+raises `TopicError`. Useful as a catch-all subscriber:
 
 ```python
 @z.zeared
@@ -469,11 +503,11 @@ Rules for `{name**}`:
 
 - Trailing only — must be the final path segment.
 - At most one per template.
-- Empty value (`path=''`) raises `TopicError` at render — Zenoh's `**`
-  is one-or-more segments; an empty tail wouldn't match the wire form.
+- Empty value (`path=''`) raises `TopicError` at render — the key would
+  end in `/`, which no subscriber's `{path**}` capture matches.
 - Field binding (when declared as a slot on the class): must be
-  `z.Str(many=False, keyed=False)`. Other types are rejected at class
-  build time; non-string path tails would lose information through
+  `z.Str(many=False, keyed=False)`. Other types raise `TopicError` at
+  first use; non-string path tails would lose information through
   coercion.
 - Capture-only `{name**}` works the same as `{name}` — undeclared slots
   land on `meta.captures[name]` as a single slash-containing string.
@@ -636,6 +670,11 @@ PeerStatus.on_message(handle_status, on_online=online, on_offline=offline)
   `on_offline` get a `ZenohMeta` whose `captures` hold the key's slots.
   The typed "up" is your retained record; `cb` never sees presence events,
   and `on_remove` stays the tombstone feed.
+- **The token.** `declare_presence` takes `topic=` (a declared template) and
+  `session=` as `send` does, and returns a `z.PresenceToken`: `.key` is the
+  concrete key and `.active` whether the session still holds it through
+  this handle. `undeclare()` (idempotent), or leaving `with token:`,
+  withdraws it. The handle survives a reconnect.
 - **Tokens aggregate by key.** A key reads online when its first token
   appears and offline when its last one goes, from whichever sessions held
   them. Declaring a key the session already holds returns the same
@@ -652,9 +691,12 @@ PeerStatus.on_message(handle_status, on_online=online, on_offline=offline)
   `on_link_lost` up to one `probe_interval` later, so a consumer that wants
   "unknown" rather than "down" holds offline events that long, then shows
   "unknown" until `on_link_restored`.
-- **ACL:** grant `liveliness_token` on the contract keys a session holds.
-  The `__zeared/alive/**` and `__zeared/will/**` keys of earlier releases
-  are gone.
+- **ACL:** grant `liveliness_token` on the contract keys a session holds. A
+  subscriber with `on_online` / `on_offline` declares liveliness
+  subscribers on the contract keys and runs a liveliness query on them, so
+  it needs `declare_liveliness_subscriber` and `liveliness_query` there
+  (Zenoh's access-control message names). The `__zeared/alive/**` and
+  `__zeared/will/**` keys of earlier releases are gone.
 
 Async counterpart: `await PeerStatus.adeclare_presence(name='alice')`. See
 [`docs/presence/presence.md`](docs/presence/presence.md).
@@ -729,8 +771,9 @@ z.session = session
 z.release(session=session)
 ```
 
-For most daemons, the context-manager form is more ergonomic — no
-explicit `release` call needed, and exceptions still trigger cleanup:
+For a `ManagedSession` (`auto_reconnect=True`), the context-manager form
+is more ergonomic — no explicit `release` call needed, and exceptions
+still trigger cleanup:
 
 ```python
 with z.peer(auto_reconnect=True) as sess:
@@ -743,13 +786,28 @@ async with z.apeer(auto_reconnect=True) as sess:
     await Telemetry(id=1, x=1.0, y=2.0).asend(session=sess)
 ```
 
-What it does, in order: closes every zeared subscriber on the session
-(cancelling watchdogs along the way), drops the publisher cache, drops
-the retention cache (undeclares queryables), withdraws the session's
-presence tokens (which peers see as offline), then calls
-`session.close()`. The order matters — the tokens go first so their
-DELETEs escape the transport before it tears down. Idempotent on a second
-call.
+A raw session (no `auto_reconnect`) is a context manager too, but it's
+Zenoh's own: leaving `with z.peer() as sess:` closes the session and skips
+zeared's release walk, so zeared's per-session registries (subscribers,
+publisher and retention caches, presence state) keep holding it. Call
+`z.release(session=sess)` for a raw session. The async openers
+(`async with z.apeer()` / `z.aclient()` / `z.aopen()`) run `z.release` on
+exit either way.
+
+What `z.release` does, in order: for a `ManagedSession`, stops its probe
+and reconnect threads; closes every zeared subscriber on the session
+(cancelling watchdogs and undeclaring its liveliness subscribers), then
+the session's user queryables; drops the publisher cache; drops the
+retention cache (undeclaring its queryables); withdraws the session's
+presence tokens (which peers see as offline); then calls `session.close()`.
+The order matters — the tokens are withdrawn while the session is still
+open, so their DELETEs reach peers before the transport tears down.
+Idempotent on a second call.
+
+Four of the walks are also public, for dropping zeared's state without
+closing the session: `z.clear_publisher_cache`, `z.clear_retention_cache`,
+`z.clear_queryable_cache` and `z.clear_presence_state` each take a
+keyword-only `session=`, and clear every session's state without it.
 
 The `session=` kwarg is keyword-only and required: `z.release()` with no
 arguments raises `TypeError`. Explicit-always — no implicit module-default
@@ -757,24 +815,25 @@ fallback.
 
 For process-shutdown hooks where you don't track every session you've
 opened, `z.release_all()` walks every per-session registry and tears
-down each unique session in turn. Idempotent on a second call. As of
-0.0.17, the walk also covers `ManagedSession` wrappers that have no
-zeared-level state registered against them (a session opened with
-`auto_reconnect=True` but never subscribed/published) — their probe +
-reconnect threads were previously invisible to `release_all`.
+down each unique session in turn. Idempotent on a second call. The walk
+also covers `ManagedSession` wrappers that have no zeared-level state
+registered against them (a session opened with `auto_reconnect=True` but
+never subscribed/published), stopping their probe + reconnect threads.
 
 ```python
 import atexit
 atexit.register(z.release_all)
 ```
 
-## Wire format and binary fields
+## Wire format
 
-When a class declares `ENCODING = 'msgpack'` (or relies on the default
-when `z.debug = False`), zeared threads `format='msgpack'` into seared's
-`dump` / `load` so binary fields (`Bytes`, `NDArray`) emit native bytes
-on the wire — saving the ~33% base64 inflation that JSON-safe encoding
-imposes.
+msgpack by default — compact, binary, declared to Zenoh as
+`application/msgpack`. When a class declares `ENCODING = 'msgpack'` (or
+relies on the default when `z.debug = False`), zeared threads
+`format='msgpack'` into seared's `dump` / `load`, so `Bytes` fields emit
+native bytes on the wire — saving the ~33% base64 inflation that
+JSON-safe encoding imposes — and `T` and `Tuple` fields pass the hint to
+what they hold. (`NDArray` is nested lists under either encoding.)
 
 ```python
 @z.zeared
@@ -788,9 +847,26 @@ class Frame(z.Message):
 Frame(id=1, bytes_=b'\x00\x01\x02').send()
 ```
 
-Set `ENCODING = 'json'` (or toggle `z.debug = True` globally) to keep
-JSON-safe wire shapes for fields that need them. Both directions
-round-trip cleanly.
+Opt into JSON per class for human-readable traffic or JSON-safe wire
+shapes:
+
+```python
+@z.zeared
+class Event(z.Message):
+    TOPIC = 'events/raw'
+    ENCODING = 'json'
+    payload: str = z.Str(required=True)
+```
+
+Or flip the global debug flag to force JSON for every message class, without
+editing any of them:
+
+```python
+z.debug = True      # every msg.send() and subscriber now uses JSON
+```
+
+The subscriber side honours whatever encoding the sender declared on the Zenoh
+sample, so mixed fleets interoperate. Both directions round-trip cleanly.
 
 ## Seared field types in zeared messages
 
@@ -806,15 +882,16 @@ import pandas as pd
 class Report(z.Message):
     TOPIC = 'report/{id}'
     id:        int    = z.Int(required=True)
-    amount:    D      = z.Decimal(required=True)              # 0.1.9+
-    location:  P      = z.Path(required=True)                 # 0.1.9+
-    rows:      pd.DataFrame = z.PandasFrame(required=True)    # 0.1.10+ (extra)
+    amount:    D      = z.Decimal(required=True)
+    location:  P      = z.Path(required=True)
+    rows:      pd.DataFrame = z.PandasFrame(required=True)
 ```
 
 `Decimal` round-trips losslessly via string; `Path` normalises to POSIX
-on the wire; `PandasFrame` / `PolarsFrame` use the records form
-(`[{col: val}, ...]`). `Union(fallback=Variant)` (named `default=` before
-seared 0.4.0) gives graceful fallback for unknown tags. See seared's docs.
+on the wire; `PandasFrame` / `PolarsFrame` (behind seared's `pandas` /
+`polars` extras) use the records form (`[{col: val}, ...]`).
+`Union(fallback=Variant)` (named `default=` before seared 0.4.0) gives
+graceful fallback for unknown tags. See seared's docs.
 
 ## Multiple topics per class
 
@@ -857,6 +934,9 @@ def on_telemetry(msg: Telemetry, meta: z.ZenohMeta) -> None:
 Telemetry.on_message(on_telemetry)
 ```
 
+`on_message` returns a `z.Subscriber` handle. `sub.close()` undeclares it
+(idempotent), and so does leaving `with Telemetry.on_message(cb) as sub:`.
+
 ## Publisher caching and batching
 
 Every message class sets `PUBLISHER: ClassVar[bool | int] = True` by default.
@@ -879,9 +959,12 @@ Overflowing the cap falls back to `session.put()` and emits a one-time
 `warnings.warn`; set `PUBLISHER = False` or raise the cap if you expect
 wildly diverse keys.
 
-`with z.batch()` groups sends into an atomic flush — useful when you want
-to send N messages together or not at all (exceptions discard the whole
-group). `Cls.send_batch(items)` is the homogeneous-bulk shortcut.
+`with z.batch()` holds sends until the block exits, then flushes them in
+order; an exception escaping the block discards the whole group, so none
+is sent. The flush itself isn't transactional: a send that fails mid-flush
+raises, and the sends before it are already out. `Cls.send_batch(items)` is
+the homogeneous-bulk shortcut (async: `await Cls.asend_batch(items)` or
+`await z.asend_batch(Cls, items)`).
 
 ```python
 with z.batch() as b:
@@ -894,29 +977,6 @@ Telemetry.send_batch(
     session=external,
 )
 ```
-
-## Wire format
-
-msgpack by default — compact, binary, declared to Zenoh as
-`application/msgpack`. Opt into JSON per class:
-
-```python
-@z.zeared
-class Event(z.Message):
-    TOPIC = 'events/raw'
-    ENCODING = 'json'
-    payload: str = z.Str(required=True)
-```
-
-Or flip the global debug flag to force JSON for every message class, without
-editing any of them:
-
-```python
-z.debug = True      # every msg.send() and subscriber now uses JSON
-```
-
-The subscriber side honours whatever encoding the sender declared on the Zenoh
-sample, so mixed fleets interoperate.
 
 ## Session factories
 
@@ -937,7 +997,10 @@ z.client(
 )
 ```
 
-Async siblings (`z.apeer`, `z.aclient`) take the same kwargs.
+Async siblings (`z.apeer`, `z.aclient`, and `z.aopen(cfg)`) take the same
+arguments and layer kwargs over `config=` the same way. Each returns an
+async context manager (`async with z.apeer() as sess:`) that opens the
+session off the loop and runs `z.release` on exit.
 
 For declarative, shareable connection specs, use `z.SessionConfig`:
 
@@ -952,10 +1015,19 @@ sess = z.open(cfg)              # unified entry, dispatches on cfg.mode
 # or: sess = z.client(config=cfg)
 ```
 
-When both `config=` and explicit retry kwargs are passed, the kwargs win
-(per-call overrides over a shared base spec). For raw Zenoh config
-overrides on top of either form, pass `zenoh_config=<zenoh.Config>` (the
-kwarg was renamed from `config=` in 0.0.6).
+`z.open` dispatches `z.Mode.PEER` to `z.peer`, `z.Mode.CLIENT` to
+`z.client` and `z.Mode.ROUTER` to `z.hub`; a router config with
+`auto_reconnect` set raises `ValueError`.
+
+When both `config=` and explicit kwargs are passed (endpoints, retry and
+backoff, `auto_reconnect`, `probe_interval`, ...), the kwargs win
+(per-call overrides over a shared base spec); a kwarg left out defers to
+`config=`. A raw `zenoh_config=<zenoh.Config>` is the escape hatch below
+both, and it *replaces* the config zeared would build rather than layering
+on it: zeared sets none of its own settings on it (not the mode,
+timestamping, or shared memory off), writes only the endpoints you pass,
+and ignores a `SessionConfig`'s `zenoh_config_file` / `zenoh_overrides`.
+Set what you need in it yourself.
 
 `SessionConfig` ships with immutable-style builders for composable
 tweaks — each returns a new instance:
@@ -976,6 +1048,18 @@ Builder set: `.replace(**kwargs)`, `.with_retry(retry=True, **knobs)`,
 `.with_connect(*endpoints)` / `.with_listen(*endpoints)` (append),
 `.set_router(router)` (replace). The `with_*` / `set_*` split mirrors
 the field shape — list fields append, scalar fields replace.
+
+`SessionConfig.from_env()` reads a spec from the environment, one variable
+per field (`ZEARED_SESSION_MODE`, `ZEARED_SESSION_ROUTER`,
+`ZEARED_SESSION_CONNECT` as a comma-separated list, ...; `prefix=` replaces
+`ZEARED_SESSION_`), and `SessionConfig.from_toml(path)` reads a TOML file
+with the fields at the top level. Raw Zenoh settings the typed fields
+don't cover (TLS/mTLS, access control, scouting) go in `zenoh_config_file`,
+a path to a JSON5 Zenoh config, and `zenoh_overrides`, a dict of config
+paths to values (`{'scouting/multicast/enabled': False}`); the overrides
+aren't read from the environment. zeared builds the session's config from
+the file, then applies its mode, timestamping and shared memory off, then
+the overrides.
 
 ## NAT traversal: the relay hub
 
@@ -1003,15 +1087,19 @@ python -m zeared.hubd --listen tcp/0.0.0.0:7447
 ```
 
 ```bash
+# --connect links to another hub (multi-hub mesh);
+# --config is the TLS / access-control config.
 python -m zeared.hubd \
   --listen tls/0.0.0.0:7447 \
-  --connect tls/hub-b.example.com:7447 \   # link to another hub (multi-hub mesh)
-  --config /etc/zeared/hub.json5           # TLS / access-control config
+  --connect tls/hub-b.example.com:7447 \
+  --config /etc/zeared/hub.json5
 ```
 
 The daemon is stateless and holds no zeared message state — it routes opaque
 samples, so it needs none of your message classes installed. It stops cleanly on
-SIGINT/SIGTERM.
+SIGINT/SIGTERM. `--listen` and `--connect` repeat; `--no-timestamping` leaves
+HLC timestamping off (it's on by default), and `--log-level` sets the logging
+level (default `INFO`; logs go to stdout).
 
 Notes and limits:
 
@@ -1020,6 +1108,14 @@ Notes and limits:
   (a JSON5 Zenoh config) or `z.hub(zenoh_config=...)`. `--listen`/`--connect`
   override the file's endpoints when given; without them, the file's stand
   (and a hub with listen endpoints nowhere binds `tcp/0.0.0.0:7447`).
+  The daemon applies router mode, timestamping (unless `--no-timestamping`)
+  and shared memory off over its `--config` file, as
+  `z.hub(config=z.SessionConfig(mode=z.Mode.ROUTER, zenoh_config_file=...))`
+  does over its file. A raw `zenoh_config=` is
+  taken as given: set `mode` to `"router"`, `timestamping/enabled` to
+  `true` and `transport/shared_memory/enabled` to `false` in it yourself.
+- **`z.hub()` takes `config=` too** (a `SessionConfig`; `z.open` on a
+  `Mode.ROUTER` config calls it), along with the retry kwargs.
 - **Single hub is a SPOF.** For HA, run multiple hubs and link them
   (`--connect` / `z.hub(connect=[...])`); nodes can list several routers.
 - **Hub returns a raw `zenoh.Session`** — a listener has no zeared-owned
@@ -1054,10 +1150,12 @@ raw = sess.raw()                    # for handing to non-zeared code;
 
 A config-opened session opts in the same way (0.4.0): set
 `auto_reconnect = true` (and optionally `probe_interval`, `resync_jitter`,
-`resync_concurrency`) in its `SessionConfig`, TOML `[zenoh]` table or
-`ZEARED_SESSION_*` environment, and `z.open` / `z.aopen` return a
-`ManagedSession`. Without it, a config-opened session is a plain one: no
-reconnect, no link signals, no re-fetch after a hub restart.
+`resync_concurrency`) in its `SessionConfig`, whether built in code, read
+from a TOML file by `SessionConfig.from_toml(path)` (fields at the top
+level), or read from the environment by `SessionConfig.from_env()`
+(`ZEARED_SESSION_AUTO_RECONNECT=true`, ...), and `z.open` / `z.aopen`
+return a `ManagedSession`. Without it, a config-opened session is a plain
+one: no reconnect, no link signals, no re-fetch after a hub restart.
 
 Detection: an active probe (`is_closed()` / `zid()` poll) catches dead
 sessions on subscriber-only daemons; send-failure detection catches the
@@ -1085,6 +1183,11 @@ at most `resync_concurrency` workers (default 4); with nothing to fetch it
 skips both. A router that keeps a fixed zid and restarts within one
 `probe_interval` is invisible to the probe.
 
+The link watch compares the session's set of routers, so it needs a session
+attached to a router (a client of a hub, say); a pure peer mesh has none,
+and the probe never fires the link signals there. A dead-session reconnect
+fires `on_link_lost` / `on_link_restored` in any mode.
+
 Restoration: cached publishers are invalidated (the next `send()`
 re-declares against the new raw, so nothing is dropped on the far side of
 a reconnect), subscribers and queryables are re-declared against the new
@@ -1099,8 +1202,11 @@ Per-subscriber opt-out: `Cls.on_message(cb, auto_reconnect=False)` keeps
 that subscription bound to the original raw — useful when application
 state must survive the boundary explicitly.
 
-`probe_interval=0` (or `None`) disables the active probe; only
-send-failure detection runs.
+`probe_interval=0` (or `None`) disables the active probe, and with it
+everything the probe drives: a dead session is detected only by a failing
+send, and the router link isn't watched, so a hub restart fires no
+`on_link_lost` / `on_link_restored` and runs no republish or re-attach
+walk. A reconnect that a send failure triggers still fires both signals.
 
 Daemons that need to react — log it, refresh caller-side caches, tell
 their own clients to re-sync — register a callback:
@@ -1200,6 +1306,13 @@ seared field and set `TS_TYPE = 'SecretRef'` (the type the member gets) and, opt
 `TS_PRELUDE = 'export type SecretRef = string & {...};'` (an alias emitted once, before the
 interfaces). Fields without `TS_TYPE` map by class name as before.
 
+`zeared.doc` also writes Markdown reference docs, a page per class, with a
+message's topic and wire contract above its fields:
+`python -m zeared.doc fleet_messages -o docs` (the default output is
+`./docs`). It's installed as the `zeared-doc` script too; `--check` writes
+nothing and exits non-zero when the committed docs have drifted. See
+[`docs/doc/doc.md`](docs/doc/doc.md) for both generators.
+
 ## Errors
 
 ```
@@ -1208,25 +1321,27 @@ ZearedError
 ├── TopicError
 ├── SessionDeadError
 ├── SubscriptionError              # declare-time, fatal to one subscription
+├── QueryableError                 # declare-time, or serving-side on_error
 └── SubscriberError                # dispatch-time, routed to on_error
     ├── DecodeError
     │   └── SchemaMismatchError
     ├── CallbackError
-    └── RetainedFetchError
+    ├── RetainedFetchError
+    └── QueryError                 # getting side, per reply
 ```
 
 | Exception | Raised when |
 |-----------|-------------|
 | `z.NoSessionError`      | No session is resolvable (no kwarg, no scope, no default) |
-| `z.TopicError`          | `TOPIC` is missing, malformed, references undeclared fields, or violates the namespace reservation (`__zeared/...`) |
+| `z.TopicError`          | `TOPIC` is missing or malformed (bad template syntax, a format spec, a non-trailing `**`), or violates the namespace reservation (`__zeared/...`); a single-segment slot is bound to `Path` or base64 `Bytes`, or a `{name**}` slot to anything but `Str`; a publish would put a `/` inside a single-segment value; a slot is missing when a key is built; a `topic=` override matches no declared template (or a subscribe-only one); `retain=True`, `unretain` or `fetch_retained` on a non-`RETAINED` class; `on_query` on a `RETAINED` class; presence calls (`declare_presence`, `on_online` / `on_offline`) on a class without `LIVELINESS` |
 | `z.SessionDeadError`    | A `ManagedSession` op (`put`/`get`/`delete`/`zid`/...) is invoked while the session is `RECONNECTING` or `DEAD` |
-| `z.SubscriptionError`   | `Subscriber._declare` — declaring the underlying Zenoh subscriber failed (fatal to that subscription) |
+| `z.SubscriptionError`   | `on_message` — declaring the underlying Zenoh subscriber, or a presence feed's liveliness subscribers, failed; or an `async def` callback was given with no running event loop (fatal to that subscription) |
 | `z.SubscriberError`     | Parent for dispatch-time errors. Routed to `on_error=`; subscription continues |
 | `z.DecodeError`         | Sample's payload failed to `codec.unpack` / `Message.load`. Subclass of `SubscriberError` |
 | `z.SchemaMismatchError` | Wire-attached `schema` ≠ class's `SCHEMA`. Subclass of `DecodeError` |
 | `z.CallbackError`       | User's `cb(msg)` itself raised. Subclass of `SubscriberError` |
 | `z.RetainedFetchError`  | A retained-fetch reply failed to dispatch. Subclass of `SubscriberError` |
-| `z.QueryableError`      | `on_query` declare failed, or on a `RETAINED` class (fatal to that queryable) |
+| `z.QueryableError`      | Declaring a queryable failed, or an `async def` handler had no running loop at declare time (fatal to that queryable). Also handed to the serving side's `on_error` when a query's context can't be built, a reply fails, or the handler raises; the queryable keeps serving |
 | `z.QueryError`          | A `query()` reply was an error or failed to decode. Routed to `on_error=`; the query keeps collecting. Subclass of `SubscriberError` |
 
 All extend `z.ZearedError` (which extends `Exception`). Dispatch-time
@@ -1292,15 +1407,22 @@ def on_status(msg: PeerStatus, meta: z.ZenohMeta):
 
 `SCHEMA` rides as a Zenoh sample attachment (msgpack-encoded
 `{schema: '1.0'}`). Subscribers with their own `SCHEMA` set compare
-against the wire value automatically — mismatches drop the sample and
-route via `on_error` as `SchemaMismatchError`. Each
-`(sender_zid, observed_schema)` mismatch warns once per subscriber, so
-a misaligned peer doesn't spam the log on every message.
+against the wire value automatically and drop every sample whose schema
+differs (or is missing). The first mismatch from each
+`(sender zid, observed schema)` pair goes to `on_error` as a
+`SchemaMismatchError` (or is logged as a warning without one); later ones
+from the same pair drop silently, so a misaligned peer doesn't spam the log
+on every message. The sender is the zid in the sample's HLC timestamp
+(0.4.0); a sample without a timestamp has no sender zid, so all such
+samples share one pair per schema. Each subscriber keeps its own pairs and
+forgets them after a reconnect.
 
 `meta.issued_at` is a `datetime.datetime` (UTC) parsed from Zenoh's HLC
-timestamp on the sample. Requires timestamping (auto-enabled by
-`z.peer()` / `z.client()` since 0.0.13). `None` when unavailable
-(sessions opened without timestamping).
+timestamp on the sample. Requires a timestamp: zeared's factories enable
+timestamping in the configs they build, and a retained send stamps its own
+(0.4.0). `None` when the sample carries none (e.g. a non-retained send from
+a session opened with `timestamping=False`, or with a raw `zenoh_config=`
+that doesn't enable it).
 
 ### `SCHEMA` versioning conventions
 
@@ -1325,31 +1447,41 @@ just compares strings.
 `on_error` callbacks receive typed exceptions so handlers can branch:
 
 ```python
+import queue
+
+failures: queue.Queue[Exception] = queue.Queue()
+
 def on_err(exc: z.SubscriberError, raw: bytes):
     if isinstance(exc, z.SchemaMismatchError):
         log_drift(exc)
     elif isinstance(exc, z.DecodeError):
         log_corrupt_payload(exc, raw)
     elif isinstance(exc, z.CallbackError):
-        # user code blew up — surface to the caller
-        raise exc.__cause__ from exc
+        # user code blew up — hand it to the main thread
+        failures.put(exc)
 
 PeerStatus.on_message(handle, on_error=on_err)
 ```
 
+A subscriber's `on_error` runs on Zenoh's callback thread, and anything it
+raises is caught and logged alongside the original error (a queryable's
+`on_error` too), so it can't surface to the caller. To act on a failure
+elsewhere, hand it off, as above. The getters' `on_error` (`query()`,
+`fetch_retained()`) runs on the calling thread instead.
+
 Hierarchy: `SubscriberError` → `DecodeError` (→ `SchemaMismatchError`)
-/ `CallbackError` / `RetainedFetchError`. Each wraps the original
-exception via `__cause__`. Catch generically (`except Exception` or
-`except SubscriberError`) for unchanged behaviour; use `isinstance`
-to discriminate.
+/ `CallbackError` / `RetainedFetchError` / `QueryError`. Each wraps the
+original exception via `__cause__`. Handle them generically (any
+`SubscriberError`) or use `isinstance` to discriminate.
 
 ## Per-subscriber dedupe override
 
-Class-level `DEDUPE = True` (default for `RETAINED` classes) suppresses
-retention-fetch replays that match a live sample's timestamp: each retained
-reply carries the timestamp its value was published with (0.4.0; earlier
-replies carried none, so every replay got through). A specific subscriber
-can opt out:
+Class-level `DEDUPE = True` (default for `RETAINED` classes) drops any
+sample, live or replay, whose timestamp isn't newer than the last one the
+subscriber delivered on that key, so a retention-fetch replay of a value it
+already received is suppressed: each retained reply carries the timestamp
+its value was published with (0.4.0; earlier replies carried none, so every
+replay got through). A specific subscriber can opt out:
 
 ```python
 audit_sub = Telemetry.on_message(audit_cb, dedupe=False)  # see every replay
@@ -1365,7 +1497,7 @@ prod_sub  = Telemetry.on_message(prod_cb)                 # class default (dedup
 - **Async `on_query` holds the query until the coroutine resolves.** A slow async handler pins the underlying `zenoh.Query` for its lifetime. Correct, but a long-running handler ties up the query.
 - **Query parameters are a `str → str` dict.** `params=` maps to the Zenoh selector (`?k=v`); typed parameters are deferred. For a rich, typed request use `REQUEST = SomeClass` + `request=` (sent as the query payload) instead.
 - **Async is a wrapper, not native.** Zenoh's Python bindings are sync-only; `asend` / `alisten` / `aunretain` wrap via `asyncio.to_thread` and a callback-to-queue bridge. Correct, but not zero-overhead — see Benchmarks.
-- **Retention dedupe is timestamp-dependent.** Dedupe needs HLC timestamps on samples; without them it's a no-op pass-through. Zeared's factory injects `timestamping/enabled=true` into the built `zenoh.Config` by default (0.0.13), so most callers don't need to think about this — opt out via `z.peer(timestamping=False)` or by managing your own `zenoh_config=`. If you supply `zenoh_config=`, you're in charge: enable timestamping yourself or set `DEDUPE = False` on the subscriber class. A sample with no timestamp always passes through dedupe.
+- **Retention dedupe is timestamp-dependent.** Dedupe orders samples by their HLC timestamps; a sample with no timestamp always passes through and doesn't move the watermark. Retained sends stamp their own puts (0.4.0), so retained publishes and replies dedupe whatever the session's config; a `send(retain=False)` carries a timestamp only from a session with timestamping on. zeared's factories enable `timestamping/enabled=true` in the config they build, so most callers don't need to think about this — opt out via `z.peer(timestamping=False)`. A raw `zenoh_config=` is taken as given, so you're in charge: enable timestamping in it yourself, or that session's non-retained sends carry none.
 - **Retention TTL is lazy.** `RETENTION_TTL = N` opts into time-based expiration of cached entries, but expiration is only checked when a subscriber issues a retained-fetch (`_handle_query`) — topics that nobody ever queries may keep stale entries in memory. Acceptable for typical use; no background sweeper.
 - **Retry only on `zenoh.open()` raise (without auto-reconnect).** Vanilla `z.peer()` / `z.client()` retry only on the initial open. With `auto_reconnect=True`, mid-flight session deaths are detected and rebuilt; without it, a session dying silently means the next send fails.
 - **`{name**}` and anonymous `**` are trailing-only.** Non-trailing multi-segment forms (`a/**/c`, `peer/{cluster**}/{host}/status`) aren't supported.
@@ -1374,11 +1506,11 @@ prod_sub  = Telemetry.on_message(prod_cb)                 # class default (dedup
 - **Format specs rejected in templates.** `{x:03d}` / `{x!r}` / `{x**:fmt}` raise `TopicError`. Plain `{name}` and `{name**}` are the only slot syntaxes.
 - **Publish-side `topic=` is restrictive.** The override must match one of the declared templates (`TOPIC` or an entry in `EXTRA_TOPICS`).
 - **One `z.Union` field per class.** Multiple would collide on top-level wire keys.
-- **No automatic session-close detection on caches without auto-reconnect.** Zenoh sessions don't support weakrefs; when running raw, cached publishers are undeclared on the next failing send (the cache, and its `published_topics()` history, stay until `z.release(session=sess)` or `clear_publisher_cache(session=sess)`), and retention queryables go on a `clear_*_cache(session=sess)` call. When running managed they are lazy-rebuilt after reconnect.
+- **No automatic session-close detection on caches without auto-reconnect.** Zenoh sessions don't support weakrefs; when running raw, cached publishers are undeclared on the next failing send (the cache, and its `published_topics()` history, stay until `z.release(session=sess)` or `clear_publisher_cache(session=sess)`), and retention queryables go on a `z.clear_retention_cache(session=sess)` call (or `z.release`). When running managed they are lazy-rebuilt after reconnect.
 - **Presence is seen by subscribers only.** Non-subscribers never observe an offline event. Graceful close withdraws a token the same as a crash — if you need distinct records, publish explicitly before close. A session that holds a key *and* watches it sees the key go offline when another holder leaves; to everyone else a key goes offline only when its last token goes.
 - **`origin_zid` is attribution, not authentication.** The zid comes from the sample's HLC, and `put(timestamp=...)` lets a publisher claim any value. Enforce origin at the router (Zenoh access control on a TLS certificate), not from this field.
 - **Dedupe tolerates a bounded clock skew.** A sample whose HLC is more than `DEDUPE_MAX_SKEW` seconds (default 300) ahead of local time is delivered but does not advance the dedupe watermark — otherwise one far-future timestamp blinds the subscriber to that key until restart. Set `None` to disable.
-- **Link detection is a poll.** The probe checks the router link every `probe_interval` (default 10 s), so a hub outage is noticed up to that late, and a router that keeps a fixed zid and restarts within one interval goes unseen. Link signals and the re-attach walk need a `ManagedSession` (`auto_reconnect=True`); see *Auto-reconnect*.
+- **Link detection is a poll.** The probe checks the router link every `probe_interval` (default 10 s), so a hub outage is noticed up to that late, and a router that keeps a fixed zid and restarts within one interval goes unseen. Link signals and the re-attach walk need a `ManagedSession` (`auto_reconnect=True`), and the probe's link watch needs a router: in a pure peer mesh only a dead-session reconnect fires the link signals. See *Auto-reconnect*.
 - **`send()` raises during the reconnect window.** With `auto_reconnect=True`, ops on a session in `RECONNECTING` or `DEAD` state raise `SessionDeadError`. No buffering / blocking — callers that want either build it on top.
 - **Raw `threading.Thread` doesn't propagate batch context.** `with z.batch():` + raw thread spawn means the worker bypasses the batch. Use `asyncio.to_thread()` or `contextvars.copy_context().run()` for thread-spawned workers. See `docs/batch.md`.
 

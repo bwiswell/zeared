@@ -3,8 +3,8 @@
 Hard refs (no weakref) since ``Subscriber`` uses ``__slots__`` and we explicitly
 deregister on close. ``z.release(session=sess)`` walks this set.
 
-Sibling helper inside the ``subscriber`` Pattern B subdir. Pulled out
-of ``subscriber.py`` to keep the class file under the 300-line cap.
+Sibling helper inside the ``subscriber`` Pattern B subdir, kept apart from
+the ``Subscriber`` class in ``subscriber.py``.
 """
 
 from __future__ import annotations

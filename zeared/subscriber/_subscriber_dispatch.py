@@ -116,8 +116,8 @@ def _adapt_async_callback(cb: Callable) -> Callable:
     except RuntimeError as e:
         msg = (
             'async callback passed to on_message, but no running event loop '
-            'at subscribe time; call from within an async context or use '
-            'Cls.alisten() instead'
+            'at subscribe time; subscribe from inside a running loop (in a '
+            'coroutine), or pass a sync callback'
         )
         raise SubscriptionError(msg) from e
     inner = cb

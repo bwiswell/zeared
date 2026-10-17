@@ -1,4 +1,4 @@
-# `_module_class.py` — `_ZearedModule` metaclass
+# `_module_class.py` — `_ZearedModule` module class
 
 Subclass of `types.ModuleType` that intercepts `zeared.session = sess`
 assignments so the dual-role `_SessionHandle` keeps its identity while

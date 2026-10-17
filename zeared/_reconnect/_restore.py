@@ -24,7 +24,7 @@ _QUIET_ATTEMPTS = 3
 
 
 # ---------------------------------------------------------------------------
-# Backoff loop — close cousin of __init__.py::_open_with_retry, but with a
+# Backoff loop — close cousin of _factories.py::_open_with_retry, but with a
 # cancel signal so z.release() can interrupt a long reconnect.
 # ---------------------------------------------------------------------------
 

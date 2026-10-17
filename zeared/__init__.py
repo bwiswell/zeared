@@ -8,7 +8,8 @@ Heavy lifting lives elsewhere:
 - ``_factories.py`` — session-opening factories (``peer`` / ``client`` /
   ``open`` plus retry / config-build helpers).
 - ``_release.py`` — session-tearing-down (``release`` / ``release_all``).
-- ``_module_class.py`` — the ``_ZearedModule`` metaclass.
+- ``_module_class.py`` — ``_ZearedModule``, the package's module class (a
+  ``types.ModuleType`` subclass).
 
 Re-exports the entire seared public surface so users can ``import
 zeared as z`` and pick up every Field type, the decorator (renamed

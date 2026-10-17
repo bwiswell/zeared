@@ -61,8 +61,10 @@ class QueryContext:
         selector: the full selector string (key expression + parameters).
         parameters: the raw parameter string (``''`` when none).
         params: ``parameters`` parsed into a ``{str: str}`` dict.
-        captures: template-slot values extracted from ``key_expr`` — empty
-            when the query used a wildcard the template regex can't bind.
+        captures: template-slot values extracted from ``key_expr`` by the
+            template it matched. A wildcard chunk the template can bind comes
+            through as written (``{'robot': '*'}`` or ``{'robot': 'r-$*'}``);
+            a key that matches no template (``fleet/**``) gives ``{}``.
         request: the decoded request payload. When the class sets
             ``REQUEST = SomeClass`` and the query carried a payload, this is
             a decoded ``SomeClass`` instance; otherwise the raw payload
@@ -130,10 +132,13 @@ class QueryContext:
     def reply(self, instance: Message) -> None:
         """Answer the query with a message instance.
 
-        Renders the instance's canonical topic (the reply key expression),
-        strips template fields from the body, packs with the instance's
-        effective encoding, and stamps the class ``SCHEMA`` attachment —
-        identical wire shape to ``instance.send()``.
+        Renders the reply key on the template the query matched, so it
+        intersects the query's key expression (the canonical topic when the
+        query matched none, or for an instance of another class), strips the
+        template fields from the body, packs with the instance's effective
+        encoding, and stamps the class ``SCHEMA`` attachment — the same wire
+        shape as ``instance.send()``. A ``/`` inside a single-segment slot
+        value raises ``TopicError`` (0.4.0).
         """
         import zeared as z
 

@@ -36,7 +36,9 @@ python -m zeared.hubd [-l ENDPOINT ...] [-c ENDPOINT ...] \
   `z.hub(zenoh_config=...)` is taken as given, so set router mode and shared
   memory off there.
 - `--no-timestamping` — don't force on the HLC timestamping that's on by
-  default (retention dedupe needs it), with or without `--config`.
+  default, with or without `--config`. A sample's HLC timestamp is what
+  `meta.issued_at`, `meta.origin_zid` and dedupe read; retained sends
+  stamp their own puts (0.4.0), so retained values carry one either way.
 
 Stops cleanly on `SIGINT` / `SIGTERM`.
 

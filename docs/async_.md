@@ -26,9 +26,15 @@ the one sharp edge (raw `threading.Thread` does NOT propagate context).
 | `apeer` | `def apeer(*, ...) -> _AsyncSessionContextManager` | async-context-managed peer session |
 | `aclient` | `def aclient(router, *, ...) -> _AsyncSessionContextManager` | async-context-managed client session |
 | `aopen` | `def aopen(cfg) -> _AsyncSessionContextManager` | async-context-managed dispatch on `SessionConfig` |
-| `asend` | `async def asend(msg, *, session=None, topic=None) -> None` | free-function form of `msg.asend(...)` |
-| `asend_batch` | `async def asend_batch(cls, items, *, session=None, topic=None) -> None` | free-function form of `Cls.asend_batch(...)` |
+| `asend` | `async def asend(msg, *, session=None, topic=None, retain=None) -> None` | free-function form of `msg.asend(...)` |
+| `asend_batch` | `async def asend_batch(cls, items, *, session=None, topic=None, retain=None) -> None` | free-function form of `Cls.asend_batch(...)` |
+| `aunretain` | `async def aunretain(cls_or_msg, *, session=None, topic=None, **key_fields) -> None` | async `msg.unretain()` / `Cls.unretain(**key_fields)` |
+| `afetch_retained` | `async def afetch_retained(cls, *, session=None, on_error=None) -> list[M]` | async `Cls.fetch_retained(...)` |
 | `alisten` | `def alisten(cls, *, session=None, maxsize=1024, meta=False) -> Stream` | a [`Stream`](stream.md) of messages (or `(msg, meta)` tuples); bounded, drops the oldest (0.4.0) |
+| `aquery` | `async def aquery(cls, *, session=None, params=None, request=None, timeout=None, target=None, consolidation=None, on_error=None, **key_fields) -> list[M]` | async `Cls.query(...)`: the whole reply list |
+| `aquery_iter` | `def aquery_iter(cls, *, ...) -> Stream` | `aquery`'s arguments; a [`Stream`](stream.md) of replies as they arrive, started when called |
+| `aquery_one` | `async def aquery_one(cls, **kwargs) -> M \| None` | async `Cls.query_one(...)`: returns at the first decoded reply |
+| `aon_query` | `async def aon_query(cls, handler, *, session=None, on_error=None, auto_reconnect=True) -> Queryable` | `Cls.on_query(...)` declared on the calling loop, so an `async def` handler replies on it |
 | `abatch` | `@asynccontextmanager async def abatch()` | async counterpart of `z.batch()` |
 
 ### Async session lifecycle
@@ -134,4 +140,6 @@ the event loop that was running when `on_message` was called, via
 free for Zenoh's delivery machinery.
 
 If called without a running event loop, `on_message` raises
-`SubscriptionError` — use `Cls.alisten()` instead.
+`SubscriptionError`: register the `async def` callback from inside a
+coroutine, or pass a sync one. `Cls.alisten()` is no way around it, since
+it needs a running loop too (it raises `RuntimeError` without one).

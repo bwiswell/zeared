@@ -51,7 +51,7 @@ _SCALAR: dict[str, str] = {
     'DateTime': 'string',
     'Time': 'string',
     'TimeDelta': 'number',  # seconds: seared serializes total_seconds()
-    'Bytes': 'string',  # base64 on the JSON wire
+    'Bytes': 'string',  # base64 (or hex, under encoding='hex') text on the JSON wire
     'Dict': 'Record<string, unknown>',
     'NDArray': 'unknown',
     'PandasFrame': 'unknown',
@@ -68,8 +68,9 @@ _HEADER = """\
 //     are also declared fields are included (a decoder merges them from the
 //     key). Capture-only slots (in the key, not declared) are routing
 //     metadata and are NOT part of these types.
-//   - `Bytes` is base64-encoded on the JSON wire; frames/ndarrays are left
-//     as `unknown` — decode them in the bridge if you need them.
+//   - `Bytes` is base64 text on the JSON wire (hex for `encoding='hex'`);
+//     frames/ndarrays are left as `unknown` — decode them in the bridge if
+//     you need them.
 //   - Optional (`?`) marks a field the sender may omit (it has a default).
 //     `| null` marks a `nullable=True` field, the only kind whose wire value
 //     may be `null`; an ordinary optional field is absent instead.

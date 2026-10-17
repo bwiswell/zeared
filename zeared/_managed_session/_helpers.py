@@ -67,7 +67,7 @@ if TYPE_CHECKING:
 _managed_sessions: weakref.WeakSet[ManagedSession] = weakref.WeakSet()
 
 
-# Probe interval default; user-configurable via the factory kwarg.
+# Probe interval default; set by the factory kwarg or ``SessionConfig.probe_interval``.
 _DEFAULT_PROBE_INTERVAL = 10.0
 
 
@@ -76,8 +76,9 @@ _DECLARE_HANDLE_WARNING = (
     'session; it does NOT survive reconnect. For subscriptions prefer '
     'Cls.on_message(...) (zeared rebuilds on reconnect transparently); '
     'for publishes prefer msg.send() (publisher cache rebuilds lazily); '
-    'for queryables, treat the handle as raw-only state and re-declare '
-    'inside an on_reconnect(cb) hook.'
+    'for queryables prefer Cls.on_query(...) (re-declared on reconnect), or '
+    'treat a raw handle as raw-only state and re-declare it inside an '
+    'on_reconnect(cb) hook.'
 )
 
 

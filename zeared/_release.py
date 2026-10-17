@@ -75,8 +75,9 @@ def release(*, session: SessionLike) -> None:
 def release_all() -> None:  # noqa: C901
     """Release every zeared-managed session in this process.
 
-    Walks the per-session registries (subscribers, publisher caches,
-    retention caches, presence state, ManagedSession wrappers) and calls :func:`release` on each unique session
+    Walks the per-session registries (subscribers, user queryables,
+    publisher caches, retention caches, presence state, ManagedSession
+    wrappers) and calls :func:`release` on each unique session
     reference. Idempotent — running twice is a no-op (registries are
     emptied on first pass).
 

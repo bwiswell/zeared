@@ -7,7 +7,8 @@ modules as stateless mixins, composed here via the MRO so they stay
 methods rather than helper functions taking ``cls``:
 
 - ``_MessageTopicMixin`` (``_message_topic.py``) — template parsing,
-  schema attachment cache, multi-segment field-binding validation.
+  schema attachment cache, slot field-binding validation (multi-segment,
+  and from 0.4.0 single-segment).
 - ``_MessageSendMixin`` (``_message_send.py``) — sync ``send`` /
   ``send_batch``.
 - ``_MessageAsyncMixin`` (``_message_async.py``) — async siblings:
@@ -17,6 +18,8 @@ methods rather than helper functions taking ``cls``:
   and ``aregister_will`` raise a pointer).
 - ``_MessageSubscribeMixin`` (``_message_subscribe.py``) — subscribe
   + introspection: ``on_message`` / ``published_topics``.
+- ``_MessageQueryMixin`` (``_message_query.py``) — queries: ``on_query``
+  serving, and ``query`` / ``query_one`` / ``iter_query`` getting.
 
 Plus ``_message_unretain.py`` for the ``_UnretainDescriptor`` and the
 shared ``_unretain_impl`` function (instance-vs-class ``unretain``
@@ -95,8 +98,8 @@ class Message(
     # poisoned watermark takes longer to be rejected.
     DEDUPE_MAX_SKEW: ClassVar[float | None] = 300.0
     # Optional retention TTL in seconds. ``None`` (default) means
-    # retained values live forever (or until the publishing session
-    # closes / a tombstone is emitted). Any positive float opts the
+    # retained values live until a tombstone, ``z.release`` or
+    # ``clear_retention_cache`` drops them. Any positive float opts the
     # class into lazy time-based expiration: entries older than the
     # TTL are skipped + pruned at query time. No background thread —
     # expiration is checked when ``_RetentionCache._handle_query`` runs

@@ -84,8 +84,10 @@ class _MessageSubscribeMixin:
         ``cb`` may be ``cb(msg)`` or ``cb(msg, meta)``; arity is inspected once
         at subscribe time. ``meta`` is a ``ZenohMeta`` seared dataclass.
         ``meta.origin`` carries the sample's provenance — ``Origin.LIVE``
-        for a real publish, ``Origin.REPLAY`` for a retained-fetch delivery
-        (subscribe-time or post-reconnect).
+        for a real publish, ``Origin.REPLAY`` for a retained value delivered
+        again: a retained-fetch reply (at subscribe time, after a reconnect,
+        or from the re-attach walk) or a publisher's republish after its link
+        came back (0.4.0).
 
         ``retained_fetch`` (default ``True``) controls the subscribe-time
         retained fetch on ``RETAINED`` classes. Pass ``False`` for a
