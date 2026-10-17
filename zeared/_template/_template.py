@@ -17,10 +17,11 @@ from ..errors import TopicError
 
 _NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
-# Reserved namespace for zeared internals (liveliness tokens at
-# `__zeared/alive/<zid>`, will envelopes at `__zeared/will/<zid>/<slug>`,
-# etc.). User templates whose first literal segment is `__zeared` would
-# collide with internal routing — silent stomping. Reject at parse time.
+# Reserved namespace for zeared internals. Presence used it until 0.4.0
+# (`__zeared/alive/<zid>`, `__zeared/will/<zid>/<slug>`); since then its
+# tokens sit on contract keys, and the prefix stays reserved so a future
+# internal key can't stomp on a user's. User templates whose first literal
+# segment is `__zeared` are rejected at parse time.
 # Exemption: the unmodified anonymous catch-all `__zeared/**` (and the
 # universal `**`) — diagnostic tooling that subscribes to everything is
 # explicit intent. Named multi-segment under the prefix
@@ -165,8 +166,8 @@ class Template:
     def _validate_namespace_reservation(template: str) -> None:
         """Reject templates whose first literal segment is ``__zeared``.
 
-        Reject templates whose first literal segment is ``__zeared``, which collides
-        with internal liveliness / will / observer keys.
+        The prefix is reserved for zeared's internal keys (presence used it
+        before 0.4.0), so a user template there could collide with one.
 
         Exemption: the anonymous catch-all forms ``**`` (universal) and
         ``__zeared/**`` (diagnostic — "subscribe to all internal traffic
@@ -190,8 +191,7 @@ class Template:
         if first_seg == _RESERVED_PREFIX:
             msg = (
                 f'TOPIC template {template!r}: the {_RESERVED_PREFIX!r} '
-                f'prefix is reserved for internal zeared use (liveliness '
-                f'tokens, will envelopes, etc.); pick a different '
+                f'prefix is reserved for internal zeared use; pick a different '
                 f'top-level segment. The diagnostic catch-all '
                 f'{_RESERVED_PREFIX!r}/** is the only exempted form.'
             )

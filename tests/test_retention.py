@@ -738,7 +738,7 @@ class TestSchemaAttachmentSurvivesRetention:
         Alert(id=1, v=10).send()
 
         cache = get_retention_cache(Alert, session)
-        _raw, _enc, attachment, _inserted = cache._cache['ret/schema/1']
+        _raw, _enc, attachment, _inserted, _ts = cache._cache['ret/schema/1']
         assert attachment is not None  # schema attachment captured
         assert attachment == Alert._schema_attachment_bytes()
 
@@ -754,7 +754,7 @@ class TestSchemaAttachmentSurvivesRetention:
         Plain(id=1, v=10).send()
 
         cache = get_retention_cache(Plain, session)
-        _raw, _enc, attachment, _inserted = cache._cache['ret/noschema/1']
+        _raw, _enc, attachment, _inserted, _ts = cache._cache['ret/noschema/1']
         assert attachment is None
 
     def test_late_subscriber_decodes_schema_stamped_snapshot(self, connected_pair):
@@ -826,5 +826,111 @@ class TestSchemaAttachmentSurvivesRetention:
             Alert(id=1, v=1).send()
 
         cache = get_retention_cache(Alert, session)
-        _raw, _enc, attachment, _inserted = cache._cache['ret/schema/batch/1']
+        _raw, _enc, attachment, _inserted, _ts = cache._cache['ret/schema/batch/1']
         assert attachment == Alert._schema_attachment_bytes()
+
+
+class TestRepublish:
+    """0.4.0: on link restore a session re-puts its retained values with their original
+    timestamps, marked as a republish — deduped where already held, ``REPLAY`` elsewhere."""
+
+    @staticmethod
+    def _cls(topic: str, ttl: float | None = None) -> type[z.Message]:
+        @z.zeared
+        class Held(z.Message):
+            TOPIC = topic
+            RETAINED = True
+            RETENTION_TTL = ttl
+            k: str = z.Str(required=True)
+            v: int = z.Int(default=0)
+
+        return Held
+
+    def test_a_retained_send_keeps_the_timestamp_it_published_with(self, connected_pair):
+        session_a, session_b = connected_pair
+        held = self._cls('rep/ts/{k}')
+        seen: list[str | None] = []
+        held.on_message(lambda m, meta: seen.append(meta.timestamp), session=session_b, retained_fetch=False)
+        wait()
+        held(k='x', v=1).send(session=session_a)
+        wait(0.3)
+        ts = get_retention_cache(held, session_a)._cache['rep/ts/x'][4]
+        assert ts is not None
+        assert seen == [str(ts)]
+
+    def test_a_holder_dedupes_the_copy_and_a_subscriber_that_missed_it_gets_replay(self, connected_pair):
+        session_a, session_b = connected_pair
+        held = self._cls('rep/copy/{k}')
+        holder: list[tuple[int, str]] = []
+        held.on_message(
+            lambda m, meta: holder.append((m.v, meta.origin.value)), session=session_b, retained_fetch=False
+        )
+        wait()
+        held(k='x', v=7).send(session=session_a)
+        wait(0.3)
+        # Subscribes after the publish without fetching: it missed the value.
+        missed: list[tuple[int, str]] = []
+        held.on_message(
+            lambda m, meta: missed.append((m.v, meta.origin.value)), session=session_b, retained_fetch=False
+        )
+        wait()
+
+        assert get_retention_cache(held, session_a).republish() == 1
+        wait(0.3)
+
+        assert holder == [(7, 'live')]  # the copy carried the same timestamp: deduped
+        assert missed == [(7, 'replay')]
+
+    def test_expired_entries_are_not_republished(self, session):
+        held = self._cls('rep/ttl/{k}', ttl=0.05)
+        held(k='x').send(session=session)
+        wait(0.1)
+        assert get_retention_cache(held, session).republish() == 0
+
+    def test_a_batched_retained_send_keeps_its_timestamp_too(self, session):
+        held = self._cls('rep/batch/{k}')
+        with z.batch():
+            held(k='x').send(session=session)
+        assert get_retention_cache(held, session)._cache['rep/batch/x'][4] is not None
+
+
+class TestReplyTimestamps:
+    """0.4.0: a retained reply carries the timestamp its value was published with, so a
+    subscriber's dedupe drops a replay of a value it already holds."""
+
+    @staticmethod
+    def _cls(topic: str) -> type[z.Message]:
+        @z.zeared
+        class Held(z.Message):
+            TOPIC = topic
+            RETAINED = True
+            k: str = z.Str(required=True)
+            v: int = z.Int(default=0)
+
+        return Held
+
+    def test_a_replay_carries_the_original_timestamp(self, connected_pair):
+        session_a, session_b = connected_pair
+        held = self._cls('rts/orig/{k}')
+        live: list[str | None] = []
+        held.on_message(lambda m, meta: live.append(meta.timestamp), session=session_b, retained_fetch=False)
+        wait()
+        held(k='x', v=1).send(session=session_a)
+        wait(0.3)
+        late: list[tuple[str, str | None]] = []
+        held.on_message(lambda m, meta: late.append((meta.origin.value, meta.timestamp)), session=session_b)
+        wait(0.3)
+        assert late == [('replay', live[0])]
+
+    @pytest.mark.parametrize(('dedupe', 'expected'), [(True, [(3, 'live')]), (False, [(3, 'live'), (3, 'replay')])])
+    def test_a_refetch_of_a_held_value_is_deduped(self, connected_pair, dedupe, expected):
+        session_a, session_b = connected_pair
+        held = self._cls(f'rts/held/{dedupe}/{{k}}')
+        got: list[tuple[int, str]] = []
+        sub = held.on_message(lambda m, meta: got.append((m.v, meta.origin.value)), session=session_b, dedupe=dedupe)
+        wait()
+        held(k='x', v=3).send(session=session_a)
+        wait(0.3)
+        sub._replay_retained(session_b)  # what the re-attach walk does
+        wait(0.3)
+        assert got == expected

@@ -70,11 +70,32 @@ live Zenoh queryable handles change.
 
 The retention restoration step runs **before** subscriber redeclare in
 the reconnect pipeline (`_restore_retention` → `_restore_subscribers`
-→ `_restore_wills`). This is the **retention-first ordering invariant**:
+→ `_restore_presence`). This is the **retention-first ordering invariant**:
 a same-process publisher + subscriber pair both bound to the same
 managed session needs the publisher-side queryable live before the
 subscriber's reconnect-triggered retained-fetch fires. Pinned by
 `tests/test_reconnect.py::TestRetentionRebuild::test_same_process_retained_fetch_after_reconnect`.
+
+### Republish on link restore (0.4.0)
+
+A value published while its session was detached (its hub link down, or
+the session reconnecting) reached nobody, and a subscriber whose own
+re-attach walk ran before this session came back missed it as well. So
+when a managed session's link comes back (`on_link_restored`, after a
+re-attach or a reconnect), every cache bound to it calls
+`republish()`: it re-puts each live entry (past-TTL ones skipped)
+
+- **with its original timestamp** — a retained send stamps its put
+  explicitly (`Session.new_timestamp()`) and the cache keeps that
+  timestamp — so a subscriber that already holds the value dedupes the
+  copy; and
+- **with the republish marker** in its attachment (`{'replay': True}`,
+  next to any `schema`), so a subscriber that missed it receives it as
+  `Origin.REPLAY`, not as a new live publish.
+
+The republish runs before the session's own re-attach walk and before
+`on_link_restored` fires. Subscribers with `dedupe=False` (or on a session
+without timestamps) receive the copy again, as `REPLAY`.
 
 ## `effective_retain(cls, arg)`
 
@@ -150,7 +171,17 @@ Class-level `RETENTION_TTL` is the only knob for raw sessions.
 ## Deduplication
 
 Retained-fetch replays are deduplicated against the live stream by default
-(see `Subscriber.DEDUPE = True`). Dedupe is **timestamp-based, not
+(see `Subscriber.DEDUPE = True`).
+
+**Since 0.4.0 this actually applies to replays.** A retained reply carries
+the timestamp its value was published with (a retained send stamps its put
+explicitly, and the cache keeps that timestamp), so a subscriber that
+already holds a value drops a replay of it — on a reconnect re-fetch, a
+link re-attach walk, or a publisher's republish. **Before 0.4.0, replies
+carried no timestamp:** they bypassed dedupe entirely, and every replay was
+delivered, even of a value the subscriber had already received live. This
+section described the intended behaviour; 0.4.0 is when it became true.
+`fetch_retained()` is unaffected: it returns the whole retained set. Dedupe is **timestamp-based, not
 payload-based**: the subscriber remembers the highest HLC timestamp
 (`sample.timestamp`) seen per concrete topic, and drops any sample whose
 timestamp is `<=` that watermark. Payload bytes are never compared — a
@@ -164,8 +195,7 @@ Two consequences of the watermark rule:
 - It applies to **every** sample on a `RETAINED` + dedupe-active
   subscription, not just replays — an out-of-order or re-delivered live
   sample is dropped by the same check.
-- Samples with no timestamp bypass dedupe entirely. That is how
-  synthesised wills (`timestamp=None`) always fire, and it means dedupe
+- Samples with no timestamp bypass dedupe entirely. That means dedupe
   is inert against a session with HLC timestamping disabled (the
   `z.peer()` / `z.client()` factories enable it by default).
 

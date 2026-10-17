@@ -74,7 +74,11 @@ class _PublisherCache:
         encoding: Encoding,
         *,
         attachment: bytes | None = None,
+        timestamp: zenoh.Timestamp | None = None,
     ) -> None:
+        # ``timestamp`` (0.4.0): a retained send stamps its put explicitly so
+        # the retention cache can keep the same timestamp for the republish
+        # on link restore; ``None`` lets Zenoh stamp it, as before.
         # Record the emission before any branching — ensures introspection
         # reflects reality regardless of which path the send takes.
         self._emitted.add(concrete_topic)
@@ -82,12 +86,12 @@ class _PublisherCache:
         mime = codec.MIME[encoding]
         # PUBLISHER=False → cap=0 → always bypass the cache.
         if self._cap == 0:
-            self._session_put(concrete_topic, raw, mime, attachment)
+            self._session_put(concrete_topic, raw, mime, attachment, timestamp)
             return
 
         pub = self._pubs.get(concrete_topic)
         if pub is not None:
-            self._pub_put(concrete_topic, pub, raw, attachment)
+            self._pub_put(concrete_topic, pub, raw, attachment, timestamp)
             return
 
         if len(self._pubs) >= self._cap:
@@ -101,7 +105,7 @@ class _PublisherCache:
                     stacklevel=2,
                 )
                 self._warned = True
-            self._session_put(concrete_topic, raw, mime, attachment)
+            self._session_put(concrete_topic, raw, mime, attachment, timestamp)
             return
 
         try:
@@ -111,7 +115,7 @@ class _PublisherCache:
             msg = f'{self._cls.__name__}: failed to declare publisher on {concrete_topic!r}: {e}'
             raise ZearedError(msg) from e
         self._pubs[concrete_topic] = pub
-        self._pub_put(concrete_topic, pub, raw, attachment)
+        self._pub_put(concrete_topic, pub, raw, attachment, timestamp)
 
     def _session_put(
         self,
@@ -119,20 +123,13 @@ class _PublisherCache:
         raw: bytes,
         mime: str,
         attachment: bytes | None = None,
+        timestamp: zenoh.Timestamp | None = None,
     ) -> None:
         try:
             # Spelled out rather than spread from a dict: zenoh's ``put`` is
             # fully typed, and a ``dict[str, bytes | str]`` splat binds to
             # every optional keyword it declares.
-            if attachment is not None:
-                self._session.put(
-                    topic,
-                    raw,
-                    encoding=mime,
-                    attachment=attachment,
-                )
-            else:
-                self._session.put(topic, raw, encoding=mime)
+            self._session.put(topic, raw, encoding=mime, attachment=attachment, timestamp=timestamp)
         except Exception as e:
             self.drop()
             msg = f'{self._cls.__name__}: session.put failed on {topic!r}: {e}'
@@ -144,12 +141,10 @@ class _PublisherCache:
         pub: zenoh.Publisher,
         raw: bytes,
         attachment: bytes | None = None,
+        timestamp: zenoh.Timestamp | None = None,
     ) -> None:
         try:
-            if attachment is not None:
-                pub.put(raw, attachment=attachment)
-            else:
-                pub.put(raw)
+            pub.put(raw, attachment=attachment, timestamp=timestamp)
         except Exception as e:
             # Most likely the session closed out from under us.
             self._pubs.pop(topic, None)

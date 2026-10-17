@@ -4,15 +4,15 @@ Pattern B subdir using the mixin-extract variant. ``_managed_session.py``
 holds ``ManagedSession``. Method clusters extracted into mixins:
 
 - ``_on_reconnect_mixin.py`` — ``_OnReconnectMixin`` (the
-  ``on_reconnect(cb)`` callback registry + ``_fire_reconnect_callbacks``
-  driver).
+  ``on_reconnect`` / ``on_link_lost`` / ``on_link_restored`` callback
+  registries + their driver).
 - ``_zenoh_api_mixin.py`` — ``_ZenohApiMixin`` (pass-through delegators
   for ``zid`` / ``liveliness`` / ``info`` / ``put`` / ``get`` /
   ``delete`` / ``declare_*``).
 
 Other helpers:
 
-- ``_on_reconnect_handle.py`` — ``OnReconnectHandle`` cancel handle.
+- ``_callback_handle.py`` — ``CallbackHandle`` cancel handle (``OnReconnectHandle`` is an alias).
 - ``_helpers.py`` — module-level WeakSet registry, declare-handle
   warning emitter, ``_is_dead`` / ``resolve_raw``.
 
@@ -22,6 +22,7 @@ Public surface unchanged: callers continue to write
 
 from typing import TYPE_CHECKING
 
+from ._callback_handle import CallbackHandle, OnReconnectHandle
 from ._helpers import (
     _DECLARE_HANDLE_WARNING,
     _DEFAULT_PROBE_INTERVAL,
@@ -31,7 +32,6 @@ from ._helpers import (
     resolve_raw,
 )
 from ._managed_session import ManagedSession
-from ._on_reconnect_handle import OnReconnectHandle
 
 if TYPE_CHECKING:
     # Re-exported for annotations only — deliberately absent from __all__.
@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 __all__ = [
     '_DECLARE_HANDLE_WARNING',
     '_DEFAULT_PROBE_INTERVAL',
+    'CallbackHandle',
     'ManagedSession',
     'OnReconnectHandle',
     '_is_dead',

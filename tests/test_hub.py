@@ -206,7 +206,8 @@ class TestHubRelaysZearedMessages:
             sess.close()
         assert got == [(1, 42)]
 
-    def test_liveliness_will_through_hub(self):
+    def test_presence_through_hub(self):
+        """0.4.0: a presence token relayed by the hub; its holder's close reads as offline."""
         ep = _endpoint()
         h = z.hub(listen=[ep])
         pub = z.client(router=ep)
@@ -218,23 +219,25 @@ class TestHubRelaysZearedMessages:
             TOPIC = 'rio/presence/status/{name}'
             LIVELINESS = True
             name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
+            state: str = z.Str(default='up')
 
-        Status(name='alice', state='offline').register_will(session=pub)
+        Status.declare_presence(name='alice', session=pub)
         wait(0.3)
 
-        received: list[tuple[str, str]] = []
+        events: list[tuple[str, str, z.Origin]] = []
         s = Status.on_message(
-            lambda m: received.append((m.name, m.state)),
+            lambda m: None,
             session=sub_sess,
+            on_online=lambda meta: events.append(('online', meta.captures['name'], meta.origin)),
+            on_offline=lambda meta: events.append(('offline', meta.captures['name'], meta.origin)),
         )
         wait(0.3)
-        pub.close()  # will fires via hub-relayed liveliness DELETE
+        pub.close()  # its token goes; the hub relays the liveliness DELETE
         wait(0.5)
         s.close()
         for sess in (sub_sess, h):
             sess.close()
-        assert ('alice', 'offline') in received
+        assert events == [('online', 'alice', z.Origin.REPLAY), ('offline', 'alice', z.Origin.WILL)]
 
 
 class TestHubDaemon:

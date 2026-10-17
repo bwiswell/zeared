@@ -1,102 +1,70 @@
-"""Session-level presence (liveliness tokens) and Last-Will-and-Testament machinery.
+"""Presence — a Zenoh liveliness token at each contract key (0.4.0).
 
-Each session that uses presence declares a single Zenoh liveliness token at
-``__zeared/alive/<zid>``. Users register wills per-message via
-:meth:`Message.register_will`; each will is stored as a retained
-``_WillEnvelope`` at ``__zeared/will/<zid>/<slug>`` so late subscribers can
-fetch via queryable.
+A publisher declares that one concrete key of a ``LIVELINESS = True`` class
+is available with :meth:`Message.declare_presence`, which declares a Zenoh
+liveliness token at that key and returns a :class:`PresenceToken`.
+Subscribers hear about it through ``on_message(on_online=…, on_offline=…)``:
+each event carries the key's captures, never a payload, because a token
+can't carry one.
 
-When a peer's liveliness token disappears (graceful close OR crash), any
-subscriber on a ``LIVELINESS = True`` class whose declared templates match
-the will's target key expression synthesises a sample locally and dispatches
-it through the normal decode path — the user's callback fires identically
-to a real publish.
+Zenoh aggregates tokens by key: a key reads online when its first token
+appears and offline when its last one goes, from whichever sessions held
+them. A session that closes, crashes or is released withdraws every token
+it held, which is how a peer's death becomes an offline event.
 
-This is an honest emulation: the will is never "really" published by a
-broker (Zenoh has none). Non-subscribers don't observe the offline event.
-Document accordingly.
+Before 0.4.0 a staged *will* payload played this role, under
+``__zeared/will/**`` and ``__zeared/alive/<zid>``. Both key spaces are gone.
 
-Primary file of the ``presence`` Pattern B subdir. Holds the shared
-constants, helpers, and the wire-shape ``_WillEnvelope`` class that the
-session-state and observer helpers both consume. Per-session state lives
-in ``_presence_session.py``; the cross-session observer lives in
-``_presence_observer.py``; the synthesised-sample shim is in
-``_presence_synthesized_sample.py``.
+Primary file of the ``presence`` Pattern B subdir: holds ``PresenceToken``.
+Per-session state and its registry live in ``_presence_session.py``.
 """
 
 from __future__ import annotations
 
-import hashlib
-from typing import TYPE_CHECKING
-
-import seared as s
+from typing import TYPE_CHECKING, Self
 
 if TYPE_CHECKING:
-    from .._codec import Encoding
-
-if TYPE_CHECKING:
-    from .._managed_session import SessionLike
-
-ALIVE_PREFIX = '__zeared/alive'
-WILL_PREFIX = '__zeared/will'
-
-# Default interval for the orphaned-will GC sweep in `_PresenceObserver`.
-# Long enough that overhead is irrelevant, short enough that orphaned
-# stash entries don't accumulate for hours after a missed liveliness
-# DELETE (e.g., during a brief network partition).
-_GC_INTERVAL_SECONDS = 60.0
+    from ._presence_session import _SessionPresence
 
 
-def _resolve_gc_interval(session: SessionLike, observer_override: float | None = None) -> float:
-    """Resolve the per-iteration GC interval.
+class PresenceToken:
+    """One concrete key's availability, held while its session lives.
 
-    Precedence: observer-instance override (``observer._gc_interval``,
-    if non-None — set explicitly by tests / niche runtime tuning) >
-    wrapper attribute (``session._gc_interval`` from
-    ``z.peer(gc_interval=...)``) > module default
-    (``_GC_INTERVAL_SECONDS``). Read on every loop iteration so a
-    runtime poke at any layer takes effect on the next cycle.
-    """
-    if observer_override is not None:
-        return observer_override
-    return getattr(session, '_gc_interval', _GC_INTERVAL_SECONDS)
+    Returned by :meth:`Message.declare_presence`. :meth:`undeclare` withdraws
+    it while the session lives on (subscribers see the key go offline, once
+    no other session holds it); it is idempotent. Closing or releasing the
+    session withdraws every token it holds.
 
-
-def _envelope_encoding() -> Encoding:
-    """Pick the wire encoding for the will envelope itself.
-
-    Honors ``zeared.debug`` symmetrically across publish, queryable
-    reply, and subscriber decode. The user payload *inside* the
-    envelope continues to honor ``cls.ENCODING`` independently.
-    """
-    # Imported here to avoid a circular import at module load.
-    import zeared as z
-
-    return 'json' if z.debug else 'msgpack'
-
-
-@s.seared
-class _WillEnvelope(s.Seared):
-    """Reserved wire shape for a registered LWT payload.
-
-    ``schema`` carries the registering class's ``SCHEMA`` value (or ``None``
-    when unset) so a synthesised will sample can be re-stamped with the same
-    attachment a live publish would carry — without it a schema-checking
-    subscriber sees ``None``, mismatches, and drops the will. ``default=None``
-    keeps envelopes from pre-0.2.4 peers (no ``schema`` key) decodable.
+    The handle names a key, not a Zenoh token, so it survives a reconnect:
+    the restore walk re-declares the key on the new session, and a later
+    :meth:`undeclare` withdraws that one. Declaring a key the session already
+    holds returns the same handle.
     """
 
-    # fmt: off
-    # Column-aligned deliberately — this is the will-envelope wire contract.
-    source_zid:      str        = s.Str(required=True)
-    target_key_expr: str        = s.Str(required=True)
-    encoding:        str        = s.Str(required=True)
-    payload:         bytes      = s.Bytes(required=True)
-    schema:          str | None = s.Str(default=None)
-    # fmt: on
+    __slots__ = ('_presence', 'key')
 
+    def __init__(self, presence: _SessionPresence, key: str) -> None:
+        """Bind the handle to ``key`` in ``presence``. Built by ``declare_presence``."""
+        self._presence = presence
+        self.key = key
 
-def _slug(cls_qualname: str, concrete_topic: str) -> str:
-    """Deterministic short slug for a (cls, concrete_topic) pair."""
-    digest = hashlib.sha1(f'{cls_qualname}:{concrete_topic}'.encode(), usedforsecurity=False)
-    return digest.hexdigest()[:16]
+    @property
+    def active(self) -> bool:
+        """Whether the session still holds this key through this handle."""
+        return self._presence.holds(self.key, self)
+
+    def undeclare(self) -> None:
+        """Withdraw the token. Idempotent; a no-op once withdrawn."""
+        self._presence.undeclare(self.key, self)
+
+    def __enter__(self) -> Self:
+        """Enter ``with``: the token itself."""
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Leave ``with``: withdraw the token."""
+        self.undeclare()
+
+    def __repr__(self) -> str:
+        """Show the key and whether it is still held."""
+        return f'PresenceToken({self.key!r}, active={self.active})'

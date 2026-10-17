@@ -11,13 +11,40 @@ lines as it lands, and the entry is dated when that version is released.
 
 ## 0.4.0 — unreleased
 
-**seared 0.4.0, TypeScript `| null` only where the wire can carry one, single-segment slots that can't split their
-key, and the changelog in the repository.**
+**Presence and retained state survive a restart.** Presence is a Zenoh liveliness token at each contract key, a
+client re-fetches retained values when its link to a restarted hub comes back, and `alisten` stops buffering without
+limit. The release also adopts seared 0.4.0. Every break is here at once; the README's *Upgrading to 0.4.0* lists
+them with what to do.
 
 ### Added
 
 - **`CHANGELOG.md`**, this file: every release from 0.1.0 on, newest first. It is kept in the repository and grows
   with each change as it merges, where it had been reconstructed after each release.
+- **`declare_presence()`**, on an instance or on the class with slot values, holds a liveliness token at one
+  concrete key of a `LIVELINESS = True` class and returns a `z.PresenceToken`. Its `undeclare()` withdraws that key
+  while the session lives on, so a proxy can drop one device, and the token survives a reconnect. Declaring a key
+  the session already holds returns the same token. `adeclare_presence()` is the async form.
+- **`on_message(on_online=, on_offline=)`**, the presence feed. Each event is an identity-only `ZenohMeta` whose
+  `captures` hold the key's slots, with `origin` `REPLAY` for a key already online when the subscriber started,
+  `LIVE` for one coming online later, and `WILL` for one going offline. Tokens aggregate by key, so a key goes
+  offline when its last token goes.
+- **Link signals.** `ManagedSession.on_link_lost(cb)` fires when the session's view of the mesh goes stale (its
+  router link drops, or the session dies) and `on_link_restored(cb)` when it is whole again. They pair up, and don't
+  care about the cause. Both, and `on_reconnect`, return a `z.CallbackHandle`.
+- **The re-attach walk.** When a managed session's router link comes back, or its router is replaced between two
+  probe ticks, it re-runs the retained fetch for every retained subscriber, so a value published while the link was
+  down is delivered as `REPLAY`; then it fires `on_link_restored`. It waits up to `resync_jitter` seconds first
+  (default 2), so a fleet doesn't fetch at once, and fetches on at most `resync_concurrency` workers (default 4);
+  with nothing to fetch it skips both. The session factories take both.
+- **The republish.** When a managed session's link comes back, it re-puts every retained value it publishes, with
+  the value's original timestamp and a `replay` marker in its attachment. A subscriber that already holds the value
+  dedupes the copy, and one that missed it, because its own walk ran before this session re-attached, receives it as
+  `REPLAY`. Retained sends now stamp their puts explicitly so the cache can keep the timestamp.
+- **`SessionConfig` gains `auto_reconnect`, `probe_interval`, `resync_jitter` and `resync_concurrency`**, also read
+  from `ZEARED_SESSION_*`, so `z.open` and `z.aopen` return a `ManagedSession` for a config that asks for one.
+  Router mode refuses it.
+- **`z.Stream`**, what `alisten` and `aquery_iter` return: an async iterator with `dropped`, `maxsize`, `aclose()`
+  and `async with`, which closes its subscriber when collected after a `break`.
 
 ### Changed
 
@@ -36,8 +63,38 @@ key, and the changelog in the repository.**
   `TopicError` at first use, since either can render a `/` and split the key. Use `Bytes(encoding='hex')` or a
   `Str` slot, or a trailing `{name**}` slot for a path.
 - **Breaking:** publishing with a `/` inside a single-segment slot value raises `TopicError`, from `send`,
-  `unretain`, `concrete_topic`, `register_will` and a queryable's replies, where the message had gone out on a key
-  no template matched. The query getters' selectors don't check, since they embed wildcards deliberately.
+  `unretain`, `concrete_topic`, `declare_presence` and a queryable's replies, where the message had gone out on a
+  key no template matched. The query getters' selectors don't check, since they embed wildcards deliberately.
+- **Wire change:** presence is a liveliness token at the contract key. `__zeared/alive/<zid>` and the will
+  envelopes under `__zeared/will/**` are gone.
+- **Wire change:** a republished retained value carries `replay: true` next to `schema` in its attachment. An older
+  subscriber ignores the key and treats the copy as a live publish.
+- **Breaking:** access rules must grant `liveliness_token` on the contract keys a session holds presence on, where
+  they granted `__zeared/will/**` and `__zeared/alive/**`.
+- **Breaking:** an offline event no longer reaches `cb`, or `alisten`, as a typed will. It arrives on `on_offline`,
+  with the key's captures and no payload. A reconnect or a hub restart reads as offline, then online.
+- **Breaking:** a retained reply carries the timestamp its value was published with, so a subscriber with dedupe on
+  (the default for `RETAINED` classes) drops a replay of a value it already holds, on a reconnect or re-attach
+  re-fetch or a republish. Before, replies carried no timestamp and every replay was delivered, though the docs
+  described the dedupe; `dedupe=False` or `fetch_retained()` still sees everything. Subscribers on 0.3.x receiving
+  replies from a 0.4.0 publisher dedupe them the same way.
+- **Breaking:** `alisten` is bounded at `maxsize=1024` by default and drops the oldest message when full, counting
+  the drop on `stream.dropped` and logging the first. It had been unbounded, and a bounded one dropped the newest
+  with an uncounted `QueueFull` per message. `maxsize=0` stays unbounded.
+- **Breaking:** `alisten` and `aquery_iter` return a `Stream`, not an async generator, and start when called rather
+  than at the first iteration. `async for`, `anext()` and `aclose()` still work; `asend()` and `athrow()` don't.
+- **Breaking:** the session factories' `auto_reconnect=` and `probe_interval=` defer to `config=` when not passed,
+  so a config that sets them now applies.
+- `z.open` is typed `zenoh.Session | ManagedSession`, and `OnReconnectHandle` is an alias of `CallbackHandle`.
+- The README's presence and auto-reconnect sections are rewritten, and so is the presence doc; `docs/stream.md`
+  covers `z.Stream`.
+
+### Removed
+
+- **Breaking:** `register_will` and `aregister_will`. Reading either raises `AttributeError` pointing to
+  `declare_presence`.
+- **Breaking:** `z.clear_observer`, and the `gc_interval=` keyword of `z.peer`, `z.client`, `z.apeer` and
+  `z.aclient`, with the presence observer they configured.
 
 ## 0.3.13 — 2026-10-16
 

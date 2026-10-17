@@ -42,7 +42,7 @@ Telemetry(id=8, x=0.0, y=0.0).send(session=external)    # one-off override
 
 ## Concrete topics — `concrete_topic` (0.3.8)
 
-One canonical render builds every concrete key: `send`, `register_will`,
+One canonical render builds every concrete key: `send`, `declare_presence`,
 `QueryContext.reply`, `unretain` (both forms), the query getters'
 selectors, and `concrete_topic` itself (`_message_render.py`). A slot's key
 segment is `str(field.serialize(value))` for a value of the field's own
@@ -60,7 +60,7 @@ the segment and the key would match no template:
   call) raises `TopicError` for a single-segment slot bound to `Path`, or
   to `Bytes` in its default base64 form. `Bytes(encoding='hex')` and `Str`
   pass, and a trailing `{name**}` slot takes a path tail.
-- **Publish renders** (`send`, `register_will`, `QueryContext.reply`,
+- **Publish renders** (`send`, `declare_presence`, `QueryContext.reply`,
   `unretain`, `concrete_topic`) raise `TopicError` for a single-segment
   value whose rendered form contains `/`. The query getters' selectors
   don't check, since they embed wildcards deliberately.
@@ -104,8 +104,8 @@ Template-TOPICs auto-derive a wildcard for the subscribe call, so
 | `ENCODING` | `ClassVar[Literal['msgpack', 'json']]` | wire format, default `'msgpack'` |
 | `PUBLISHER` | `ClassVar[bool \| int]` | cache policy: `True` (default cap 256), `False` (disabled), `int` (explicit cap). See [`publisher.md`](../publisher.md). |
 | `RETAINED` | `ClassVar[bool]` | opt in to MQTT-style retained-message emulation. Default `False`. See [`retention.md`](../retention.md). |
-| `LIVELINESS` | `ClassVar[bool]` | opt in to presence / LWT — producers can `register_will()`, subscribers receive the will as a synthesised sample on peer death. Default `False`. See [`presence.md`](../presence/presence.md). |
-| `DEDUPE` | `ClassVar[bool]` | for `RETAINED` classes, dedupe retention-fetch replies against live publishes via `(key_expr, timestamp)`. Default `True`. Synthesised will samples (timestamp `None`) bypass dedupe. Per-subscriber override: `Cls.on_message(cb, dedupe=False)`. |
+| `LIVELINESS` | `ClassVar[bool]` | opt in to presence (0.4.0): producers hold a key with `declare_presence()`, subscribers pass `on_online=` / `on_offline=` to `on_message`. Default `False`. See [`presence.md`](../presence/presence.md). |
+| `DEDUPE` | `ClassVar[bool]` | for `RETAINED` classes, dedupe retention-fetch replies against live publishes via `(key_expr, timestamp)`. Default `True`. Samples with no timestamp bypass dedupe. Per-subscriber override: `Cls.on_message(cb, dedupe=False)`. |
 | `DEDUPE_MAX_SKEW` | `ClassVar[float \| None]` | ceiling, in seconds, on how far ahead of the local clock a sample's HLC may be and still advance the dedupe watermark. A sample beyond it is still delivered; it just doesn't move the watermark. `None` disables the check. Default `300.0`. |
 | `RETENTION_TTL` | `ClassVar[float \| None]` | for `RETAINED` classes, lazy expiry in seconds: entries older than the TTL are skipped and pruned when a retained fetch is served. Default `None` (no expiry). See [`retention.md`](../retention.md). |
 | `REQUEST` | `ClassVar[type \| None]` | typed request-payload class for `query` / `on_query`. Default `None`: the handler sees the raw payload bytes on `ctx.request`. See [`queryable.md`](../queryable/queryable.md). |
@@ -211,23 +211,26 @@ Telemetry.unretain(id=1)                                # class tombstone
 
 See [`retention.md`](../retention.md).
 
-## Presence / LWT (opt-in via `LIVELINESS = True`)
+## Presence (opt-in via `LIVELINESS = True`)
 
 ```python
-# Producer — stage a will payload for this session.
-PeerStatus(name='alice', state='offline').register_will()
+# Producer — hold this key while the session lives (0.4.0).
+token = PeerStatus.declare_presence(name='alice')       # or PeerStatus(...).declare_presence()
+token.undeclare()                                         # withdraw it early, session alive
 
-# Subscribers with LIVELINESS = True automatically observe presence,
-# synthesising the will as a regular dispatched sample when the
-# producing session's liveliness token disappears.
-PeerStatus.on_message(handler)
+# Subscriber — the presence feed, separate from cb.
+PeerStatus.on_message(handler, on_online=online, on_offline=offline)
 ```
 
 - Requires `LIVELINESS = True` on the class (raises `TopicError` otherwise).
-- Per-session primitive — one liveliness token per session covers N wills that fan out on death.
-- Graceful `session.close()` fires the will identically to a crash.
+- A Zenoh liveliness token at the concrete contract key; one per key per
+  session. Closing, crashing or releasing the session withdraws them all.
+- `on_online` / `on_offline` get an identity-only `ZenohMeta` (the key's
+  captures; `origin` `REPLAY` / `LIVE` for online, `WILL` for offline).
+  `cb` never sees them; `on_remove` stays the tombstone feed.
 - No auto-transition of retained state — retention and presence are orthogonal.
-- Non-subscribers never observe offline events.
+- `register_will` / `aregister_will` were removed in 0.4.0; reading them
+  raises `AttributeError` pointing here.
 
 See [`presence.md`](../presence/presence.md).
 
@@ -241,7 +244,7 @@ Each sync method has an `a`-prefixed sibling:
 | `Cls.send_batch(...)` | `await Cls.asend_batch(...)` |
 | `msg.unretain(...)` | `await msg.aunretain(...)` |
 | `Cls.unretain(**)` | `await z.aunretain(Cls, **)` |
-| `msg.register_will(...)` | `await msg.aregister_will(...)` |
+| `msg.declare_presence(...)` / `Cls.declare_presence(**)` | `await msg.adeclare_presence(...)` / `await Cls.adeclare_presence(**)` |
 | `Cls.on_message(cb, ...)` | `async for msg in Cls.alisten(...):` |
 
 See [`async_.md`](../async_.md).

@@ -180,30 +180,30 @@ def _restore_queryables(managed: ManagedSession) -> None:
                 qbl.close()
 
 
-def _restore_wills(managed: ManagedSession) -> None:
-    """Re-register every presence will against the new raw session.
+def _restore_presence(managed: ManagedSession) -> None:
+    """Re-declare every held presence token against the new raw session (0.4.0).
 
-    Wills are keyed on zid, which changes on reconnect. Peers see the
-    OLD zid disappear (synthesise the will) and the NEW zid appear with
-    fresh wills — legitimate offline → online from their perspective.
+    The old tokens died with the old raw session, so peers saw those keys go
+    offline (unless another session held them too: Zenoh aggregates tokens by
+    key). Re-declaring brings them back online, and every ``PresenceToken``
+    the caller holds stays valid. Runs after ``_restore_retention``, so a
+    peer that sees a key come back can already fetch its retained record.
     """
     from ..presence import _registry as _presence_registry
     from ..presence import _registry_lock
 
     raw = managed.raw()
-
     with _registry_lock:
-        # The old presence-state was keyed on id(old_raw). Find any
-        # state(s) registered under THIS managed session by walking and
-        # matching the session ref.
+        # State is normally keyed on id(managed); a declare made against the
+        # raw session directly is keyed on id(raw). Re-key both under the
+        # managed session, the durable identity.
         matches = [k for k, state in _presence_registry.items() if state.session is managed or state.session is raw]
+        states = [_presence_registry.pop(k) for k in matches]
+        for state in states:
+            _presence_registry[id(managed)] = state
 
-    for key in matches:
-        with _registry_lock:
-            old_state = _presence_registry.pop(key, None)
-        if old_state is None:
-            continue
+    for state in states:
         try:
-            old_state.replay_to(managed)
+            state.replay_to(managed)
         except Exception:  # noqa: BLE001
             _log.exception('presence replay raised during reconnect')

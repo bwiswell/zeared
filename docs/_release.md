@@ -11,29 +11,27 @@ package init stays a thin re-export module.
   module-default fallback.
 - `release_all() -> None` — release every zeared-managed session in
   the process. Walks per-session registries (subscribers, publisher
-  caches, retention caches, presence state, presence observers) plus
+  caches, retention caches, presence state) plus
   the `ManagedSession` WeakSet. Idempotent. Useful for
   `atexit.register(release_all)`.
 
 ## Order matters
 
-`release(session=)` runs six steps:
+`release(session=)` runs these steps:
 
 1. If a `ManagedSession`, call `_teardown(call_close=False)` first so
    the probe + reconnect worker stop before everything else (no
    probe-detected death triggering reconnect mid-shutdown).
 2. Close zeared subscribers on this session (cancel watchdogs,
-   undeclare Zenoh subs, deregister presence dispatchers).
+   undeclare Zenoh subs and their liveliness subs).
 3. Drop cached publishers — undeclare each declared `zenoh.Publisher`.
 4. Drop the retention cache and undeclare its queryable.
-5. Stop the presence observer (undeclare alive-sub + will-sub).
-6. Clear presence state (undeclare liveliness token + will queryable).
-7. Close the Zenoh session itself.
+5. Clear presence state (withdraw every liveliness token the session holds).
+6. Close the Zenoh session itself.
 
-Step 5 (presence-state clear, which undeclares the liveliness token)
-**must** run before step 7 (`session.close()`) so the token DELETE
-propagates to peers BEFORE the local transport tears down. Flipping
-these silently breaks subscribers of peer wills.
+Step 5 (presence-state clear) **must** run before step 6
+(`session.close()`) so the token DELETEs propagate to peers BEFORE the
+local transport tears down.
 
 ## `release_all` walk
 

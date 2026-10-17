@@ -1,554 +1,245 @@
+"""End-to-end tests for presence as liveliness tokens at contract keys (0.4.0).
+
+A publisher holds a key with ``declare_presence``; subscribers hear about it on
+``on_message(on_online=…, on_offline=…)``. Each test runs real in-process
+Zenoh sessions. The rows of plan 11 §5 that concern presence are here:
+a handle's ``undeclare()`` fires offline for that key only, with the session
+alive; and offline reaches ``on_offline`` with ``origin=WILL``, distinct from a
+tombstone.
+"""
+
 from __future__ import annotations
+
+import asyncio
 
 import pytest
 from conftest import wait
 
 import zeared as z
-from zeared.presence import (
-    ALIVE_PREFIX,
-    WILL_PREFIX,
-    _slug,
-    _WillEnvelope,
-    get_observer,
-    get_presence,
-)
-
-# ---------------------------------------------------------------------------
-# Unit-ish: presence state internals
-# ---------------------------------------------------------------------------
 
 
-class TestSlugDeterminism:
-    def test_same_inputs_produce_same_slug(self):
-        a = _slug('Foo.Bar', 'topic/one')
-        b = _slug('Foo.Bar', 'topic/one')
-        assert a == b
+def _status_class(topic: str, *, retained: bool = False) -> type[z.Message]:
+    @z.zeared
+    class Status(z.Message):
+        TOPIC = topic
+        LIVELINESS = True
+        RETAINED = retained
+        name: str = z.Str(required=True)
+        state: str = z.Str(default='up')
 
-    def test_different_inputs_produce_different_slugs(self):
-        a = _slug('Foo.Bar', 'topic/one')
-        b = _slug('Foo.Bar', 'topic/two')
-        c = _slug('Foo.Baz', 'topic/one')
-        assert len({a, b, c}) == 3
-
-    def test_slug_is_short_hex(self):
-        s = _slug('x', 'y')
-        assert len(s) == 16
-        assert all(c in '0123456789abcdef' for c in s)
+    return Status
 
 
-class TestRegisterWillRequiresLIVELINESS:
-    def test_non_liveliness_class_raises(self, session):
+class _Events:
+    """Collects presence events as ``(kind, name, origin)``."""
+
+    def __init__(self) -> None:
+        self.items: list[tuple[str, str, z.Origin]] = []
+
+    def online(self, meta: z.ZenohMeta) -> None:
+        self.items.append(('online', meta.captures['name'], meta.origin))
+
+    def offline(self, meta: z.ZenohMeta) -> None:
+        self.items.append(('offline', meta.captures['name'], meta.origin))
+
+
+class TestCallbacksNeedLiveliness:
+    def test_non_liveliness_class_rejects_them(self, session):
         @z.zeared
         class Plain(z.Message):
-            TOPIC = 'pres/nope/{name}'
+            TOPIC = 'pres/plain/{name}'
             name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
 
-        z.session = session
         with pytest.raises(z.TopicError, match='LIVELINESS = True'):
-            Plain(name='a', state='off').register_will()
+            Plain.on_message(lambda m: None, session=session, on_offline=lambda meta: None)
 
 
-class TestRegisterWillPublishesRetainedEnvelope:
-    def test_will_reachable_via_session_get(self, session):
-        @z.zeared
-        class Status(z.Message):
-            TOPIC = 'pres/status/{name}'
-            LIVELINESS = True
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        z.session = session
-        Status(name='alice', state='offline').register_will()
-        wait()
-
-        # The will envelope should be fetchable via session.get(__zeared/will/**).
-        replies = list(session.get(f'{WILL_PREFIX}/**'))
-        assert len(replies) >= 1
-        # Check the envelope decodes and points at the right target.
-        from zeared import _codec as codec
-
-        found = False
-        for r in replies:
-            ok = getattr(r, 'ok', None)
-            if ok is None:
-                continue
-            env_dict = codec.unpack(bytes(ok.payload), 'msgpack')
-            env = _WillEnvelope.load(env_dict)
-            if env.target_key_expr == 'pres/status/alice':
-                assert env.encoding == 'msgpack'
-                found = True
-                break
-        assert found
-
-    def test_liveliness_token_declared(self, session):
-        @z.zeared
-        class Status(z.Message):
-            TOPIC = 'pres/token/{name}'
-            LIVELINESS = True
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        z.session = session
-        Status(name='alice', state='offline').register_will()
-        wait()
-
-        # A liveliness subscriber with history=True should see the token.
-        seen: list = []
-
-        def on_alive(sample):
-            seen.append(str(sample.key_expr))
-
-        sub = session.liveliness().declare_subscriber(
-            f'{ALIVE_PREFIX}/**',
-            on_alive,
-            history=True,
-        )
-        wait()
-        sub.undeclare()
-
-        assert any(k == f'{ALIVE_PREFIX}/{session.zid()}' for k in seen)
-
-
-# ---------------------------------------------------------------------------
-# Integration: will fires on peer session close
-# ---------------------------------------------------------------------------
-
-
-class TestWillFiresOnPeerClose:
-    def test_subscriber_receives_synthesised_will(self, connected_pair):
+class TestOnlineAndOffline:
+    def test_offline_when_the_holder_closes(self, connected_pair):
         session_a, session_b = connected_pair
-
-        @z.zeared
-        class Status(z.Message):
-            TOPIC = 'pres/close/{name}'
-            # RETAINED so the late subscriber sees the 'online' state too.
-            RETAINED = True
-            LIVELINESS = True
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        # Producer on A: publish a retained online state and register a will.
-        Status(name='alice', state='online').send(session=session_a)
-        Status(name='alice', state='offline').register_will(session=session_a)
+        status = _status_class('pres/close/{name}')
+        status.declare_presence(name='alice', session=session_a)
         wait(0.3)
 
-        # Subscriber on B — joins after the publish + will.
-        received: list[tuple[str, str]] = []
-        sub = Status.on_message(
-            lambda m: received.append((m.name, m.state)),
-            session=session_b,
-        )
-        wait(0.5)
-
-        # Retained 'online' state should have been fetched.
-        assert ('alice', 'online') in received
-
-        # Producer session closes → will fires on B.
-        session_a.close()
-        wait(0.5)
-
-        sub.close()
-
-        # The offline will should have been synthesised on B.
-        assert ('alice', 'offline') in received
-
-    def test_late_subscriber_still_receives_will(self, connected_pair):
-        session_a, session_b = connected_pair
-
-        @z.zeared
-        class Status(z.Message):
-            TOPIC = 'pres/late/{name}'
-            LIVELINESS = True
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        # Producer registers will BEFORE subscriber exists.
-        Status(name='bob', state='offline').register_will(session=session_a)
+        events = _Events()
+        sub = status.on_message(lambda m: None, session=session_b, on_online=events.online, on_offline=events.offline)
         wait(0.3)
-
-        # Subscriber joins AFTER the will was registered.
-        received: list[tuple[str, str]] = []
-        sub = Status.on_message(
-            lambda m: received.append((m.name, m.state)),
-            session=session_b,
-        )
-        wait(0.3)
-
-        # Producer dies.
         session_a.close()
         wait(0.5)
         sub.close()
 
-        assert ('bob', 'offline') in received
+        assert events.items == [('online', 'alice', z.Origin.REPLAY), ('offline', 'alice', z.Origin.WILL)]
 
-
-class TestMultipleWillsPerSession:
-    def test_three_wills_all_fire(self, connected_pair):
+    def test_online_is_live_after_subscribing(self, connected_pair):
         session_a, session_b = connected_pair
+        status = _status_class('pres/live/{name}')
 
-        @z.zeared
-        class PeerStatus(z.Message):
-            TOPIC = 'pres/multi/status/{name}'
-            LIVELINESS = True
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        @z.zeared
-        class Registry(z.Message):
-            TOPIC = 'pres/multi/registry/{name}'
-            LIVELINESS = True
-            name: str = z.Str(required=True)
-            detail: str = z.Str(default='')
-
-        PeerStatus(name='alice', state='offline').register_will(session=session_a)
-        Registry(name='alice', detail='gone').register_will(session=session_a)
+        events = _Events()
+        sub = status.on_message(lambda m: None, session=session_b, on_online=events.online, on_offline=events.offline)
         wait(0.3)
-
-        got_status = []
-        got_registry = []
-        sub1 = PeerStatus.on_message(
-            lambda m: got_status.append((m.name, m.state)),
-            session=session_b,
-        )
-        sub2 = Registry.on_message(
-            lambda m: got_registry.append((m.name, m.detail)),
-            session=session_b,
-        )
+        token = status.declare_presence(name='bob', session=session_a)
         wait(0.3)
+        token.undeclare()
+        wait(0.3)
+        sub.close()
 
-        session_a.close()
-        wait(0.5)
-        sub1.close()
-        sub2.close()
+        assert events.items == [('online', 'bob', z.Origin.LIVE), ('offline', 'bob', z.Origin.WILL)]
 
-        assert ('alice', 'offline') in got_status
-        assert ('alice', 'gone') in got_registry
-
-
-class TestWillWithMetaCaptures:
-    def test_synthesised_sample_populates_meta_captures(self, connected_pair):
+    def test_undeclare_withdraws_one_key_while_the_session_lives(self, connected_pair):
+        """Plan 11 §5: a proxy drops one device's availability and stays up."""
         session_a, session_b = connected_pair
-
-        @z.zeared
-        class Status(z.Message):
-            TOPIC = 'pres/meta/{name}'
-            LIVELINESS = True
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        Status(name='charlie', state='offline').register_will(session=session_a)
+        status = _status_class('pres/proxy/{name}')
+        dev1 = status.declare_presence(name='dev1', session=session_a)
+        status.declare_presence(name='dev2', session=session_a)
         wait(0.3)
 
-        captures_seen: list[dict] = []
-        sub = Status.on_message(
-            lambda m, meta: captures_seen.append(dict(meta.captures)),
-            session=session_b,
-        )
+        events = _Events()
+        sub = status.on_message(lambda m: None, session=session_b, on_offline=events.offline)
+        wait(0.3)
+        dev1.undeclare()
+        wait(0.3)
+        held = sorted(str(r.ok.key_expr) for r in session_b.liveliness().get('pres/proxy/**', timeout=1.0) if r.ok)
+        sub.close()
+
+        assert events.items == [('offline', 'dev1', z.Origin.WILL)]
+        assert held == ['pres/proxy/dev2']
+
+    def test_release_withdraws_every_token(self, connected_pair):
+        session_a, session_b = connected_pair
+        status = _status_class('pres/release/{name}')
+        status.declare_presence(name='a', session=session_a)
+        status.declare_presence(name='b', session=session_a)
         wait(0.3)
 
-        session_a.close()
+        events = _Events()
+        sub = status.on_message(lambda m: None, session=session_b, on_offline=events.offline)
+        wait(0.3)
+        z.release(session=session_a)
         wait(0.5)
         sub.close()
 
-        # At least one event with captures['name'] = 'charlie'
-        assert any(c.get('name') == 'charlie' for c in captures_seen)
+        assert sorted(name for _kind, name, _origin in events.items) == ['a', 'b']
 
-
-class TestWillBucketDelete:
-    """Pin: explicit DELETE on a will key drops just that slug from the
-    observer's bucket, not the whole bucket. (No public unregister_will
-    API yet, so we exercise the path by directly poking at the
-    observer's _on_will.)
-    """
-
-    def test_delete_drops_only_matching_slug(self, session):
-        @z.zeared
-        class Status(z.Message):
-            TOPIC = 'pres/bucket/{name}'
-            LIVELINESS = True
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        z.session = session
-        # Register two wills for distinct concrete topics.
-        Status(name='alice', state='offline').register_will()
-        Status(name='bob', state='offline').register_will()
+    def test_own_session_tokens_are_delivered(self, session):
+        status = _status_class('pres/own/{name}')
+        events = _Events()
+        sub = status.on_message(lambda m: None, session=session, on_online=events.online)
         wait(0.2)
+        status.declare_presence(name='me', session=session)
+        wait(0.3)
+        sub.close()
 
-        # Force the observer to start (LIVELINESS subscriber would do
-        # this automatically; for the unit-style test we instantiate the
-        # observer directly).
-        from zeared.presence import _slug
-
-        observer = get_observer(session)
-        observer.start()
-        wait(0.3)  # initial fetch background thread populates the bucket
-
-        peer_zid = str(session.zid())
-        observer._wills_by_zid.get(peer_zid, {})
-        # The local session's own wills get filtered out via _self_zid
-        # check in _on_will. So we manually inject from the perspective
-        # of a remote peer to test bucket drop.
-        from zeared.presence import _WillEnvelope
-
-        slug_a = _slug('Status', 'pres/bucket/alice')
-        slug_b = _slug('Status', 'pres/bucket/bob')
-
-        observer._wills_by_zid['fake_peer'] = {
-            slug_a: _WillEnvelope(
-                source_zid='fake_peer',
-                target_key_expr='pres/bucket/alice',
-                encoding='msgpack',
-                payload=b'',
-            ),
-            slug_b: _WillEnvelope(
-                source_zid='fake_peer',
-                target_key_expr='pres/bucket/bob',
-                encoding='msgpack',
-                payload=b'',
-            ),
-        }
-
-        # Synthesise a DELETE sample on the alice slug.
-        import zenoh as _z
-
-        class _DelSample:
-            kind = _z.SampleKind.DELETE
-            key_expr = f'__zeared/will/fake_peer/{slug_a}'
-            payload = b''
-
-        observer._on_will(_DelSample())
-
-        # alice slug gone, bob slug remains.
-        assert slug_a not in observer._wills_by_zid['fake_peer']
-        assert slug_b in observer._wills_by_zid['fake_peer']
+        assert events.items == [('online', 'me', z.Origin.LIVE)]
 
 
-class TestOrphanedWillGC:
-    """Pin: the GC daemon drops stash entries for peers no longer alive.
+class TestOfflineIsNotATombstone:
+    """Plan 11 §5: offline and a deletion arrive on different callbacks."""
 
-    Verifies the periodic sweep — without it, a missed liveliness DELETE
-    (e.g. during a brief partition) would leak the entry forever.
+    def test_feeds_stay_separate(self, connected_pair):
+        session_a, session_b = connected_pair
+        status = _status_class('pres/tomb/{name}', retained=True)
+        status(name='alice').send(session=session_a)
+        status.declare_presence(name='alice', session=session_a)
+        wait(0.3)
+
+        typed: list[str] = []
+        removed: list[str] = []
+        events = _Events()
+        sub = status.on_message(
+            lambda m: typed.append(m.name),
+            session=session_b,
+            on_remove=lambda meta: removed.append(meta.captures['name']),
+            on_offline=events.offline,
+        )
+        wait(0.3)
+        status.unretain(name='alice', session=session_a)  # a tombstone, not an offline
+        wait(0.3)
+        assert removed == ['alice']
+        assert events.items == []
+
+        z.release(session=session_a)  # an offline, not a tombstone
+        wait(0.5)
+        sub.close()
+
+        assert removed == ['alice']
+        assert events.items == [('offline', 'alice', z.Origin.WILL)]
+        assert typed == ['alice']  # cb saw the retained record, never a presence event
+
+
+def _star(n: int) -> list:
+    """A listening peer and ``n`` peers connected to it: ``[hub, *spokes]``."""
+    import json
+    import socket
+
+    import zenoh
+
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    def open_peer(key: str) -> zenoh.Session:
+        c = zenoh.Config()
+        c.insert_json5('mode', '"peer"')
+        c.insert_json5('scouting/multicast/enabled', 'false')
+        c.insert_json5(key, json.dumps([f'tcp/127.0.0.1:{port}']))
+        return zenoh.open(c)
+
+    hub = open_peer('listen/endpoints')
+    sessions = [hub, *(open_peer('connect/endpoints') for _ in range(n))]
+    wait(0.4)
+    return sessions
+
+
+class TestTokensAggregateByKey:
+    """The day-one spike, pinned: to an observer that holds none itself, a key
+    goes offline when its *last* token goes, from whichever session.
+
+    (A session that holds a key *and* watches it sees it go offline when
+    another holder leaves; ``docs/presence/presence.md`` records that.)
     """
 
-    def test_gc_drops_orphan(self, session):
-        from zeared.presence import _WillEnvelope
-
-        observer = get_observer(session)
-        # Tighten interval to keep the test fast.
-        observer._gc_interval = 0.05
-        observer.start()
+    def test_a_second_holder_keeps_the_key_online(self):
+        status = _status_class('pres/agg/{name}')
+        observer, holder_a, holder_b = _star(2)
         try:
-            # Inject a stash entry for a peer that's NOT in _alive_zids.
-            observer._wills_by_zid['ghost_peer'] = {
-                'slug_x': _WillEnvelope(
-                    source_zid='ghost_peer',
-                    target_key_expr='gc/test/topic',
-                    encoding='msgpack',
-                    payload=b'',
-                ),
-            }
-            # Inject one for a peer that IS alive — must be retained.
-            observer._alive_zids.add('alive_peer')
-            observer._wills_by_zid['alive_peer'] = {
-                'slug_y': _WillEnvelope(
-                    source_zid='alive_peer',
-                    target_key_expr='gc/test/keep',
-                    encoding='msgpack',
-                    payload=b'',
-                ),
-            }
-            wait(0.3)  # let GC sweep at least once
-
-            assert 'ghost_peer' not in observer._wills_by_zid
-            assert 'alive_peer' in observer._wills_by_zid
+            events = _Events()
+            sub = status.on_message(lambda m: None, session=observer, on_offline=events.offline)
+            wait(0.3)
+            status.declare_presence(name='shared', session=holder_a)
+            second = status.declare_presence(name='shared', session=holder_b)
+            wait(0.3)
+            holder_a.close()
+            wait(0.5)
+            assert events.items == []  # holder_b still holds it
+            second.undeclare()
+            wait(0.4)
+            sub.close()
+            assert events.items == [('offline', 'shared', z.Origin.WILL)]
         finally:
-            observer.stop()
+            for sess in (holder_b, observer):
+                sess.close()
 
 
-class TestEnvelopeEncodingHonorsDebug:
-    """Pin: when ``z.debug`` is True the will envelope wire encoding is JSON,
-    and the subscriber decodes it correctly off ``sample.encoding``."""
-
-    def test_envelope_is_json_under_debug(self, session):
-        from zeared import _codec as codec
-
-        @z.zeared
-        class Status(z.Message):
-            TOPIC = 'pres/debug/{name}'
-            LIVELINESS = True
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        z.session = session
-        prev_debug = z.debug
-        z.debug = True
-        try:
-            Status(name='alice', state='offline').register_will()
-            wait()
-
-            replies = list(session.get(f'{WILL_PREFIX}/**'))
-            assert replies
-            decoded = False
-            for r in replies:
-                ok = getattr(r, 'ok', None)
-                if ok is None:
-                    continue
-                # Wire encoding hint must signal JSON.
-                assert 'json' in str(ok.encoding)
-                env_dict = codec.unpack(bytes(ok.payload), 'json')
-                env = _WillEnvelope.load(env_dict)
-                if env.target_key_expr == 'pres/debug/alice':
-                    decoded = True
-                    break
-            assert decoded
-        finally:
-            z.debug = prev_debug
-
-
-class TestNoFalsePositive:
-    def test_no_subscriber_event_without_peer_close(self, connected_pair):
+class TestAsyncCallbacks:
+    def test_async_on_offline_is_scheduled_on_the_loop(self, connected_pair):
         session_a, session_b = connected_pair
+        status = _status_class('pres/async/{name}')
+        status.declare_presence(name='carol', session=session_a)
 
-        @z.zeared
-        class Status(z.Message):
-            TOPIC = 'pres/nofalse/{name}'
-            LIVELINESS = True
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
+        async def main():
+            got: list[str] = []
+            done = asyncio.Event()
 
-        # Subscribe but don't close the peer.
-        received: list = []
-        sub = Status.on_message(
-            lambda m: received.append((m.name, m.state)),
-            session=session_b,
-        )
+            async def on_offline(meta):
+                got.append(meta.captures['name'])
+                done.set()
 
-        # Producer registers a will but stays alive.
-        Status(name='dana', state='offline').register_will(session=session_a)
-        wait(0.5)
-        sub.close()
+            sub = status.on_message(lambda m: None, session=session_b, on_offline=on_offline)
+            await asyncio.sleep(0.3)
+            await asyncio.to_thread(session_a.close)
+            await asyncio.wait_for(done.wait(), timeout=3.0)
+            sub.close()
+            return got
 
-        # The will should NOT have fired — peer is still alive.
-        assert received == []
-
-
-class TestWillSchemaAttachment:
-    """Regression (0.2.4): the will path is the twin of the retention schema
-    bug. A ``SCHEMA``-stamped ``LIVELINESS`` class must carry its schema in
-    the ``_WillEnvelope`` so the synthesised sample re-stamps the attachment
-    — otherwise a schema-checking subscriber sees ``None``, mismatches, and
-    silently drops the will."""
-
-    def test_envelope_carries_class_schema(self, session):
-        @z.zeared
-        class Status(z.Message):
-            TOPIC = 'pres/schema/env/{name}'
-            LIVELINESS = True
-            SCHEMA = '1'
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        z.session = session
-        Status(name='alice', state='offline').register_will()
-
-        state = get_presence(session)
-        (envelope,) = list(state._wills.values())
-        assert envelope.schema == '1'
-
-    def test_none_schema_leaves_envelope_schema_none(self, session):
-        @z.zeared
-        class Status(z.Message):
-            TOPIC = 'pres/schema/none/{name}'
-            LIVELINESS = True
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        z.session = session
-        Status(name='alice', state='offline').register_will()
-
-        state = get_presence(session)
-        (envelope,) = list(state._wills.values())
-        assert envelope.schema is None
-
-    def test_schema_checking_subscriber_receives_will(self, connected_pair):
-        session_a, session_b = connected_pair
-
-        @z.zeared
-        class Status(z.Message):
-            TOPIC = 'pres/schema/fire/{name}'
-            LIVELINESS = True
-            SCHEMA = '1'
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        Status(name='alice', state='offline').register_will(session=session_a)
-        wait(0.3)
-
-        received: list[tuple[str, str]] = []
-        errors: list = []
-        # meta form so we can also assert the re-stamped schema is visible.
-        schemas: list = []
-
-        def cb(m, meta):
-            received.append((m.name, m.state))
-            schemas.append(meta.schema)
-
-        sub = Status.on_message(
-            cb,
-            on_error=lambda exc, raw: errors.append(exc),
-            session=session_b,
-        )
-        wait(0.3)
-
-        session_a.close()
-        wait(0.5)
-        sub.close()
-
-        # The will fired and was NOT dropped as a schema mismatch.
-        assert ('alice', 'offline') in received
-        assert not any(isinstance(e, z.SchemaMismatchError) for e in errors), errors
-        # The synthesised sample re-stamped the class SCHEMA.
-        assert '1' in schemas
-
-    def test_will_dropped_when_subscriber_schema_differs(self, connected_pair):
-        """Sanity: the schema check still *works* on wills — a genuine
-        mismatch (producer '1', consumer '2') is dropped, proving the will
-        now carries a real schema tag rather than always-None."""
-        session_a, session_b = connected_pair
-
-        @z.zeared
-        class StatusV1(z.Message):
-            TOPIC = 'pres/schema/mismatch/{name}'
-            LIVELINESS = True
-            SCHEMA = '1'
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        @z.zeared
-        class StatusV2(z.Message):
-            TOPIC = 'pres/schema/mismatch/{name}'
-            LIVELINESS = True
-            SCHEMA = '2'
-            name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
-
-        StatusV1(name='alice', state='offline').register_will(session=session_a)
-        wait(0.3)
-
-        received: list = []
-        errors: list = []
-        sub = StatusV2.on_message(
-            lambda m: received.append((m.name, m.state)),
-            on_error=lambda exc, raw: errors.append(exc),
-            session=session_b,
-        )
-        wait(0.3)
-
-        session_a.close()
-        wait(0.5)
-        sub.close()
-
-        assert received == []
-        assert any(isinstance(e, z.SchemaMismatchError) for e in errors)
+        assert asyncio.run(main()) == ['carol']

@@ -62,11 +62,13 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
     __slots__ = (
         '__weakref__',  # required for WeakSet membership
         '_endpoint_label',
-        '_gc_interval',  # presence-observer GC sweep period
         '_initial_backoff',
+        '_link_state',  # 'up' | 'lost' — the link signals' pairing state
         '_lock',
         '_max_attempts',
         '_max_backoff',
+        '_on_link_lost_callbacks',  # registered via on_link_lost()
+        '_on_link_restored_callbacks',  # registered via on_link_restored()
         '_on_reconnect',  # legacy single-callback test hook
         '_on_reconnect_callbacks',  # public list — registered via on_reconnect()
         '_open_fn',
@@ -76,7 +78,10 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         '_raw',
         '_reconnect_signal',
         '_reconnect_thread',
+        '_resync_concurrency',  # re-attach walk: max subscribers fetching at once
+        '_resync_jitter',  # re-attach walk: max random delay before it, seconds
         '_retention_ttl',  # session-wide retention TTL fallback
+        '_routers',  # router zids at the last probe tick
         '_state',
     )
 
@@ -108,13 +113,22 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         self._on_reconnect_callbacks: list[
             tuple[Callable[[ManagedSession], object], asyncio.AbstractEventLoop | None]
         ] = []
+        self._on_link_lost_callbacks: list[
+            tuple[Callable[[ManagedSession], object], asyncio.AbstractEventLoop | None]
+        ] = []
+        self._on_link_restored_callbacks: list[
+            tuple[Callable[[ManagedSession], object], asyncio.AbstractEventLoop | None]
+        ] = []
+        # Link signals (0.4.0): 'lost' between an on_link_lost and its
+        # on_link_restored. ``_routers`` is what the probe saw last tick.
+        self._link_state = 'up'
+        self._routers: frozenset[str] = frozenset()
+        # Re-attach walk knobs; factories override (plan 18 §1.4 defaults).
+        self._resync_jitter = 2.0
+        self._resync_concurrency = 4
         # Single long-lived reconnect worker per ManagedSession.
         self._reconnect_thread: threading.Thread | None = None
         self._reconnect_signal = threading.Event()
-        # GC sweep period for the per-session presence observer. Factory
-        # callers override via ``peer(gc_interval=...)``; default mirrors
-        # ``presence._GC_INTERVAL_SECONDS``.
-        self._gc_interval = 60.0
         # Session-wide retention TTL fallback. ``None`` (default) means
         # no session-level fallback — class-level ``RETENTION_TTL`` is
         # the only knob. Factory ``peer(retention_ttl=N)`` overrides.

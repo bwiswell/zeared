@@ -84,8 +84,10 @@ Three properties to know before reaching for it:
   `CancellationToken` — still left the queryable producing all 8. Zenoh's
   cancellation is client-side only, which is why no cancel parameter is
   offered; shipping one would only imply a guarantee that isn't there.
-  This is the one place the `alisten` analogy breaks: that iterator's
-  cleanup undeclares a real subscriber and genuinely stops the work.
+  This is the one place the `alisten` analogy breaks: closing its stream
+  undeclares a real subscriber and genuinely stops the work.
+  `z.aquery_iter` returns the same [`Stream`](../stream.md) type, unbounded,
+  so its `dropped` stays `0` (0.4.0).
 
 `query_one` rides on the same path and short-circuits at the first decoded
 reply instead of waiting out `timeout`. It therefore sees only the errors

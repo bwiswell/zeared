@@ -7,9 +7,9 @@ query.
 
 ## Why it exists
 
-Cached concrete topics (retention) and stashed will keys (presence) are
-both indexed by full key — and in both cases, every incoming query has
-to find which cached entries intersect the query's key expression.
+Cached concrete topics (retention) are indexed by full key, and every
+incoming query has to find which cached entries intersect the query's key
+expression. (Presence's stashed will keys used it too, until 0.4.0.)
 Pre-0.0.10 this was a linear scan with `query_ke.intersects(...)` per
 entry, fine at small N but quadratic when both the cache and the query
 rate grow.

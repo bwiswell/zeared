@@ -88,18 +88,24 @@ def _flush(buffer: list[BufferedSend]) -> None:
                 msg = f'{cls.__name__}: session.delete failed on {topic!r}: {e}'
                 raise ZearedError(msg) from e
             continue
+        timestamp = None
         if retain_mode == 'retain':
+            from .message._message_send import _new_timestamp
+
+            timestamp = _new_timestamp(sess)
             _ret.get_retention_cache(cls, sess).store(
                 topic,
                 raw,
                 encoding,
                 attachment=attachment,
+                timestamp=timestamp,
             )
         _pub.get_cache(cls, sess).put(
             topic,
             raw,
             encoding,
             attachment=attachment,
+            timestamp=timestamp,
         )
     buffer.clear()
 

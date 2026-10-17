@@ -10,15 +10,16 @@ the module-level subscriber registry used by
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from .._managed_session import resolve_raw
-from ..errors import SubscriptionError
+from ..errors import SubscriptionError, TopicError
 from ._subscriber_dispatch import (
     _adapt_async_callback,
     _build_dispatch,
-    _make_presence_dispatcher,
+    _build_presence_handler,
     _wants_meta,
 )
 from ._subscriber_registry import (
@@ -37,6 +38,62 @@ if TYPE_CHECKING:
     from ..message import Message
     from ..watchdog import _SubscriberWatchdog
 
+_log = logging.getLogger('zeared.subscriber')
+
+
+def _watch_presence(raw: zenoh.Session, tpls: Any, handler: Callable[..., None], msg_cls: type) -> tuple:
+    """Declare a liveliness subscriber per template wildcard, then replay the keys already online.
+
+    Subscribe first, then ``get``: a token that appears in between is reported
+    twice (``LIVE``, then ``REPLAY``), which is harmless since online is
+    idempotent, where the other order could miss it. ``history=True`` would
+    replay too, but can't mark which PUTs are history.
+    """
+    from ..meta import Origin
+
+    subs: list = []
+    try:
+        for tpl in tpls.all:
+            subs.append(raw.liveliness().declare_subscriber(tpl.wildcard, handler))  # noqa: PERF401  (partial list drives rollback below)
+    except Exception as e:
+        for sub in subs:
+            with contextlib.suppress(Exception):
+                sub.undeclare()
+        msg = f'{msg_cls.__name__}: failed to declare presence subscriber: {e}'
+        raise SubscriptionError(msg) from e
+    for tpl in tpls.all:
+        try:
+            replies = raw.liveliness().get(tpl.wildcard)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning('%s: presence get() on %s failed: %s', msg_cls.__name__, tpl.wildcard, exc)
+            continue
+        for reply in replies:
+            ok = reply.ok if hasattr(reply, 'ok') else None
+            if ok is not None:
+                handler(ok, origin=Origin.REPLAY)
+    return tuple(subs)
+
+
+def _start_presence(  # noqa: PLR0913, PLR0917
+    raw: zenoh.Session,
+    tpls: Any,
+    msg_cls: type[Message],
+    on_online: Callable | None,
+    on_offline: Callable | None,
+    on_error: Callable[[Exception, bytes], None] | None,
+) -> tuple[Callable[..., None] | None, tuple]:
+    """The presence handler and its liveliness subscribers, or ``(None, ())`` without callbacks."""
+    if on_online is None and on_offline is None:
+        return None, ()
+    handler = _build_presence_handler(
+        msg_cls,
+        tpls,
+        _adapt_async_callback(on_online) if on_online is not None else None,
+        _adapt_async_callback(on_offline) if on_offline is not None else None,
+        on_error,
+    )
+    return handler, _watch_presence(raw, tpls, handler, msg_cls)
+
 
 # Type parameter for generic-parameterised ``Subscriber[Cls]``. Bound to
 # ``Message`` so callers can't accidentally parameterise with a non-message
@@ -48,9 +105,9 @@ class Subscriber[M: 'Message']:
     """Zeared subscription handle.
 
     Wraps N underlying ``zenoh.Subscriber`` instances — one per declared
-    topic template on the message class. For ``LIVELINESS = True`` classes,
-    also holds a presence-dispatcher registration that fires synthesised
-    samples when a peer's liveliness token disappears.
+    topic template on the message class. When ``on_online`` / ``on_offline``
+    were given (``LIVELINESS = True`` classes only, 0.4.0), it also holds one
+    liveliness subscriber per template.
 
     Close via ``.close()`` or as a context manager. Close is idempotent.
 
@@ -68,7 +125,8 @@ class Subscriber[M: 'Message']:
         # Redeclaration state — populated by `_declare`, used on reconnect.
         '_msg_cls',
         '_on_error',
-        '_presence_dispatcher',
+        '_presence_handler',
+        '_presence_subs',
         '_retained_fetch',
         '_seen_mismatches',
         '_session',
@@ -80,14 +138,15 @@ class Subscriber[M: 'Message']:
         self,
         zenoh_subs: tuple,
         session: SessionLike | None = None,
-        presence_dispatcher: Callable[..., bool] | None = None,
         watchdog: _SubscriberWatchdog | None = None,
     ) -> None:
         """Wrap already-declared zenoh subscribers as a zeared handle."""
         self._zenoh_subs = zenoh_subs
         self._session = session
-        self._presence_dispatcher = presence_dispatcher
         self._watchdog = watchdog
+        # Liveliness subscribers + their handler, for on_online / on_offline.
+        self._presence_subs: tuple = ()
+        self._presence_handler: Callable[..., None] | None = None
         self._closed = False
         # Filled in by `_declare` — kept on the instance so the reconnect
         # machinery can rebuild the underlying zenoh subs against a new raw.
@@ -118,7 +177,13 @@ class Subscriber[M: 'Message']:
         dedupe: bool | None = None,  # noqa: FBT001
         on_remove: Callable | None = None,
         retained_fetch: bool = True,  # noqa: FBT001, FBT002
+        on_online: Callable | None = None,
+        on_offline: Callable | None = None,
     ) -> Subscriber:
+        wants_presence = on_online is not None or on_offline is not None
+        if wants_presence and not getattr(msg_cls, 'LIVELINESS', False):
+            msg = f'{msg_cls.__name__}.on_message: on_online / on_offline need LIVELINESS = True'
+            raise TopicError(msg)
         tpls = msg_cls._templates()  # noqa: SLF001
         cb = _adapt_async_callback(cb)
         wants_meta = _wants_meta(cb)
@@ -194,29 +259,24 @@ class Subscriber[M: 'Message']:
         if getattr(msg_cls, 'RETAINED', False) and retained_fetch:
             _fetch_retained(session, tpls.all, dispatch, msg_cls, on_error)
 
-        # Presence-aware subscribers: for LIVELINESS classes, register an
-        # interested-party dispatcher with the per-session presence observer.
-        # The observer fires synthesised samples through ``dispatch`` when a
-        # peer's liveliness token disappears.
-        presence_dispatcher = None
-        if getattr(msg_cls, 'LIVELINESS', False):
-            presence_dispatcher = _make_presence_dispatcher(
-                msg_cls,
-                tpls,
-                dispatch,
-            )
-            from ..presence import get_observer
-
-            observer = get_observer(session)
-            observer.start()
-            observer.register(presence_dispatcher)
+        # Presence (0.4.0): a liveliness subscriber per template, mapping a
+        # token PUT to on_online and a DELETE to on_offline, then a replay of
+        # the keys already online (origin=REPLAY).
+        try:
+            presence_handler, presence_subs = _start_presence(raw, tpls, msg_cls, on_online, on_offline, on_error)
+        except Exception:
+            for zsub in zenoh_subs:
+                with contextlib.suppress(Exception):
+                    zsub.undeclare()
+            raise
 
         sub_handle = cls(
             tuple(zenoh_subs),
             session=session,
-            presence_dispatcher=presence_dispatcher,
             watchdog=watchdog,
         )
+        sub_handle._presence_subs = presence_subs
+        sub_handle._presence_handler = presence_handler
         sub_handle._msg_cls = msg_cls
         sub_handle._dispatch = dispatch
         sub_handle._on_error = on_error
@@ -226,7 +286,7 @@ class Subscriber[M: 'Message']:
         _register_subscriber(session, sub_handle)
         return sub_handle
 
-    def _redeclare(self, new_raw_session: zenoh.Session, managed_session: ManagedSession) -> None:
+    def _redeclare(self, new_raw_session: zenoh.Session, managed_session: ManagedSession) -> None:  # noqa: ARG002  (the restore walk passes both)
         """Rebuild the underlying ``zenoh.Subscriber`` set against ``new_raw_session``.
 
         Called by the reconnect machinery.
@@ -234,9 +294,9 @@ class Subscriber[M: 'Message']:
         Re-fires the retained fetch (RETAINED classes, unless the
         subscription opted out via ``retained_fetch=False``) so cached
         state replays — dedupe (0.0.9) suppresses already-seen samples.
-        Re-registers the presence dispatcher with the post-reconnect
-        observer. Clears the schema-mismatch warn-once cache because
-        peer zids may have changed.
+        Re-declares the presence watch, whose replay reports the keys
+        online now as ``REPLAY``. Clears the schema-mismatch warn-once
+        cache because peer zids may have changed.
         """
         if self._closed or self._msg_cls is None or self._dispatch is None:
             return
@@ -270,15 +330,30 @@ class Subscriber[M: 'Message']:
                 self._on_error,
             )
 
-        # Re-register with the per-session presence observer if applicable.
-        # Observer registry is keyed on id(session); after reconnect we
-        # bind to the managed session as the durable identity.
-        if self._presence_dispatcher is not None:
-            from ..presence import get_observer
+        # The old liveliness subscribers died with the old raw session.
+        if self._presence_handler is not None:
+            self._presence_subs = _watch_presence(new_raw_session, tpls, self._presence_handler, msg_cls)
 
-            observer = get_observer(managed_session)
-            observer.start()
-            observer.register(self._presence_dispatcher)
+    def _wants_replay(self) -> bool:
+        """Whether the re-attach walk should re-run this subscriber's retained fetch."""
+        return (
+            not self._closed
+            and self._msg_cls is not None
+            and self._dispatch is not None
+            and bool(getattr(self._msg_cls, 'RETAINED', False))
+            and self._retained_fetch
+            and self._auto_reconnect
+        )
+
+    def _replay_retained(self, raw: zenoh.Session) -> None:
+        """Re-run the retained fetch on ``raw`` (0.4.0, the re-attach walk).
+
+        No redeclare: the Zenoh subscribers survived the link outage. Replies
+        go through the same dispatch as ``REPLAY``, dedupe-safe.
+        """
+        if not self._wants_replay() or self._msg_cls is None or self._dispatch is None:
+            return
+        _fetch_retained(raw, self._msg_cls._templates().all, self._dispatch, self._msg_cls, self._on_error)  # noqa: SLF001
 
     def close(self) -> None:
         """Undeclare every underlying zenoh subscriber. Idempotent."""
@@ -290,15 +365,9 @@ class Subscriber[M: 'Message']:
         if self._watchdog is not None:
             with contextlib.suppress(Exception):
                 self._watchdog.cancel()
-        for sub in self._zenoh_subs:
+        for sub in (*self._zenoh_subs, *self._presence_subs):
             with contextlib.suppress(Exception):
                 sub.undeclare()
-        if self._presence_dispatcher is not None and self._session is not None:
-            with contextlib.suppress(Exception):
-                from ..presence import get_observer
-
-                observer = get_observer(self._session)
-                observer.unregister(self._presence_dispatcher)
         if self._session is not None:
             _deregister_subscriber(self._session, self)
 

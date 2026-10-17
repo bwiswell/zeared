@@ -54,7 +54,7 @@ from seared import (
 
 from . import _codec as codec
 from ._factories import client, hub, open, peer  # noqa: A004 — `open` shadows builtin intentionally
-from ._managed_session import ManagedSession, OnReconnectHandle
+from ._managed_session import CallbackHandle, ManagedSession, OnReconnectHandle
 from ._mode import Mode
 from ._module_class import _ZearedModule
 from ._release import release, release_all
@@ -93,10 +93,11 @@ from .errors import (
 )
 from .message import Message
 from .meta import Origin, ZenohMeta
-from .presence import clear_observer, clear_presence_state
+from .presence import PresenceToken, clear_presence_state
 from .publisher import clear_publisher_cache, published_topics
 from .queryable import Queryable, QueryContext, clear_queryable_cache
 from .retention import clear_retention_cache
+from .stream import Stream
 from .subscriber import Subscriber
 
 __version__ = '0.3.13'
@@ -121,6 +122,7 @@ __all__ = [
     'Bytes',
     # zeared surface
     'CallbackError',
+    'CallbackHandle',
     'Date',
     'DateTime',
     'Decimal',
@@ -140,6 +142,7 @@ __all__ = [
     'PandasFrame',
     'Path',
     'PolarsFrame',
+    'PresenceToken',
     'QueryContext',
     'QueryError',
     'Queryable',
@@ -150,6 +153,7 @@ __all__ = [
     'SessionConfig',
     'SessionDeadError',
     'Str',
+    'Stream',
     'Subscriber',
     'SubscriberError',
     'SubscriptionError',
@@ -177,7 +181,6 @@ __all__ = [
     'asend_batch',
     'aunretain',
     'batch',
-    'clear_observer',
     'clear_presence_state',
     'clear_publisher_cache',
     'clear_queryable_cache',

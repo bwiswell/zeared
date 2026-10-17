@@ -234,3 +234,27 @@ class TestIssuedAtOnRealSamples:
         issued = seen[0].issued_at
         assert issued is not None, 'issued_at is None on a real sample'
         assert abs((issued - before).total_seconds()) < 60.0
+
+
+class TestRepublishMarker:
+    """0.4.0: the attachment marker a republished retained value carries."""
+
+    def test_marker_alone(self):
+        from zeared.meta import _is_republish, _replay_attachment
+
+        marked = _replay_attachment(None)
+        assert _is_republish(marked)
+
+    def test_marker_keeps_the_schema(self):
+        from zeared import _codec as codec
+        from zeared.meta import _is_republish, _parse_attachment_schema, _replay_attachment
+
+        marked = _replay_attachment(codec.pack({'schema': '2'}, 'msgpack'))
+        assert _is_republish(marked)
+        assert _parse_attachment_schema(marked) == '2'
+
+    @pytest.mark.parametrize('attachment', [None, b'', b'not msgpack', b'\x81\xa6schema\xa12'])
+    def test_unmarked(self, attachment):
+        from zeared.meta import _is_republish
+
+        assert not _is_republish(attachment)

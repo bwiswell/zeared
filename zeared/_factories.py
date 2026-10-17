@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import zenoh
 
@@ -309,6 +309,31 @@ def _resolve_retry_knobs(
     return retry_b, initial_b, max_b, max_a
 
 
+def _resolve_session_knobs(
+    config: SessionConfig | None,
+    # ``_MISSING`` or a real value, as in ``_resolve_retry_knobs``.
+    auto_reconnect: Any,
+    probe_interval: Any,
+    resync_jitter: Any,
+    resync_concurrency: Any,
+) -> tuple[bool, float, float, int]:
+    """Layer explicit session kwargs over a ``SessionConfig`` base (0.4.0).
+
+    Returns ``(auto_reconnect, probe_interval, resync_jitter, resync_concurrency)``.
+    An explicit keyword wins; an absent one defers to ``config``, then to the
+    defaults (``False``, ``10.0``, ``2.0``, ``4``). Shared by ``peer`` / ``client``.
+    """
+    if config is not None:
+        out = [bool(config.auto_reconnect), config.probe_interval, config.resync_jitter, config.resync_concurrency]
+    else:
+        out = [False, 10.0, 2.0, 4]
+    for i, explicit in enumerate((auto_reconnect, probe_interval, resync_jitter, resync_concurrency)):
+        if explicit is not _MISSING:
+            out[i] = explicit
+    ar, pi, rj, rc = out
+    return bool(ar), pi, float(rj), int(rc)
+
+
 def _finalise_session(  # noqa: PLR0913
     raw: zenoh.Session,
     _open: Callable[[], zenoh.Session],
@@ -316,12 +341,13 @@ def _finalise_session(  # noqa: PLR0913
     *,
     auto_reconnect: bool,
     retention_ttl: float | None,
-    gc_interval: float,
     probe_interval: float,
     initial_b: float,
     max_b: float,
     max_a: int | None,
     factory_name: str,
+    resync_jitter: float = 2.0,
+    resync_concurrency: int = 4,
 ) -> zenoh.Session | ManagedSession:
     """Post-open: return raw or wrap as ManagedSession; reject ``retention_ttl`` on raw sessions.
 
@@ -346,9 +372,10 @@ def _finalise_session(  # noqa: PLR0913
         max_a,
         probe_interval,
     )
-    managed._gc_interval = gc_interval  # noqa: SLF001
     if retention_ttl is not None:
         managed._retention_ttl = retention_ttl  # noqa: SLF001
+    managed._resync_jitter = resync_jitter  # noqa: SLF001
+    managed._resync_concurrency = resync_concurrency  # noqa: SLF001
     return managed
 
 
@@ -362,11 +389,12 @@ def peer(  # noqa: PLR0913
     initial_backoff: object = _MISSING,
     max_backoff: object = _MISSING,
     max_attempts: object = _MISSING,
-    auto_reconnect: bool = False,
-    probe_interval: float = 10.0,
+    auto_reconnect: object = _MISSING,
+    probe_interval: object = _MISSING,
     timestamping: bool = True,
-    gc_interval: float = 60.0,
     retention_ttl: float | None = None,
+    resync_jitter: object = _MISSING,
+    resync_concurrency: object = _MISSING,
 ) -> zenoh.Session | ManagedSession:
     """Open a Zenoh peer-mode session.
 
@@ -385,6 +413,13 @@ def peer(  # noqa: PLR0913
         initial_backoff,
         max_backoff,
         max_attempts,
+    )
+    auto_reconnect, probe_interval, resync_jitter, resync_concurrency = _resolve_session_knobs(
+        config,
+        auto_reconnect,
+        probe_interval,
+        resync_jitter,
+        resync_concurrency,
     )
 
     if connect is not None:
@@ -419,12 +454,13 @@ def peer(  # noqa: PLR0913
         label,
         auto_reconnect=auto_reconnect,
         retention_ttl=retention_ttl,
-        gc_interval=gc_interval,
         probe_interval=probe_interval,
         initial_b=initial_b,
         max_b=max_b,
         max_a=max_a,
         factory_name='peer',
+        resync_jitter=resync_jitter,
+        resync_concurrency=resync_concurrency,
     )
 
 
@@ -437,11 +473,12 @@ def client(  # noqa: PLR0913
     initial_backoff: object = _MISSING,
     max_backoff: object = _MISSING,
     max_attempts: object = _MISSING,
-    auto_reconnect: bool = False,
-    probe_interval: float = 10.0,
+    auto_reconnect: object = _MISSING,
+    probe_interval: object = _MISSING,
     timestamping: bool = True,
-    gc_interval: float = 60.0,
     retention_ttl: float | None = None,
+    resync_jitter: object = _MISSING,
+    resync_concurrency: object = _MISSING,
 ) -> zenoh.Session | ManagedSession:
     """Open a Zenoh client-mode session connected to one or more routers.
 
@@ -461,6 +498,13 @@ def client(  # noqa: PLR0913
         initial_backoff,
         max_backoff,
         max_attempts,
+    )
+    auto_reconnect, probe_interval, resync_jitter, resync_concurrency = _resolve_session_knobs(
+        config,
+        auto_reconnect,
+        probe_interval,
+        resync_jitter,
+        resync_concurrency,
     )
 
     if router is not None:
@@ -503,12 +547,13 @@ def client(  # noqa: PLR0913
         label,
         auto_reconnect=auto_reconnect,
         retention_ttl=retention_ttl,
-        gc_interval=gc_interval,
         probe_interval=probe_interval,
         initial_b=initial_b,
         max_b=max_b,
         max_a=max_a,
         factory_name='client',
+        resync_jitter=resync_jitter,
+        resync_concurrency=resync_concurrency,
     )
 
 
@@ -587,21 +632,23 @@ def hub(  # noqa: PLR0913
     )
 
 
-def open(cfg: SessionConfig) -> zenoh.Session:  # noqa: A001 — shadows builtin intentionally
+def open(cfg: SessionConfig) -> zenoh.Session | ManagedSession:  # noqa: A001 — shadows builtin intentionally
     """Open a session from a :class:`SessionConfig`. Unified entry point.
 
     Dispatches to :func:`peer` / :func:`client` / :func:`hub` based on
-    ``cfg.mode``.
+    ``cfg.mode``. Returns a ``ManagedSession`` when ``cfg.auto_reconnect``
+    is set (0.4.0), a raw ``zenoh.Session`` otherwise. A router (hub) is
+    what others reconnect to, so ``auto_reconnect`` there raises
+    ``ValueError``.
     """
-    # ``peer`` / ``client`` declare ``Session | ManagedSession``; the
-    # wrapper is only returned when ``auto_reconnect=True``, which
-    # ``SessionConfig`` doesn't carry — so these always take the raw
-    # branch. Narrowed here to keep ``open``'s public return stable.
     if cfg.mode is Mode.PEER:
-        return cast('zenoh.Session', peer(config=cfg))
+        return peer(config=cfg)
     if cfg.mode is Mode.CLIENT:
-        return cast('zenoh.Session', client(config=cfg))
+        return client(config=cfg)
     if cfg.mode is Mode.ROUTER:
+        if cfg.auto_reconnect:
+            msg = 'SessionConfig.auto_reconnect applies to peer and client modes, not router (a hub)'
+            raise ValueError(msg)
         return hub(config=cfg)
     msg = f'SessionConfig.mode unrecognised: {cfg.mode!r}'
     raise ValueError(msg)

@@ -231,16 +231,6 @@ class TestSlashInASingleSegmentValue:
         with pytest.raises(z.TopicError, match='contains "/"'):
             named.unretain(name='a/b', session=session)
 
-    def test_register_will_raises(self, session):
-        @z.zeared
-        class Alive(z.Message):
-            TOPIC = 'render/slash/alive/{dev}'
-            LIVELINESS = True
-            dev: str = z.Str(required=True)
-
-        with pytest.raises(z.TopicError, match='contains "/"'):
-            Alive(dev='a/b').register_will(session=session)
-
     def test_selector_does_not_check(self, named):
         assert _build_selector(named, {'name': 'a/b'}, None) == 'render/slash/a/b'
 
@@ -328,7 +318,7 @@ class TestDataKeySlots:
         assert msg.dev == 'key-says'
         assert captures == {'dev': 'key-says'}
 
-    def test_register_will(self, session):
+    def test_declare_presence(self, session):
         @z.zeared
         class Alive(z.Message):
             TOPIC = 'render/dk/alive/{dev}'
@@ -336,8 +326,9 @@ class TestDataKeySlots:
             dev: str = z.Str(required=True, data_key='device')
             state: str = z.Str(default='up')
 
-        # Before 0.3.8 this raised ``TopicError: missing field 'dev'``.
-        Alive(dev='a', state='down').register_will(session=session)
+        # The 0.3.8 render (attribute, not wire key) carries over to presence.
+        assert Alive(dev='a').declare_presence(session=session).key == 'render/dk/alive/a'
+        assert Alive.declare_presence(dev='b', session=session).key == 'render/dk/alive/b'
 
 
 class TestQueryReplyAndSelector:

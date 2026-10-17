@@ -9,6 +9,11 @@ Two detection paths feed one reconnect implementation:
     / ``.delete`` exception paths via ``_note_failure``. Catches the
     0–``probe_interval`` gap on publisher-heavy paths.
 
+The probe also watches the router link (``_link.py``, 0.4.0): a hub
+restart drops the link without killing the session, so it runs the
+re-attach walk and fires ``on_link_lost`` / ``on_link_restored`` itself.
+``_reconnect`` fires the same pair around a session swap.
+
 Both feed ``_reconnect`` which:
   1. CAS ``state`` IDLE → RECONNECTING.
   2. Open a new raw session via ``open_fn`` with backoff.
@@ -17,7 +22,7 @@ Both feed ``_reconnect`` which:
   5. Walk the retention registry and redeclare its queryables.
   6. Walk the subscriber registry and re-declare each.
   7. Walk the queryable registry and re-declare each.
-  8. Replay any registered presence wills under the new zid.
+  8. Re-declare every held presence token on the new raw session.
   9. Close the old raw session quietly.
 
 If step 2 exhausts ``max_attempts``, set ``state = DEAD`` and stop the
@@ -35,14 +40,15 @@ import logging
 import threading
 
 from .._managed_session import ManagedSession, _is_dead
+from ._link import _check_link, _link_lost, _link_restored, _note_routers
 from ._restore import (
     _open_with_backoff,
     _ReconnectAbortedError,
+    _restore_presence,
     _restore_publishers,
     _restore_queryables,
     _restore_retention,
     _restore_subscribers,
-    _restore_wills,
 )
 
 _log = logging.getLogger('zeared.reconnect')
@@ -66,6 +72,7 @@ def start_probe(managed: ManagedSession) -> None:
     """
     managed._probe_cancel.clear()
     managed._reconnect_signal.clear()
+    _note_routers(managed)  # the baseline link detection compares against
 
     if managed._reconnect_thread is None:
         worker = threading.Thread(
@@ -97,6 +104,8 @@ def _probe_loop(managed: ManagedSession) -> None:
                 continue
             if _is_dead(managed._raw):
                 _trigger_reconnect(managed)
+                continue
+            _check_link(managed)
         except Exception:  # noqa: BLE001
             _log.exception('zeared probe loop iteration raised — continuing')
 
@@ -145,11 +154,13 @@ def _trigger_reconnect(managed: ManagedSession) -> None:
 
 
 def _reconnect(managed: ManagedSession) -> None:
-    """Open a fresh raw session with backoff; atomically swap; restore subscribers + wills.
+    """Open a fresh raw session with backoff; atomically swap; restore subscribers + presence.
 
     Sets state = DEAD on terminal failure.
     """
     label = managed._endpoint_label
+    # The session was found dead: this session's view of the mesh is stale.
+    _link_lost(managed)
     try:
         new_raw = _open_with_backoff(
             managed._open_fn,
@@ -188,13 +199,13 @@ def _reconnect(managed: ManagedSession) -> None:
     #      (dedupe-safe), re-register presence dispatcher.
     #   4. Queryables — re-declare each user queryable (compute-serving,
     #      no replayed state) against the new raw so peer gets resolve.
-    #   5. Wills — re-register every previously-registered envelope
-    #      under the new zid; peers see legitimate offline → online.
+    #   5. Presence — re-declare every held token on the new raw; peers
+    #      see the keys come back online.
     _restore_publishers(managed)
     _restore_retention(managed)
     _restore_subscribers(managed)
     _restore_queryables(managed)
-    _restore_wills(managed)
+    _restore_presence(managed)
 
     # Quietly close the old raw — best effort.
     with contextlib.suppress(Exception):
@@ -210,3 +221,8 @@ def _reconnect(managed: ManagedSession) -> None:
 
     # Public on_reconnect callbacks — fire in registration order.
     managed._fire_reconnect_callbacks()
+
+    # The view is whole again: the restore walks ran, retained fetch
+    # included, so there is no separate re-attach walk.
+    _note_routers(managed)
+    _link_restored(managed, walk=False)

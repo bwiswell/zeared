@@ -23,17 +23,18 @@ _log_connect = logging.getLogger('zeared.connect')
 def release(*, session: SessionLike) -> None:
     """Walk every zeared-owned resource for ``session`` in the right order and close the session itself.
 
-    Order matters — step 5 (presence-state clear, which undeclares the
-    liveliness token) MUST run before step 6 (``session.close()``) so the
-    token DELETE propagates to peers BEFORE the local transport tears
-    down. Flipping these silently breaks subscribers of peer wills.
+    Order matters — step 4 (presence-state clear, which undeclares the
+    session's liveliness tokens) MUST run before step 5 (``session.close()``)
+    so the token DELETEs propagate to peers BEFORE the local transport tears
+    down. Closing first still withdraws the tokens, but only once peers
+    notice the session is gone.
 
     Idempotent: a second call is a no-op (each cleared registry is empty).
 
     The keyword-only ``session=`` is intentional — no implicit module-default
     fallback. Callers must explicitly name the session being released.
     """
-    from .presence import clear_observer, clear_presence_state
+    from .presence import clear_presence_state
     from .publisher import clear_publisher_cache
     from .queryable import _close_queryables_for
     from .retention import clear_retention_cache
@@ -45,7 +46,7 @@ def release(*, session: SessionLike) -> None:
         session._teardown(call_close=False)  # noqa: SLF001
 
     # 1. Close zeared subscribers on this session (cancels watchdogs,
-    #    undeclares Zenoh subs, deregisters presence dispatchers).
+    #    undeclares Zenoh subs and their liveliness subs).
     _close_subscribers_for(session)
 
     # 1b. Close user queryables on this session — undeclare each
@@ -59,16 +60,13 @@ def release(*, session: SessionLike) -> None:
     # 3. Retention cache + queryable.
     clear_retention_cache(session=session)
 
-    # 4. Presence observer — undeclare the alive-sub + will-sub.
-    clear_observer(session=session)
-
-    # 5. Presence state — undeclare liveliness token + will queryable.
-    #    *** Must run BEFORE session.close() below: this is the call that
-    #    *** triggers peers' will-synthesis, and Zenoh needs the local
-    #    *** transport alive to propagate the DELETE.
+    # 4. Presence state — undeclare every liveliness token the session holds.
+    #    *** Must run BEFORE session.close() below: this is what peers see as
+    #    *** offline, and Zenoh needs the local transport alive to propagate
+    #    *** the DELETEs.
     clear_presence_state(session=session)
 
-    # 6. Close the Zenoh session itself.
+    # 5. Close the Zenoh session itself.
     # Already closed (or otherwise unhealthy) — nothing useful we can do.
     with contextlib.suppress(Exception):
         session.close()
@@ -78,8 +76,7 @@ def release_all() -> None:  # noqa: C901
     """Release every zeared-managed session in this process.
 
     Walks the per-session registries (subscribers, publisher caches,
-    retention caches, presence state, presence observers, ManagedSession
-    wrappers) and calls :func:`release` on each unique session
+    retention caches, presence state, ManagedSession wrappers) and calls :func:`release` on each unique session
     reference. Idempotent — running twice is a no-op (registries are
     emptied on first pass).
 
@@ -89,12 +86,7 @@ def release_all() -> None:  # noqa: C901
     without affecting others.
     """
     from ._managed_session import _managed_sessions
-    from .presence import (
-        _observer_registry,
-    )
-    from .presence import (
-        _registry as _presence_registry,
-    )
+    from .presence import _registry as _presence_registry
     from .publisher import _registry as _publisher_registry
     from .queryable import _queryables, _queryables_lock
     from .retention import _registry as _retention_registry
@@ -136,12 +128,10 @@ def release_all() -> None:  # noqa: C901
     for cache in list(_retention_registry.values()):
         _add(getattr(cache, '_session', None))
 
-    # Presence state + observer registries are keyed id(session); values
-    # carry ``session`` (no underscore — the public attr).
+    # Presence state is keyed id(session); values carry ``session`` (no
+    # underscore — the public attr).
     for state in list(_presence_registry.values()):
         _add(getattr(state, 'session', None))
-    for observer in list(_observer_registry.values()):
-        _add(getattr(observer, 'session', None))
 
     for sess in list(sessions.values()):
         try:

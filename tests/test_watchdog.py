@@ -267,8 +267,7 @@ class TestWatchdogViaOnMessage:
 
 # ---------------------------------------------------------------------------
 # Origin gating (0.3.0) — only LIVE samples feed the watchdog: a retained
-# replay can't establish cadence from stale data, and a will (the producer
-# died) can't reset the quiet timer.
+# replay can't establish cadence from stale data.
 # ---------------------------------------------------------------------------
 
 
@@ -297,19 +296,24 @@ class TestWatchdogOriginGating:
         )
 
     def _sample(self):
-        from zeared import _codec as codec
-        from zeared.presence._presence_synthesized_sample import (
-            _SynthesizedSample,
-        )
+        """A minimal stand-in for ``zenoh.Sample``: what dispatch and ``from_sample`` read."""
+        import types
 
-        return _SynthesizedSample(
+        import zenoh
+
+        from zeared import _codec as codec
+
+        return types.SimpleNamespace(
             key_expr='wdg/gate',
             payload=codec.pack({'v': 1}, 'msgpack'),
-            encoding_mime='application/msgpack',
-            source_zid='zid-test',
+            kind=zenoh.SampleKind.PUT,
+            encoding='application/msgpack',
+            timestamp=None,
+            source_info=None,
+            attachment=None,
         )
 
-    def test_live_pings_replay_and_will_do_not(self):
+    def test_live_pings_replay_does_not(self):
         class StubWatchdog:
             pings = 0
 
@@ -322,8 +326,6 @@ class TestWatchdogOriginGating:
         dispatch(self._sample())  # default LIVE
         assert wd.pings == 1
         dispatch(self._sample(), origin=z.Origin.REPLAY)
-        assert wd.pings == 1
-        dispatch(self._sample(), origin=z.Origin.WILL)
         assert wd.pings == 1
         dispatch(self._sample(), origin=z.Origin.LIVE)
         assert wd.pings == 2

@@ -8,13 +8,15 @@ Mixin — contributes no instance state. ``Message`` composes this via MRO.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterable
+    from collections.abc import Iterable
 
     import zenoh
 
+    from ..meta import ZenohMeta
+    from ..stream import Stream
     from .message import Message
 
 
@@ -70,23 +72,49 @@ class _MessageAsyncMixin:
 
         await asyncio.to_thread(self.unretain, session=session, topic=topic)
 
+    @overload
+    @classmethod
+    def alisten[M: Message](
+        cls: type[M],
+        *,
+        session: zenoh.Session | None = ...,
+        maxsize: int = ...,
+        meta: Literal[False] = ...,
+    ) -> Stream[M]: ...
+
+    @overload
+    @classmethod
+    def alisten[M: Message](
+        cls: type[M],
+        *,
+        session: zenoh.Session | None = ...,
+        maxsize: int = ...,
+        meta: Literal[True],
+    ) -> Stream[tuple[M, ZenohMeta]]: ...
+
+    @overload
+    @classmethod
+    def alisten[M: Message](
+        cls: type[M],
+        *,
+        session: zenoh.Session | None = ...,
+        maxsize: int = ...,
+        meta: bool = ...,
+    ) -> Stream[M] | Stream[tuple[M, ZenohMeta]]: ...
+
     @classmethod
     def alisten(
         cls: type[Message],
         *,
         session: zenoh.Session | None = None,
-        maxsize: int = 0,
+        maxsize: int = 1024,
         meta: bool = False,
-    ) -> AsyncIterator:
+    ) -> Stream[Any]:
         """Async-iterator subscriber. ``async for msg in Cls.alisten(): ...``.
 
-        Each incoming sample is decoded and delivered through an
-        ``asyncio.Queue`` bridging from the Zenoh callback thread. Break
-        out of the loop (or cancel the iterating task) to close cleanly.
-
-        ``meta=True`` yields ``(msg, meta)`` tuples — ``meta`` is the same
-        ``ZenohMeta`` a 2-arg ``on_message`` callback receives (captures,
-        schema, ``origin``, ...).
+        Returns a :class:`~zeared.Stream`; see :func:`zeared.alisten` for the
+        bound (default 1024, drop-oldest, counted on ``stream.dropped``),
+        ``meta=True`` and how the stream closes.
         """
         from ..async_ import alisten
 
