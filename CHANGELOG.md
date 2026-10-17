@@ -98,6 +98,12 @@ them with what to do.
 - **`z.apeer` and `z.aclient` layer explicit keyword arguments over `config=`**, as `z.peer` and `z.client` do.
   Given a `config=`, `apeer` dropped `connect`, `listen`, `zenoh_config`, `retry` and the backoff settings, and
   `aclient` all of those but `router`, without a word.
+- **The schema-mismatch warning names each sender.** It was keyed on `sample.source_info`, which Zenoh leaves unset
+  on an ordinary put, so every sender shared one entry and only the first misaligned publisher ever reached
+  `on_error`. It is keyed on the zid in the sample's timestamp; a sample with no timestamp has no sender to name.
+- **A queryable's `on_error` that raises is logged, and the getter still gets its error reply.** It escaped into
+  Zenoh's callback, and when a handler had failed it also skipped the `reply_err`, so the getter took a cut-off
+  stream for the whole answer.
 
 ### Removed
 

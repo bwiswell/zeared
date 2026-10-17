@@ -24,7 +24,7 @@ from ..errors import (
     SchemaMismatchError,
     SubscriptionError,
 )
-from ..meta import Origin, _is_republish, _parse_attachment_schema, _parse_hlc, from_sample
+from ..meta import Origin, _is_republish, _parse_attachment_schema, _parse_hlc, _parse_origin_zid, from_sample
 
 if TYPE_CHECKING:
     from collections import OrderedDict
@@ -56,9 +56,9 @@ def _safe_on_error(
     logging when none is registered.
 
     Dispatch runs on Zenoh's callback thread. An ``on_error`` that raises
-    used to escape into it — the same defect fixed on the queryable side
-    in 0.3.2, and the one this module's own docstring already promises
-    against ("every failure mode through ``on_error`` / ``_log``").
+    used to escape into it, which this module's own docstring promises
+    against ("every failure mode through ``on_error`` / ``_log``"). The
+    queryable side has its own copy of this guard (0.4.0).
 
     Zenoh's handler does absorb the escape, so the subscription survives
     either way; what it does not do is say what the *original* error was.
@@ -333,14 +333,16 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
         # attachment; mismatches drop the sample (route via on_error
         # as SchemaMismatchError) and warn-once per (sender_zid,
         # observed_schema) pair to avoid log spam from a misaligned
-        # peer.
+        # peer. The sender is the zid in the sample's HLC timestamp:
+        # Zenoh leaves ``source_info`` unset on an ordinary put, so
+        # keying on it put every sender in one pair. A sample with no
+        # timestamp has no sender to name ('').
         if expected_schema is not None:
             attach = sample.attachment
             attach_bytes = bytes(attach) if attach is not None else None
             observed_schema = _parse_attachment_schema(attach_bytes)
             if observed_schema != expected_schema:
-                src_info = sample.source_info
-                sender_zid = str(src_info) if src_info is not None else ''
+                sender_zid = _parse_origin_zid(sample.timestamp) or ''
                 pair = (sender_zid, observed_schema)
                 if pair in seen_mismatches:
                     # Touch the entry — keeps recently-seen pairs hot
