@@ -39,9 +39,14 @@ python -m zeared.doc.typescript fleet_msgs -o fleet.ts --check   # CI guard
 | `-o` / `--output FILE` | the `.ts` file to write; stdout without it |
 | `--check` | exit 1 if `FILE` is missing or out of date; requires `-o` |
 
-Discovery takes every `Seared` subclass with declared fields (`z.Message`,
-`z.Zeared`) in the target's modules, plus every class they reference
-(`T` targets, `Union` variants). A class whose name starts with `_` is
+`zeared.doc` re-exports the TypeScript names (`generate_ts`, `emit_ts`,
+`render_interface`, `ts_type`) lazily, on first use, so running
+`python -m zeared.doc.typescript` no longer prints runpy's
+`RuntimeWarning` (0.4.2).
+
+Discovery takes every class `@zeared` built (`z.Message`, `z.Zeared`), with
+fields or without (seared 0.4.1), in the target's modules, plus every class
+they reference (`T` targets, `Union` variants). A class whose name starts with `_` is
 left out unless a public one references it. Pages land under directories
 mirroring the target's subpackages; a referenced class from outside the
 target lands at the root.
@@ -58,9 +63,9 @@ From `zeared.doc` (`__init__.py`):
 | `main(argv=None)` | the `python -m zeared.doc` / `zeared-doc` CLI; returns the exit code |
 | `introspect(cls)` | a `MessageDoc` for a Message, else seared's `SchemaDoc` |
 | `introspect_message(cls)` | the `MessageDoc` for a Message class |
-| `is_message_class(obj)` | `True` for a concrete `Message` subclass with declared fields (not the base) |
+| `is_message_class(obj)` | `True` for a `Message` class `@zeared` built, fields or not (not the base, nor an undecorated subclass): seared's `is_seared_class` rule (0.4.2) |
 | `MessageDoc` | seared's `SchemaDoc` (`schema`) plus `topic`, `extra_topics`, `slots`, `category`, `schema_version`, `encoding`, `retained`, `liveliness`, `dedupe`, `retention_ttl`, `request` and `effect` |
-| `SlotDoc` | one topic slot: `name`, and `is_field` (also a declared payload field) |
+| `SlotDoc` | one topic slot: `name`, `is_field` (also a declared payload field), and `multi` (a trailing `{name**}` slot, 0.4.2) |
 | `render_message(cls, link_for=...)` | the full Message page |
 | `render_topic(md)` / `render_wire(md, link_for=...)` | the page's Topic section / wire line |
 | `generate_ts(target)` | the `.ts` source for every class under `target` |
@@ -79,10 +84,12 @@ guards (see [`effect.md`](../effect.md)).
 - **Header** — `# Name`; a badge line with the topic's second segment when
   it is a literal (`fleet/status/{robot}` → `status`) and `schema <SCHEMA>`
   when set; then the class docstring.
-- **Topic** — the canonical `TOPIC`, each `EXTRA_TOPICS` entry marked
-  `(extra)`, and a table of the canonical topic's `{name}` slots saying
-  whether each is also a payload field (`yes`) or capture-only (`no`). A
-  trailing `{name**}` slot isn't listed.
+- **Topic** — the canonical `TOPIC`; with `EXTRA_TOPICS`, a list of every
+  topic, each extra marked `(extra)`. Then a table of every topic's slots,
+  each once, saying whether it is also a payload field (`yes`) or
+  capture-only (`no`); a trailing `{name**}` slot is marked as a tail, one
+  segment or more. Until 0.4.2 the table listed only the canonical topic's
+  `{name}` slots, and the topics ran together into one paragraph.
 - **Wire line** — `Encoding`, `Retained`, `Liveliness`, `Dedupe`,
   `Retention TTL` (`∞` when unset), then `Request` (a link to the
   `REQUEST` class) when set and `Effect` when declared.
@@ -179,7 +186,9 @@ The fields table is seared's: since 0.4.0 (on seared 0.4.0) it shows a
 ## TypeScript
 
 `generate_ts` discovers classes as the Markdown pipeline does, then adds
-each class's references and its `REQUEST` class, transitively. The module
+each class's references and its `REQUEST` class, transitively: every class
+`@zeared` built, a class with no fields included (0.4.2; before, a `Union`
+variant with no fields was named in the union but never declared). The module
 it emits holds a header comment stating the wire-shape contract, the
 enums as type aliases, any `TS_PRELUDE` aliases, then one
 `export interface` per class, sorted by module and name so the output

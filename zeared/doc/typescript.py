@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from seared.doc import collect
+from seared.doc import collect, is_seared_class
 
 from .introspect import introspect_message, is_message_class
 
@@ -260,7 +260,9 @@ def _expand(classes: list[type[Seared]]) -> list[type[Seared]]:
     found: dict[int, type[Seared]] = {}
 
     def walk(c: type[Seared]) -> None:
-        if id(c) in found or not getattr(c, '__seared_fields__', None):
+        # Every class the decorator built, fields or not (0.4.2): a ``Union``
+        # variant with no fields was referenced but never declared.
+        if id(c) in found or not is_seared_class(c):
             return
         found[id(c)] = c
         for ref in _introspect(c).references:

@@ -31,12 +31,19 @@ def render_topic(md: MessageDoc) -> str:
     """Render the Topic section for a message doc."""
     if not md.topic:
         return ''
-    out = ['## Topic', '', f'`{md.topic}`']
-    out.extend(f'`{extra}` (extra)' for extra in md.extra_topics)
+    out = ['## Topic', '']
+    if md.extra_topics:
+        # A list, one topic a line: as bare lines, Markdown ran them into one
+        # paragraph (until 0.4.2).
+        out.append(f'- `{md.topic}`')
+        out.extend(f'- `{extra}` (extra)' for extra in md.extra_topics)
+    else:
+        out.append(f'`{md.topic}`')
     if md.slots:
         out += ['', '| slot | payload field? |', '|------|----------------|']
         for slot in md.slots:
-            out.append(f'| `{slot.name}` | {_yn(slot.is_field)} |')
+            name = f'`{slot.name}` (tail: one segment or more)' if slot.multi else f'`{slot.name}`'
+            out.append(f'| {name} | {_yn(slot.is_field)} |')
     return '\n'.join(out)
 
 

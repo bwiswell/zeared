@@ -20,12 +20,37 @@ discovery / reference-closure / index / ``--check`` pipeline this module
 layers a Message-aware renderer onto — was introduced.
 """
 
+from typing import TYPE_CHECKING, Any
+
 from .generate import build_docs, document, introspect, main, render_one
 from .introspect import MessageDoc, SlotDoc, introspect_message, is_message_class
 from .render import render_message, render_topic, render_wire
-from .typescript import emit as emit_ts
-from .typescript import generate as generate_ts
-from .typescript import render_interface, ts_type
+
+if TYPE_CHECKING:
+    from .typescript import emit as emit_ts
+    from .typescript import generate as generate_ts
+    from .typescript import render_interface, ts_type
+
+#: The TypeScript names, re-exported lazily (0.4.2): importing ``.typescript``
+#: here put it in ``sys.modules`` before ``python -m zeared.doc.typescript``
+#: ran it, which runpy warns about.
+_TYPESCRIPT = {
+    'emit_ts': 'emit',
+    'generate_ts': 'generate',
+    'render_interface': 'render_interface',
+    'ts_type': 'ts_type',
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve a TypeScript name on first use (PEP 562)."""
+    if name in _TYPESCRIPT:
+        from . import typescript
+
+        return getattr(typescript, _TYPESCRIPT[name])
+    msg = f'module {__name__!r} has no attribute {name!r}'
+    raise AttributeError(msg)
+
 
 __all__ = [
     'MessageDoc',
