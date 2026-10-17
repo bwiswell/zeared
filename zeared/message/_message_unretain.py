@@ -72,7 +72,7 @@ def _unretain_impl(
     from ..batch import current_buffer
     from ..errors import TopicError, ZearedError
     from ..retention import get_retention_cache
-    from ._message_render import _stringify_slots
+    from ._message_render import _render_publish_key
 
     if not getattr(cls, 'RETAINED', False):
         msg = f'{cls.__name__}.unretain: class does not have RETAINED = True'
@@ -83,7 +83,9 @@ def _unretain_impl(
     try:
         # Canonical render: an ``Enum`` / ``DateTime`` slot value renders as
         # its serialized form, so the DELETE lands on the key ``send`` used.
-        concrete_topic = template.render(_stringify_slots(cls, template, key_fields))
+        # A ``/`` in a single-segment value raises (0.4.0): the tombstone
+        # would otherwise land on a key no template matches.
+        concrete_topic = _render_publish_key(cls, template, key_fields)
     except TopicError:
         raise
     except KeyError as e:

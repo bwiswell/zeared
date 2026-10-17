@@ -105,13 +105,24 @@ captures `(?P<name>.+)` (slashes included).
 
 ## Field-binding validation
 
-When a template carries `{name**}`, the corresponding declared seared
-field (if any) must be `z.Str(many=False, keyed=False)`. Other field
-types (`Int`, `Float`, `Bool`, `Enum`, `T`, `Union`, `NDArray`, `Bytes`,
-`Date*`, `UUID`, `many=True` / `keyed=True` collections) make no sense
-for a path-tail string and are rejected at the first `_templates()`
-call (`Message._validate_multi_segment_field_bindings`). Capture-only
-slots (no declared field) land on `meta.captures[name]: str` as usual.
+A slot's declared seared field must render as its key segment(s). Both
+checks run at the first `_templates()` call
+(`Message._validate_slot_field_bindings`), so a bad binding fails before
+any key is built:
+
+- **`{name**}`:** the field (if any) must be
+  `z.Str(many=False, keyed=False)`. Other field types (`Int`, `Float`,
+  `Bool`, `Enum`, `T`, `Union`, `NDArray`, `Bytes`, `Date*`, `UUID`,
+  `many=True` / `keyed=True` collections) make no sense for a path-tail
+  string.
+- **`{name}`** (0.4.0): the field's string form must never contain `/`,
+  or the rendered key splits and matches no template. `Path` can, and so
+  can `Bytes` in its default base64 form, so both raise `TopicError`;
+  `Bytes(encoding='hex')` can't. A value that still renders with a `/`
+  (a `Str` slot holding `'a/b'`) raises when a key is built to send on.
+
+Capture-only slots (no declared field) land on `meta.captures[name]: str`
+as usual.
 
 ## `Templates`
 

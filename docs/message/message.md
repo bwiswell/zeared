@@ -53,6 +53,18 @@ pass through verbatim (selector wildcards, pre-rendered values). A slot
 field with a `data_key` renders from its attribute, decodes under its wire
 key, and is stripped from the payload by that wire key.
 
+**A single-segment slot can't hold a `/`** (0.4.0), since it would split
+the segment and the key would match no template:
+
+- **The class check** (`_message_topic.py`, at the first `_templates()`
+  call) raises `TopicError` for a single-segment slot bound to `Path`, or
+  to `Bytes` in its default base64 form. `Bytes(encoding='hex')` and `Str`
+  pass, and a trailing `{name**}` slot takes a path tail.
+- **Publish renders** (`send`, `register_will`, `QueryContext.reply`,
+  `unretain`, `concrete_topic`) raise `TopicError` for a single-segment
+  value whose rendered form contains `/`. The query getters' selectors
+  don't check, since they embed wildcards deliberately.
+
 `concrete_topic` is a descriptor (`_message_concrete_topic.py`), dispatching
 like `unretain`:
 

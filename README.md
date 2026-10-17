@@ -90,7 +90,13 @@ allow-direct-references = true
 Every change below is listed with who it reaches and what to do.
 The full list is in [`CHANGELOG.md`](CHANGELOG.md).
 
-**1. seared 0.4.0.** A wire `null` on a field that isn't `nullable=True`
+**1. Slots.** A single-segment slot bound to `Path`, or to base64 `Bytes`,
+raises `TopicError` at first use: use `z.Bytes(encoding='hex')` or a `Str`
+slot. Publishing (`send`, `unretain`, `concrete_topic`, `ctx.reply`,
+`register_will`) with a `/` inside a single-segment value raises, where
+it used to go out on a key nobody received.
+
+**2. seared 0.4.0.** A wire `null` on a field that isn't `nullable=True`
 reads as absent; a strict `Int` refuses a fractional float, and a strict
 `Bool` an int other than `0` or `1`; `ValidationError` messages gain a
 `Cls.path:` prefix; `Union(default=)` is `Union(fallback=)`; seared's
@@ -475,8 +481,18 @@ The class form names exactly one key: a missing or `None` slot raises
 `TopicError` rather than widening to a wildcard (that's what the query
 getters do).
 
-`Bytes` and `Path` slots don't round-trip: base64 and paths can contain
-`/`, which splits the segment. Avoid them as single-segment slots.
+**A single-segment slot can't hold a `/`** (0.4.0), since it would split
+the segment and the key would match no template:
+
+- **At first use,** a single-segment slot bound to `Path`, or to `Bytes` in
+  its default base64 form, raises `TopicError`. Use
+  `z.Bytes(encoding='hex')` for bytes in a key, and a `z.Str` slot (or a
+  trailing `{name**}` slot) for a path.
+- **When a key is built to send on,** by `send`, `register_will`,
+  `ctx.reply`, `unretain` or `concrete_topic`, a single-segment value whose
+  rendered form contains `/` raises `TopicError`. Before 0.4.0 the message
+  went out on a key nobody received. The query getters' selectors don't
+  check, since they embed wildcards deliberately.
 
 ## Tagged-union payloads (`z.Union`)
 
@@ -1265,7 +1281,7 @@ prod_sub  = Telemetry.on_message(prod_cb)                 # class default (dedup
 - **Retention TTL is lazy.** `RETENTION_TTL = N` opts into time-based expiration of cached entries, but expiration is only checked when a subscriber issues a retained-fetch (`_handle_query`) — topics that nobody ever queries may keep stale entries in memory. Acceptable for typical use; no background sweeper.
 - **Retry only on `zenoh.open()` raise (without auto-reconnect).** Vanilla `z.peer()` / `z.client()` retry only on the initial open. With `auto_reconnect=True`, mid-flight session deaths are detected and rebuilt; without it, a session dying silently means the next send fails.
 - **`{name**}` and anonymous `**` are trailing-only.** Non-trailing multi-segment forms (`a/**/c`, `peer/{cluster**}/{host}/status`) remain backlog items.
-- **`Bytes` and `Path` slots don't round-trip.** Their key segment can contain `/` (base64, path separators), so it splits and matches no template. Accepted at class definition today; don't use them as single-segment slots.
+- **A single-segment slot can't hold a `/`.** A slot bound to `Path`, or to base64 `Bytes`, raises `TopicError` at first use, and a value containing `/` raises when a key is built to send on (0.4.0). Use `Bytes(encoding='hex')` or a `Str` slot, or a trailing `{name**}` slot for a path tail.
 - **A bounded `alisten` drops, it doesn't block.** `alisten(maxsize=N)` drops messages that arrive while the queue is full (asyncio logs `QueueFull`); there's no backpressure and no drop counter.
 - **Format specs rejected in templates.** `{x:03d}` / `{x!r}` / `{x**:fmt}` raise `TopicError`. Plain `{name}` and `{name**}` are the only slot syntaxes.
 - **Publish-side `topic=` is restrictive.** The override must match one of the declared templates (`TOPIC` or an entry in `EXTRA_TOPICS`).
