@@ -92,6 +92,25 @@ them with what to do.
 - `z.open` is typed `zenoh.Session | ManagedSession`, and `OnReconnectHandle` is an alias of `CallbackHandle`.
 - The README's presence and auto-reconnect sections are rewritten, and so is the presence doc; `docs/stream.md`
   covers `z.Stream`.
+- **The docs say what the code does.** Among the corrections:
+  - `zenoh_config=` replaces the config zeared would build, with no mode, timestamping or shared-memory setting of
+    its own, where the docs said it layered on top;
+  - dedupe keeps a per-key timestamp watermark and drops anything not newer, live or replay, where the docs
+    described a payload match;
+  - a value matches part of a key segment with Zenoh's `$*` (`robot='r-$*'`); the documented `'E280*'` form was a
+    Zenoh error;
+  - `SessionConfig.from_toml` reads fields at the top level, not under a `[zenoh]` table;
+  - with `probe_interval=0` there is no link watch, re-attach walk or republish, and the probe never fires the link
+    signals for a session with no router (a reconnect still does);
+  - a raw session's `with` block skips `z.release`.
+
+  The README gains the APIs it left out (`PresenceToken`, `Stream`, the `clear_*` functions, `from_env`, the doc
+  generators, hubd's flags), and `docs/doc/doc.md` covers `zeared.doc`.
+- The error for an `async def` callback with no running event loop suggests subscribing from a coroutine, where it
+  pointed at `alisten`, which needs a loop too.
+- **Dependencies:** the dev group's `pytest` range lifts to `>=8.0,<10.0`, and the dev group installs seared's
+  `yaml`, `pandas` and `polars` extras, so the tests that use them run instead of skipping. zeared's own
+  dependencies are unchanged.
 
 ### Fixed
 
