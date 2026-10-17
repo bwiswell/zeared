@@ -42,6 +42,12 @@ async with z.apeer(connect=['tcp/x:7447']) as sess:
 # z.release(session=sess) ran automatically on a thread-pool worker.
 ```
 
+`apeer` and `aclient` take `peer`'s and `client`'s arguments and hand
+every one given to the sync factory, so explicit kwargs layer over
+`config=` there exactly as they do in a sync call. (Before 0.4.0 a
+`config=` made them drop `connect`, `listen`, `zenoh_config` and the
+retry knobs.)
+
 `__aenter__` calls the underlying sync factory via `asyncio.to_thread`
 (Zenoh's bindings are sync); `__aexit__` runs `z.release(session=sess)`
 the same way. Holding the wrapper across the block lets your code

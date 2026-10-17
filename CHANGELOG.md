@@ -93,6 +93,12 @@ them with what to do.
 - The README's presence and auto-reconnect sections are rewritten, and so is the presence doc; `docs/stream.md`
   covers `z.Stream`.
 
+### Fixed
+
+- **`z.apeer` and `z.aclient` layer explicit keyword arguments over `config=`**, as `z.peer` and `z.client` do.
+  Given a `config=`, `apeer` dropped `connect`, `listen`, `zenoh_config`, `retry` and the backoff settings, and
+  `aclient` all of those but `router`, without a word.
+
 ### Removed
 
 - **Breaking:** `register_will` and `aregister_will`. Reading either raises `AttributeError` pointing to
