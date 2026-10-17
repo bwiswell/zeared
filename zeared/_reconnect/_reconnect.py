@@ -222,7 +222,7 @@ def _reopen_and_restore(managed: ManagedSession) -> None:
     _restore_retention(managed)
     _restore_subscribers(managed)
     _restore_queryables(managed)
-    _restore_presence(managed)
+    _restore_presence(managed, old_raw)
 
     # Quietly close the old raw — best effort.
     with contextlib.suppress(Exception):

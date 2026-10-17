@@ -465,6 +465,49 @@ class TestPresenceRedeclared:
             with contextlib.suppress(Exception):
                 new_raw.close()
 
+    def test_a_token_declared_on_the_raw_session_comes_back_too(self, session):
+        # Declared on `m.raw()`, the state is keyed on the raw session, not the
+        # managed one. Until 0.4.2 the restore compared against the *new* raw
+        # session, which nothing had declared on, so this token stayed offline.
+        @z.zeared
+        class Status(z.Message):
+            TOPIC = 'reco/rawpresence/{name}'
+            LIVELINESS = True
+            name: str = z.Str(required=True)
+
+        new_raw = _peer_session()
+        try:
+            m = ManagedSession(
+                session,
+                lambda: new_raw,
+                endpoint_label='presence-raw-redeclare',
+                probe_interval=0,
+                initial_backoff=0.001,
+                max_backoff=0.005,
+                max_attempts=None,
+            )
+            token = Status.declare_presence(name='bob', session=m.raw())
+
+            done = threading.Event()
+            m._on_reconnect = lambda mgr: done.set()
+            start_probe(m)
+            _trigger_reconnect(m)
+            assert done.wait(timeout=3.0)
+            wait(0.2)
+
+            assert token.active
+            held = [
+                str(r.ok.key_expr)
+                for r in new_raw.liveliness().get('reco/rawpresence/**', timeout=1.0)
+                if r.ok is not None
+            ]
+            assert held == ['reco/rawpresence/bob']
+        finally:
+            with contextlib.suppress(Exception):
+                m._teardown(call_close=False)
+            with contextlib.suppress(Exception):
+                new_raw.close()
+
 
 # ---------------------------------------------------------------------------
 # z.release cancels probe + tears down

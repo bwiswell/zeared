@@ -66,6 +66,10 @@ lines as it lands, and the entry is dated when that version is released.
   running, so `on_quiet` fired for a subscription that was never made. Since 0.1.0.
 - **`peer(retention_ttl=…)` or `client(retention_ttl=…)` without `auto_reconnect` raises before opening.** It raised
   the same `TypeError` after the session had opened, and the session was never closed. Since 0.1.0.
+- **A presence token declared on a `ManagedSession`'s raw session comes back after a reconnect.** One declared with
+  `session=managed.raw()` was matched against the new raw session, which nothing had declared on, so it stayed
+  offline; the reconnect now matches it against the session it replaced. A token declared on the managed session
+  itself was always restored. Since 0.4.0.
 
 ## 0.4.1 — 2026-10-17
 
