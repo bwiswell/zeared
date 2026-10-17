@@ -60,7 +60,8 @@ zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.3.13" }
 **The tag is the pin.** uv doesn't check a version specifier such as
 `zeared>=0.3,<0.4` against a git source: it takes whatever the source points
 at, and a source without a tag points at the tip of `master`. Moving to a new
-release means moving the tag.
+release means moving the tag. What changed in each release, and what may
+break on the way, is in [`CHANGELOG.md`](CHANGELOG.md).
 
 **zeared pins `seared` the same way,** to `v0.3.4`. A project that declares
 no `seared` source of its own gets zeared's. One that declares its own must
@@ -1280,13 +1281,21 @@ uv run python -m bench.tables --check  # benchmark numbers match bench/results.j
 
 The sixth refuses any commit on `master`.
 
-**Releases.** `master` holds released commits only, and moves only by merge:
-- a release is a `version/x.y.z` branch off `master`, squash-merged back;
-- its version lives in `pyproject.toml` and `zeared/__init__.py` together,
-  and a test checks that they agree;
-- on the merge, the `Release Tag` workflow
-  (`.github/workflows/release-tag.yml`) tags it `v<version>` and publishes a
-  GitHub release.
+**Branches and releases.**
+- **`master` holds released commits only,** and moves only by merge.
+- **A release is a `version/x.y.z` branch** off `master`.
+- **Work on it happens in `feat/…` and `fix/…` branches,** each a pull
+  request squash-merged into the version branch. Each adds its own lines to
+  the `unreleased` entry at the top of `CHANGELOG.md`.
+- **Once those are all in, a `chore/version-bump-and-benches` branch** makes
+  two commits:
+  1. it bumps the version, in `pyproject.toml` and `zeared/__init__.py`
+     together (a test checks that they agree), refreshes the lockfile, and
+     dates the changelog entry;
+  2. it re-records the benchmarks.
+- **The version branch then merges into `master`.** There, the `Release Tag`
+  workflow (`.github/workflows/release-tag.yml`) tags it `v<version>` and
+  publishes a GitHub release.
 
 The benchmarks and their comparator libraries are repo-only, behind an
 opt-in extra. Every benchmark number in this README and in
