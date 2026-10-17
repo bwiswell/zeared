@@ -6,8 +6,10 @@ declares a Zenoh `Queryable` on its wildcard(s). Subscribers on a retained
 class automatically call `session.get(wildcard)` at subscribe time and
 pipe reply samples through the same dispatch path as live messages —
 marked `meta.origin = Origin.REPLAY`, so a 2-arg callback can tell cached
-state from live traffic (see [`meta.md`](meta.md)). A subscription that
-never wants replay opts out with `on_message(cb, retained_fetch=False)`.
+state from live traffic (see [`meta.md`](meta.md)). The fetch runs again
+after a reconnect and, on a managed session, on the re-attach walk when its
+router link comes back. A subscription that never wants replay opts out
+with `on_message(cb, retained_fetch=False)`.
 
 ## User surface
 
@@ -39,23 +41,28 @@ async for msg in Telemetry.alisten():
 
 One per `(Message subclass, zenoh.Session)` pair. Holds:
 
-- `_cache: dict[str, tuple[bytes, str]]` — concrete topic → (raw payload, encoding).
+- `_cache: dict[str, _CacheValue]` — concrete topic →
+  `(raw, encoding, attachment, inserted_monotonic, timestamp)`.
 - `_index: _PrefixIndex` — trie of cached concrete topics. Updated in lockstep
   with `_cache`; replaces the prior O(N) iterate-and-intersect loop in
   `_handle_query`. See [`_prefix_index.md`](_prefix_index.md).
 - `_queryables: list[zenoh.Queryable]` — one per declared template wildcard, declared lazily on first `store()`.
 
-`store(topic, raw, encoding, attachment=None)` updates the cache + index
-under a per-cache lock and ensures queryables are declared. The cached value
-is `(raw, encoding, attachment, inserted_monotonic)` — the `attachment` is
-the publish's schema-attachment payload (or `None` for classes with no
-`SCHEMA`). `delete(topic)` drops the entry from both. `_handle_query(query)`
-walks the trie to enumerate matching concrete topics in O(depth × matches),
-then `query.reply()`s each — **re-stamping the cached attachment** so a late
+`store(topic, raw, encoding, attachment=None, timestamp=None)` updates the
+cache + index under a per-cache lock and ensures queryables are declared.
+The cached value is `(raw, encoding, attachment, inserted_monotonic,
+timestamp)` — the `attachment` is the publish's schema-attachment payload
+(or `None` for classes with no `SCHEMA`), and the `timestamp` (0.4.0) is
+the Zenoh timestamp the value was published with (or `None`).
+`delete(topic)` drops the entry from both. `_handle_query(query)` walks the
+trie to enumerate matching concrete topics in O(depth × matches), then
+`query.reply()`s each — **re-stamping the cached attachment** so a late
 subscriber's retained-fetch passes the schema-mismatch check and decodes the
-snapshot. (Before this was captured, a `SCHEMA`-stamped retained class
-produced snapshots that decoded as `schema=None` → mismatch → silently
-dropped on the subscriber side, even though live delivery was fine.)
+snapshot, and **carrying the cached timestamp** (0.4.0) so a subscriber's
+dedupe drops a replay of a value it already holds. (Before the attachment
+was captured, a `SCHEMA`-stamped retained class produced snapshots that
+decoded as `schema=None` → mismatch → silently dropped on the subscriber
+side, even though live delivery was fine.)
 
 Rolls back partial queryable declarations on failure. Registry keyed on
 `(cls, id(session))` since `zenoh.Session` doesn't support weakrefs.
@@ -69,12 +76,34 @@ raw. Cache content (`_cache`, `_index`) is preserved verbatim — only the
 live Zenoh queryable handles change.
 
 The retention restoration step runs **before** subscriber redeclare in
-the reconnect pipeline (`_restore_retention` → `_restore_subscribers`
-→ `_restore_wills`). This is the **retention-first ordering invariant**:
+the reconnect pipeline (`_restore_publishers` → `_restore_retention` →
+`_restore_subscribers` → `_restore_queryables` → `_restore_presence`).
+This is the **retention-first ordering invariant**:
 a same-process publisher + subscriber pair both bound to the same
 managed session needs the publisher-side queryable live before the
 subscriber's reconnect-triggered retained-fetch fires. Pinned by
-`tests/test_reconnect.py::TestRetentionRebuild::test_same_process_retained_fetch_after_reconnect`.
+`tests/_reconnect/test__reconnect.py::TestRetentionRebuild::test_same_process_retained_fetch_after_reconnect`.
+
+### Republish on link restore (0.4.0)
+
+A value published while its session was detached (its hub link down, or
+the session reconnecting) reached nobody, and a subscriber whose own
+re-attach walk ran before this session came back missed it as well. So
+when a managed session's link comes back (`on_link_restored`, after a
+re-attach or a reconnect), every cache bound to it calls
+`republish()`: it re-puts each live entry (past-TTL ones skipped)
+
+- **with its original timestamp** — a retained send stamps its put
+  explicitly (`Session.new_timestamp()`) and the cache keeps that
+  timestamp — so a subscriber that already holds the value dedupes the
+  copy; and
+- **with the republish marker** in its attachment (`{'replay': True}`,
+  next to any `schema`), so a subscriber that missed it receives it as
+  `Origin.REPLAY`, not as a new live publish.
+
+The republish runs before the session's own re-attach walk and before
+`on_link_restored` fires. Subscribers with `dedupe=False` receive the copy
+again, as `REPLAY`.
 
 ## `effective_retain(cls, arg)`
 
@@ -92,10 +121,12 @@ Resolves `send(retain=...)` against `cls.RETAINED`:
 ## Tombstones
 
 `msg.unretain()` / `Cls.unretain(**key_fields)` drops the local cache
-entry and calls `session.delete(concrete_topic)`. Subscribers see the
-DELETE via `sample.kind == zenoh.SampleKind.DELETE` and silently skip
-(no callback fires). Late subscribers get nothing for that topic via the
-next `session.get()`.
+entry and calls `session.delete(concrete_topic)` (inside a `z.batch()`
+block, both are buffered with the sends). Subscribers see the DELETE via
+`sample.kind == zenoh.SampleKind.DELETE`; `cb` never sees it. It goes to
+`on_remove(meta)` when the subscriber registered one (`meta.captures`
+name the removed key), else it is dropped. Late subscribers get nothing
+for that topic via the next `session.get()`.
 
 ## TTL — `RETENTION_TTL`
 
@@ -119,8 +150,11 @@ in the cache; this is acceptable for typical usage and avoids the
 overhead of a per-cache sweeper thread. Documented as a limit; revisit
 if a real consumer reports needing eager expiration.
 
-`RETENTION_TTL = None` (default) means retained values live until the
-publishing session closes or a tombstone is emitted.
+`RETENTION_TTL = None` (default) sets no expiry of its own (the session
+fallback below may still set one). Without a TTL, a retained value stays
+cached until a tombstone drops it, or `z.release(session=...)` /
+`clear_retention_cache()` clears the cache. A managed session's reconnect
+keeps it: the queryables are re-declared over the same cache.
 
 ### Session-level fallback (`peer(retention_ttl=...)`)
 
@@ -150,13 +184,27 @@ Class-level `RETENTION_TTL` is the only knob for raw sessions.
 ## Deduplication
 
 Retained-fetch replays are deduplicated against the live stream by default
-(see `Subscriber.DEDUPE = True`). Dedupe is **timestamp-based, not
-payload-based**: the subscriber remembers the highest HLC timestamp
+(the `Message` class attribute `DEDUPE = True`; per-subscriber override
+`on_message(dedupe=)`).
+
+**Since 0.4.0 this actually applies to replays.** A retained reply carries
+the timestamp its value was published with (a retained send stamps its put
+explicitly, and the cache keeps that timestamp), so a subscriber that
+already holds a value drops a replay of it — on a reconnect re-fetch, a
+link re-attach walk, or a publisher's republish. **Before 0.4.0, replies
+carried no timestamp:** they bypassed dedupe entirely, and every replay was
+delivered, even of a value the subscriber had already received live. This
+section described the intended behaviour; 0.4.0 is when it became true.
+
+`fetch_retained()` is unaffected: it returns the whole retained set.
+
+Dedupe is **timestamp-based, not payload-based**: the subscriber
+remembers the highest HLC timestamp
 (`sample.timestamp`) seen per concrete topic, and drops any sample whose
 timestamp is `<=` that watermark. Payload bytes are never compared — a
 replay of the same sample is suppressed because it carries the same
 timestamp, not because it re-serialises identically. Set `DEDUPE = False`
-on the subscriber class (or pass `dedupe=False` per subscription) to opt
+on the message class (or pass `dedupe=False` per subscription) to opt
 out.
 
 Two consequences of the watermark rule:
@@ -164,10 +212,12 @@ Two consequences of the watermark rule:
 - It applies to **every** sample on a `RETAINED` + dedupe-active
   subscription, not just replays — an out-of-order or re-delivered live
   sample is dropped by the same check.
-- Samples with no timestamp bypass dedupe entirely. That is how
-  synthesised wills (`timestamp=None`) always fire, and it means dedupe
-  is inert against a session with HLC timestamping disabled (the
-  `z.peer()` / `z.client()` factories enable it by default).
+- Samples with no timestamp bypass dedupe entirely. Retained sends and
+  their replies always carry one (a retained send stamps its put from the
+  session's clock, HLC timestamping on or not), so replays dedupe on any
+  session. What goes unstamped on a session with timestamping disabled is
+  a live-only `send(retain=False)` (the `z.peer()` / `z.client()`
+  factories enable timestamping by default).
 
 Dedupe is a *suppression* heuristic, orthogonal to the `meta.origin`
 provenance signal — a replay that survives dedupe is still delivered
@@ -176,9 +226,9 @@ every replay *and* can tell it is one.
 
 ## Non-goals (documented sharp edges)
 
-- **No automatic session-close cleanup.** Queryables are undeclared on
-  `clear_retention_cache(session=...)` or registry re-init — nothing
-  detects a session closing out from under us.
+- **No automatic session-close cleanup.** Queryables are undeclared by
+  `z.release(session=...)` or `clear_retention_cache(session=...)` —
+  nothing detects a session closed without them.
 - **No cross-session durability.** The cache lives in the publishing
   process, so retained values die with the publishing session — there is
   no store-and-forward broker behind them. (Expiration *within* a live

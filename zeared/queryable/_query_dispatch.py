@@ -51,6 +51,28 @@ if TYPE_CHECKING:
 _log = logging.getLogger('zeared.queryable')
 
 
+def _safe_on_error(on_error: Callable | None, exc: Exception, msg_cls: type) -> bool:
+    """Invoke a user ``on_error``, absorbing anything it raises; ``True`` when one ran.
+
+    The queryable twin of the subscriber side's guard. An ``on_error`` that
+    raised escaped into Zenoh's callback, and from a failing handler it also
+    skipped the ``reply_err``, so the getter read a cut-off stream as a
+    complete answer. A query's ``on_error`` gets ``b''``: there is no sample
+    payload.
+    """
+    if on_error is None:
+        return False
+    try:
+        on_error(exc, b'')
+    except Exception:  # noqa: BLE001
+        _log.exception(
+            '%s: on_error callback itself raised; original error was: %s',
+            msg_cls.__name__,
+            exc,
+        )
+    return True
+
+
 def _reply_one(ctx: QueryContext, item: Any, msg_cls: type[Message], on_error: Callable | None) -> None:
     """Reply with one instance, routing a reply failure without aborting the stream.
 
@@ -64,9 +86,7 @@ def _reply_one(ctx: QueryContext, item: Any, msg_cls: type[Message], on_error: C
     except Exception as exc:  # noqa: BLE001
         wrapped = QueryableError(f'{msg_cls.__name__}: query reply failed: {exc}')
         wrapped.__cause__ = exc
-        if on_error is not None:
-            on_error(wrapped, b'')
-        else:
+        if not _safe_on_error(on_error, wrapped, msg_cls):
             _log.warning(
                 '%s: query reply failed: %s',
                 msg_cls.__name__,
@@ -156,9 +176,7 @@ def _build_query_dispatch(
         except Exception as exc:  # noqa: BLE001
             wrapped = QueryableError(f'{msg_cls.__name__}: failed to build query context: {exc}')
             wrapped.__cause__ = exc
-            if on_error is not None:
-                on_error(wrapped, b'')
-            else:
+            if not _safe_on_error(on_error, wrapped, msg_cls):
                 _log.warning(
                     '%s: failed to build query context: %s',
                     msg_cls.__name__,
@@ -223,9 +241,7 @@ def _handle_handler_error(
     """
     wrapped = QueryableError(f'{msg_cls.__name__}: on_query handler raised: {exc}')
     wrapped.__cause__ = exc
-    if on_error is not None:
-        on_error(wrapped, b'')
-    else:
+    if not _safe_on_error(on_error, wrapped, msg_cls):
         _log.exception('%s: on_query handler raised', msg_cls.__name__)
     with contextlib.suppress(Exception):
         query.reply_err(str(exc).encode('utf-8'))

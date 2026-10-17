@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from conftest import wait
+from conftest import _endpoint, wait
 
 import zeared as z
 from zeared.subscriber import _wants_meta
@@ -376,6 +376,45 @@ class TestSchemaMismatch:
             f'warn-once cache regressed — got {len(errors)} errors for the same (sender, schema) pair'
         )
 
+    def test_each_sender_is_reported_once(self):
+        """Regression: the warn-once key read ``sample.source_info``, which Zenoh leaves
+        unset on an ordinary put, so every sender shared one pair and only the first
+        misaligned publisher ever reached ``on_error``. It names the HLC zid now, so the
+        sessions here come from zeared's factories, which stamp their puts."""
+
+        @z.zeared
+        class PubM(z.Message):
+            TOPIC = 'schema/senders/{n}'
+            SCHEMA = '1.0'
+            n: int = z.Int(required=True)
+
+        @z.zeared
+        class SubM(z.Message):
+            TOPIC = 'schema/senders/{n}'
+            SCHEMA = '2.0'
+            n: int = z.Int(required=True)
+
+        endpoint = _endpoint()
+        session_a = z.peer(listen=[endpoint])
+        session_b = z.peer(connect=[endpoint])
+        try:
+            wait(0.3)
+            errors: list = []
+            sub = SubM.on_message(lambda m: None, on_error=lambda exc, raw: errors.append(exc), session=session_b)
+            wait()
+            for i in range(2):
+                PubM(n=i).send(session=session_a)
+                PubM(n=i).send(session=session_b)  # the subscriber's own session is a second sender
+                wait(0.1)
+            sub.close()
+
+            named = {str(session_a.zid()), str(session_b.zid())}
+            assert len(errors) == 2, errors
+            assert {next(zid for zid in named if zid in str(e)) for e in errors} == named
+        finally:
+            z.release(session=session_a)
+            z.release(session=session_b)
+
     def test_matching_schema_dispatches_normally(self, connected_pair):
         session_a, session_b = connected_pair
 
@@ -504,7 +543,7 @@ class TestIssuedAtPopulated:
     when timestamping is enabled (default since 0.0.13)."""
 
     def test_issued_at_is_recent_utc_datetime(self, session):
-        import datetime
+        import datetime as dt
 
         @z.zeared
         class M(z.Message):
@@ -527,7 +566,7 @@ class TestIssuedAtPopulated:
         # the factory, so timestamping may or may not be enabled here.
         # Pin permissively: either a recent UTC datetime, or None.
         if ts is not None:
-            now = datetime.datetime.now(tz=datetime.UTC)
+            now = dt.datetime.now(tz=dt.UTC)
             assert abs((now - ts).total_seconds()) < 60
 
 

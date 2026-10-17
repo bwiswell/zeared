@@ -1,7 +1,7 @@
 """Trie-based index of path-segmented topics.
 
-Used by the retention and presence queryable handlers to avoid the
-O(N) iterate-and-intersect loop on every incoming query.
+Used by the retention queryable handler to avoid the O(N)
+iterate-and-intersect loop on every incoming query.
 
 Cached topics are concrete (no wildcards). Queries may carry single-segment
 ``*`` and trailing multi-segment ``**`` wildcards. The trie's ``matching``

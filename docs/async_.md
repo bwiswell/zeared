@@ -26,9 +26,15 @@ the one sharp edge (raw `threading.Thread` does NOT propagate context).
 | `apeer` | `def apeer(*, ...) -> _AsyncSessionContextManager` | async-context-managed peer session |
 | `aclient` | `def aclient(router, *, ...) -> _AsyncSessionContextManager` | async-context-managed client session |
 | `aopen` | `def aopen(cfg) -> _AsyncSessionContextManager` | async-context-managed dispatch on `SessionConfig` |
-| `asend` | `async def asend(msg, *, session=None, topic=None) -> None` | free-function form of `msg.asend(...)` |
-| `asend_batch` | `async def asend_batch(cls, items, *, session=None, topic=None) -> None` | free-function form of `Cls.asend_batch(...)` |
-| `alisten` | `async def alisten(cls, *, session=None, maxsize=0, meta=False) -> AsyncIterator` | async generator yielding messages (or `(msg, meta)` tuples) |
+| `asend` | `async def asend(msg, *, session=None, topic=None, retain=None) -> None` | free-function form of `msg.asend(...)` |
+| `asend_batch` | `async def asend_batch(cls, items, *, session=None, topic=None, retain=None) -> None` | free-function form of `Cls.asend_batch(...)` |
+| `aunretain` | `async def aunretain(cls_or_msg, *, session=None, topic=None, **key_fields) -> None` | async `msg.unretain()` / `Cls.unretain(**key_fields)` |
+| `afetch_retained` | `async def afetch_retained(cls, *, session=None, on_error=None) -> list[M]` | async `Cls.fetch_retained(...)` |
+| `alisten` | `def alisten(cls, *, session=None, maxsize=1024, meta=False) -> Stream` | a [`Stream`](stream.md) of messages (or `(msg, meta)` tuples); bounded, drops the oldest (0.4.0) |
+| `aquery` | `async def aquery(cls, *, session=None, params=None, request=None, timeout=None, target=None, consolidation=None, on_error=None, **key_fields) -> list[M]` | async `Cls.query(...)`: the whole reply list |
+| `aquery_iter` | `def aquery_iter(cls, *, ...) -> Stream` | `aquery`'s arguments; a [`Stream`](stream.md) of replies as they arrive, started when called |
+| `aquery_one` | `async def aquery_one(cls, **kwargs) -> M \| None` | async `Cls.query_one(...)`: returns at the first decoded reply |
+| `aon_query` | `async def aon_query(cls, handler, *, session=None, on_error=None, auto_reconnect=True) -> Queryable` | `Cls.on_query(...)` declared on the calling loop, so an `async def` handler replies on it |
 | `abatch` | `@asynccontextmanager async def abatch()` | async counterpart of `z.batch()` |
 
 ### Async session lifecycle
@@ -41,6 +47,12 @@ async with z.apeer(connect=['tcp/x:7447']) as sess:
     await Telemetry(id=1, x=1.0, y=2.0).asend(session=sess)
 # z.release(session=sess) ran automatically on a thread-pool worker.
 ```
+
+`apeer` and `aclient` take `peer`'s and `client`'s arguments and hand
+every one given to the sync factory, so explicit kwargs layer over
+`config=` there exactly as they do in a sync call. (Before 0.4.0 a
+`config=` made them drop `connect`, `listen`, `zenoh_config` and the
+retry knobs.)
 
 `__aenter__` calls the underlying sync factory via `asyncio.to_thread`
 (Zenoh's bindings are sync); `__aexit__` runs `z.release(session=sess)`
@@ -76,21 +88,35 @@ ergonomic wins are worth it. See `docs/overview/benchmarks.md`, or run
 
 ```python
 async def listen_forever():
-    async for msg in Telemetry.alisten():
-        process(msg)          # async generator; breaks close the sub
+    async with Telemetry.alisten() as stream:
+        async for msg in stream:
+            process(msg)
 ```
 
-Breaking out of the `async for` (or cancelling the consuming task) runs
-the generator's `finally`, which calls `Subscriber.close()` under the
-hood. No explicit cleanup required.
+`alisten` returns a [`Stream`](stream.md) (0.4.0; an async generator
+before). It declares the subscriber when it is called, so call it inside a
+running loop; anything that arrives before the first iteration waits in
+the stream. `stream.aclose()`, leaving `async with`, or the stream being
+collected after a `break` undeclares the subscriber.
 
-`maxsize=0` (default) gives an unbounded `asyncio.Queue`. A positive
-integer bounds the queue but does **not** apply backpressure: delivery is a
-`put_nowait` scheduled from Zenoh's callback thread and never waits, so a
-message that arrives while the queue is full is **dropped**. asyncio logs
-each drop as an "Exception in callback" (`QueueFull`); there is no drop
-counter. A consumer that can't afford silent loss should stay unbounded and
-keep up, or bridge `on_message` into its own queue and count what it drops.
+**The bound.** `maxsize=1024` by default; `maxsize=0` is unbounded. Delivery
+never applies backpressure (Zenoh's callback thread never waits), so a full
+stream **drops its oldest message** to make room for the new one: a consumer
+that has fallen behind on live state wants the freshest data. Each drop is
+counted on `stream.dropped`, and the first is logged once at `WARNING`;
+nothing is raised. Read `dropped` to account for loss, for example per
+capture window:
+
+```python
+stream = Reading.alisten(maxsize=10_000)
+before = stream.dropped
+...                                   # consume a window
+window_drops = stream.dropped - before
+```
+
+Before 0.4.0, `alisten` was unbounded by default, and a positive `maxsize`
+dropped the *newest* message with an uncounted `QueueFull` logged by
+asyncio for each one. Pass `maxsize=0` to keep the old unbounded behaviour.
 
 `meta=True` (0.2.9) yields `(msg, meta)` tuples instead of bare
 messages — `meta` is the same `ZenohMeta` a 2-arg `on_message` callback
@@ -114,4 +140,6 @@ the event loop that was running when `on_message` was called, via
 free for Zenoh's delivery machinery.
 
 If called without a running event loop, `on_message` raises
-`SubscriptionError` — use `Cls.alisten()` instead.
+`SubscriptionError`: register the `async def` callback from inside a
+coroutine, or pass a sync one. `Cls.alisten()` is no way around it, since
+it needs a running loop too (it raises `RuntimeError` without one).

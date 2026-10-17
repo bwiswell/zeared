@@ -17,10 +17,11 @@ from ..errors import TopicError
 
 _NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
-# Reserved namespace for zeared internals (liveliness tokens at
-# `__zeared/alive/<zid>`, will envelopes at `__zeared/will/<zid>/<slug>`,
-# etc.). User templates whose first literal segment is `__zeared` would
-# collide with internal routing — silent stomping. Reject at parse time.
+# Reserved namespace for zeared internals. Presence used it until 0.4.0
+# (`__zeared/alive/<zid>`, `__zeared/will/<zid>/<slug>`); since then its
+# tokens sit on contract keys, and the prefix stays reserved so a future
+# internal key can't stomp on a user's. User templates whose first literal
+# segment is `__zeared` are rejected at parse time.
 # Exemption: the unmodified anonymous catch-all `__zeared/**` (and the
 # universal `**`) — diagnostic tooling that subscribes to everything is
 # explicit intent. Named multi-segment under the prefix
@@ -53,9 +54,10 @@ class Template:
         raw: original template string.
         field_names: ordered tuple of all capture slot names (single + multi).
         wildcard: Zenoh key expression for subscribe-side use.
-        publishable: ``False`` only if the template contains anonymous
-                     ``*`` or ``**`` segments. Named ``{name}`` and
-                     ``{name**}`` are both publishable.
+        publishable: ``False`` only if the template contains an anonymous
+                     ``**`` segment. Named ``{name}`` and ``{name**}`` are
+                     both publishable, and so is an anonymous ``*``: the
+                     key it sends on keeps the ``*``.
         _regex: compiled regex with named captures for each slot.
         _named_multi: name of the trailing ``{name**}`` slot, if any.
     """
@@ -165,8 +167,8 @@ class Template:
     def _validate_namespace_reservation(template: str) -> None:
         """Reject templates whose first literal segment is ``__zeared``.
 
-        Reject templates whose first literal segment is ``__zeared``, which collides
-        with internal liveliness / will / observer keys.
+        The prefix is reserved for zeared's internal keys (presence used it
+        before 0.4.0), so a user template there could collide with one.
 
         Exemption: the anonymous catch-all forms ``**`` (universal) and
         ``__zeared/**`` (diagnostic — "subscribe to all internal traffic
@@ -190,8 +192,7 @@ class Template:
         if first_seg == _RESERVED_PREFIX:
             msg = (
                 f'TOPIC template {template!r}: the {_RESERVED_PREFIX!r} '
-                f'prefix is reserved for internal zeared use (liveliness '
-                f'tokens, will envelopes, etc.); pick a different '
+                f'prefix is reserved for internal zeared use; pick a different '
                 f'top-level segment. The diagnostic catch-all '
                 f'{_RESERVED_PREFIX!r}/** is the only exempted form.'
             )
@@ -271,9 +272,10 @@ class Template:
         Provided slots are substituted; slots that are missing (absent or
         ``None``) become ``*`` (single-segment) or ``**`` (a trailing
         ``{name**}`` slot), so ``Cls.query()`` with no key fields queries
-        the whole template wildcard and ``Cls.query(epc='E280*')`` narrows
-        to matching keys. Unlike :meth:`render`, wildcard values (a ``*``
-        the caller embeds) pass through verbatim — that is the point.
+        the whole template wildcard and ``Cls.query(robot='r-$*')`` narrows
+        to matching keys. Unlike :meth:`render`, wildcard values (a whole
+        ``*`` segment, or Zenoh's ``$*`` inside one) pass through verbatim —
+        that is the point.
 
         Subscribe-only templates (anonymous ``**``) can't be rendered from
         slots; they fall back to the plain subscribe :attr:`wildcard`.

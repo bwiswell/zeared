@@ -1,8 +1,8 @@
 """Canonical topic render — the one place a slot value becomes a key segment.
 
 Sibling helper inside the ``message`` Pattern B subdir. Every path that
-builds a concrete key goes through here: ``send`` and ``register_will``
-(from the instance), ``QueryContext.reply`` (from the reply instance),
+builds a concrete key goes through here: ``send`` and ``declare_presence``
+(from the instance or caller slots), ``QueryContext.reply`` (from the reply instance),
 ``unretain`` (instance or caller slots), the query getters' selectors, and
 the public ``concrete_topic``. Before 0.3.8 each path rendered from its own
 input and they disagreed for ``Enum``, ``DateTime``, ``TimeDelta`` and
@@ -16,7 +16,7 @@ The rule for one slot value:
   ``serialize`` gets no ``format=`` hint, so a key is the same whatever the
   class's ``ENCODING``. The check is exact, so a ``bool`` is not an ``int``.
 - **Anything else renders as** ``str(value)``, exactly as before. Strings
-  pass through verbatim, so selector wildcards (``epc='E280*'``) and
+  pass through verbatim, so selector wildcards (``robot='r-$*'``) and
   pre-rendered values keep working, and nothing here raises on a value the
   old render accepted.
 - **A slot with no declared field** (capture-only) renders as
@@ -39,7 +39,7 @@ them directly keep their current behaviour.
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import decimal
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -62,14 +62,14 @@ if TYPE_CHECKING:
 _SCALAR_TYPES: dict[str, type] = {
     'Bool': bool,
     'Bytes': bytes,
-    'Date': datetime.date,
-    'DateTime': datetime.datetime,
+    'Date': dt.date,
+    'DateTime': dt.datetime,
     'Decimal': decimal.Decimal,
     'Float': float,
     'Int': int,
     'Str': str,
-    'Time': datetime.time,
-    'TimeDelta': datetime.timedelta,
+    'Time': dt.time,
+    'TimeDelta': dt.timedelta,
     'UUID': uuid.UUID,
 }
 
@@ -99,7 +99,8 @@ def _slot_string(field: Any, value: Any) -> str:
         # fallback keeps the guarantee that this render never raises where
         # the old one didn't. Callers commonly wrap ``unretain`` in
         # ``suppress(Exception)``, where a new raise would silently drop a
-        # tombstone.
+        # tombstone. (``_reject_segment_split`` raises separately, on publish
+        # renders, for a ``/`` that would send the tombstone nowhere: 0.4.0.)
         return str(value)
 
 
@@ -141,9 +142,34 @@ def _instance_slot_values(msg: Message, template: Template) -> dict[str, Any]:
     return out
 
 
+def _reject_segment_split(cls: type[Message], template: Template, rendered: Mapping[str, Any]) -> None:
+    """Raise ``TopicError`` if a single-segment slot's rendered value contains ``/`` (0.4.0).
+
+    A ``/`` turns one segment into two, so the key matches no template and the
+    message reaches nobody (a tombstone or a reply included). Publish renders
+    call this; selector renders don't, since they embed ``*`` deliberately.
+    """
+    for name, value in rendered.items():
+        if value is None or name == template._named_multi:  # noqa: SLF001
+            continue
+        if '/' in str(value):
+            msg = (
+                f'{cls.__name__}: slot {name!r} renders as {value!r}, which contains "/" and would '
+                f'split its key segment (TOPIC {template.raw!r})'
+            )
+            raise TopicError(msg)
+
+
+def _render_publish_key(cls: type[Message], template: Template, values: Mapping[str, Any]) -> str:
+    """Render a key that a message will be *sent* on: canonical, and never split."""
+    rendered = _stringify_slots(cls, template, values)
+    _reject_segment_split(cls, template, rendered)
+    return template.render(rendered)
+
+
 def _render_instance_on(msg: Message, template: Template) -> str:
-    """Render ``msg``'s concrete key on ``template``. A missing slot raises ``TopicError``."""
-    return template.render(_stringify_slots(type(msg), template, _instance_slot_values(msg, template)))
+    """Render ``msg``'s concrete key on ``template``. A missing slot, or a split one, raises ``TopicError``."""
+    return _render_publish_key(type(msg), template, _instance_slot_values(msg, template))
 
 
 def _render_instance(msg: Message, topic: str | None) -> tuple[Template, str]:
@@ -170,7 +196,7 @@ def _render_slots(
         if slots.get(name) is None:
             msg = f'{caller}: missing slot {name!r} for TOPIC {template.raw!r}'
             raise TopicError(msg)
-    return template.render(_stringify_slots(cls, template, slots))
+    return _render_publish_key(cls, template, slots)
 
 
 def _slot_wire_keys(cls: type[Message], template: Template) -> frozenset[str]:

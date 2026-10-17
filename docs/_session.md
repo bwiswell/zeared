@@ -23,7 +23,7 @@ makes a scope context-local:
 - **Per thread.** A new `threading.Thread` starts with an empty context, so
   two threads still scope their own sessions independently.
 - **Into `asyncio.to_thread` workers.** `to_thread` copies the context, so
-  `asend` / `aquery` / `afetch_retained` / `aunretain` / `aregister_will` —
+  `asend` / `aquery` / `afetch_retained` / `aunretain` / `adeclare_presence` —
   which resolve on a worker thread — see the enclosing scope. Before
   0.3.8 they didn't, and fell back to the default.
 - **Per asyncio task.** Each task gets its own copy of the context at

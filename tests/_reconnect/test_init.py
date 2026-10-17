@@ -9,9 +9,9 @@ from zeared._reconnect import (
     _reconnect,
     _reconnect_worker,
     _ReconnectAbortedError,
+    _restore_presence,
     _restore_retention,
     _restore_subscribers,
-    _restore_wills,
     _trigger_reconnect,
     start_probe,
 )
@@ -29,7 +29,7 @@ class TestReExports:
         assert callable(_open_with_backoff)
         assert callable(_restore_retention)
         assert callable(_restore_subscribers)
-        assert callable(_restore_wills)
+        assert callable(_restore_presence)
 
     def test_reconnect_aborted_is_exception(self):
         assert issubclass(_ReconnectAbortedError, Exception)

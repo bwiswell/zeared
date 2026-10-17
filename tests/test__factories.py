@@ -20,6 +20,7 @@ from zeared._factories import (
     _build_config_for_client,
     _build_config_for_peer,
     _resolve_retry_knobs,
+    _resolve_session_knobs,
     _resolve_zenoh_config,
     client,
     peer,
@@ -267,3 +268,61 @@ class TestEndpointRule:
         cfg = z.SessionConfig(mode=z.Mode.CLIENT, zenoh_overrides={'scouting/multicast/enabled': False})
         with pytest.raises(TypeError, match='zenoh_config_file'):
             client(config=cfg)
+
+
+class TestSessionKnobs:
+    """0.4.0: the reconnect knobs layer like the retry ones, so a config can set
+    them: an explicit keyword beats ``config=``, which beats the defaults."""
+
+    def test_defaults(self):
+        assert _resolve_session_knobs(None, _MISSING, _MISSING, _MISSING, _MISSING) == (False, 10.0, 2.0, 4)
+
+    def test_config_supplies_them(self):
+        cfg = z.SessionConfig(
+            mode=z.Mode.PEER, auto_reconnect=True, probe_interval=3.0, resync_jitter=0.5, resync_concurrency=2
+        )
+        assert _resolve_session_knobs(cfg, _MISSING, _MISSING, _MISSING, _MISSING) == (True, 3.0, 0.5, 2)
+
+    def test_explicit_keywords_win(self):
+        cfg = z.SessionConfig(mode=z.Mode.PEER, auto_reconnect=True, resync_concurrency=2)
+        explicit_off = False
+        assert _resolve_session_knobs(cfg, explicit_off, _MISSING, 0.0, _MISSING) == (False, 10.0, 0.0, 2)
+
+    def test_factory_stores_the_resync_knobs(self):
+        sess = peer(auto_reconnect=True, probe_interval=0, resync_jitter=0.25, resync_concurrency=7)
+        try:
+            assert (sess._resync_jitter, sess._resync_concurrency) == (0.25, 7)
+        finally:
+            z.release(session=sess)
+
+
+class TestOpenHonoursAutoReconnect:
+    """0.4.0 (Q1): a config-opened session can be managed."""
+
+    def test_open_returns_a_managed_session(self):
+        cfg = z.SessionConfig(mode=z.Mode.PEER, auto_reconnect=True, probe_interval=0, resync_jitter=0.1)
+        sess = z_open(cfg)
+        try:
+            assert isinstance(sess, z.ManagedSession)
+            assert sess._resync_jitter == 0.1
+            assert callable(sess.on_link_restored)
+        finally:
+            z.release(session=sess)
+
+    def test_without_it_open_stays_raw(self):
+        sess = z_open(z.SessionConfig(mode=z.Mode.PEER))
+        try:
+            assert not isinstance(sess, z.ManagedSession)
+        finally:
+            sess.close()
+
+    def test_an_explicit_keyword_beats_the_config(self):
+        sess = peer(config=z.SessionConfig(mode=z.Mode.PEER, auto_reconnect=True), auto_reconnect=False)
+        try:
+            assert not isinstance(sess, z.ManagedSession)
+        finally:
+            sess.close()
+
+    def test_router_mode_refuses_it(self):
+        with pytest.raises(ValueError, match='peer and client modes, not router'):
+            z_open(z.SessionConfig(mode=z.Mode.ROUTER, auto_reconnect=True))

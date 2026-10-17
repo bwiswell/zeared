@@ -498,14 +498,51 @@ class TestZenohConfigFields:
             {
                 'mode': 'client',
                 'router': 'tcp/hub:7447',
-                'zenoh_config_file': '/etc/rio-node.json5',
+                'zenoh_config_file': '/etc/myapp/zenoh.json5',
                 'zenoh_overrides': {'scouting/multicast/enabled': False},
             }
         )
-        assert cfg.zenoh_config_file == '/etc/rio-node.json5'
+        assert cfg.zenoh_config_file == '/etc/myapp/zenoh.json5'
         assert cfg.zenoh_overrides == {'scouting/multicast/enabled': False}
 
     def test_env_carries_the_file(self, monkeypatch):
         monkeypatch.setenv('ZEARED_SESSION_MODE', 'peer')
         monkeypatch.setenv('ZEARED_SESSION_ZENOH_CONFIG_FILE', '/etc/node.json5')
         assert SessionConfig.from_env().zenoh_config_file == '/etc/node.json5'
+
+
+class TestReconnectFields:
+    """0.4.0: the reconnect knobs a config-opened session reads, so ``z.open(cfg)`` can return a managed session."""
+
+    def test_defaults(self):
+        cfg = z.SessionConfig(mode=z.Mode.CLIENT)
+        assert (cfg.auto_reconnect, cfg.probe_interval, cfg.resync_jitter, cfg.resync_concurrency) == (
+            False,
+            10.0,
+            2.0,
+            4,
+        )
+
+    def test_from_toml(self):
+        cfg = z.SessionConfig.load(
+            {'mode': 'client', 'router': 'tcp/hub:7447', 'auto_reconnect': True, 'resync_jitter': 0.5},
+        )
+        assert cfg.auto_reconnect is True
+        assert cfg.resync_jitter == 0.5
+
+    def test_from_env(self, monkeypatch):
+        for key in list(os.environ):
+            if key.startswith('ZEARED_SESSION_'):
+                monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv('ZEARED_SESSION_MODE', 'client')
+        monkeypatch.setenv('ZEARED_SESSION_AUTO_RECONNECT', 'true')
+        monkeypatch.setenv('ZEARED_SESSION_PROBE_INTERVAL', '2.5')
+        monkeypatch.setenv('ZEARED_SESSION_RESYNC_JITTER', '0')
+        monkeypatch.setenv('ZEARED_SESSION_RESYNC_CONCURRENCY', '8')
+        cfg = z.SessionConfig.from_env()
+        assert (cfg.auto_reconnect, cfg.probe_interval, cfg.resync_jitter, cfg.resync_concurrency) == (
+            True,
+            2.5,
+            0.0,
+            8,
+        )

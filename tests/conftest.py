@@ -76,7 +76,7 @@ def connected_pair(unused_tcp_port_factory=None):
         yield a, b
     finally:
         # Guard double-close — tests may explicitly close a session mid-run
-        # (e.g. to fire an LWT).
+        # (e.g. to take a key offline).
         for s in (a, b):
             with contextlib.suppress(Exception):
                 s.close()
@@ -90,7 +90,6 @@ def _reset_zeared_state():
     z.clear_publisher_cache()
     z.clear_retention_cache()
     z.clear_queryable_cache()
-    z.clear_observer()
     z.clear_presence_state()
     yield
     z.session._set_default(None)
@@ -98,7 +97,6 @@ def _reset_zeared_state():
     z.clear_publisher_cache()
     z.clear_retention_cache()
     z.clear_queryable_cache()
-    z.clear_observer()
     z.clear_presence_state()
 
 
@@ -203,5 +201,6 @@ def slow_redial_client(endpoint: str, *, redial_ms: int = 2000, probe_interval: 
             ),
             auto_reconnect=True,
             probe_interval=probe_interval,
+            resync_jitter=0.0,  # the restart tests wait on on_link_restored, not the clock
         ),
     )

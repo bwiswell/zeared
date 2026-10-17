@@ -16,10 +16,10 @@ from zeared.message._message_concrete_topic import _ConcreteTopicDescriptor
 
 @z.zeared
 class Reading(z.Message):
-    TOPIC = 'ct/read/{source}/{reader_id}'
-    EXTRA_TOPICS = ('ct/legacy/{reader_id}', 'ct/any/**')
+    TOPIC = 'ct/read/{source}/{unit_id}'
+    EXTRA_TOPICS = ('ct/legacy/{unit_id}', 'ct/any/**')
     source: str = z.Str(required=True)
-    reader_id: int = z.Int(required=True)
+    unit_id: int = z.Int(required=True)
     rssi: float = z.Float(default=0.0)
     note: str | None = z.Str(default=None)
 
@@ -30,29 +30,29 @@ class TestPublicSurface:
 
     def test_qualnames(self):
         assert Reading.concrete_topic.__qualname__ == 'Reading.concrete_topic'
-        assert Reading(source='a', reader_id=1).concrete_topic.__qualname__ == 'Reading.concrete_topic'
+        assert Reading(source='a', unit_id=1).concrete_topic.__qualname__ == 'Reading.concrete_topic'
 
 
 class TestInstanceForm:
     def test_canonical(self):
-        assert Reading(source='rtls', reader_id=7, rssi=-50.0).concrete_topic() == 'ct/read/rtls/7'
+        assert Reading(source='lab', unit_id=7, rssi=-50.0).concrete_topic() == 'ct/read/lab/7'
 
     def test_declared_topic_override(self):
-        msg = Reading(source='rtls', reader_id=7)
-        assert msg.concrete_topic(topic='ct/legacy/{reader_id}') == 'ct/legacy/7'
+        msg = Reading(source='lab', unit_id=7)
+        assert msg.concrete_topic(topic='ct/legacy/{unit_id}') == 'ct/legacy/7'
 
     def test_matches_send(self, session):
-        msg = Reading(source='rtls', reader_id=7)
+        msg = Reading(source='lab', unit_id=7)
         msg.send(session=session)
         assert Reading.published_topics(session=session) == frozenset({msg.concrete_topic()})
 
     def test_undeclared_topic_raises(self):
         with pytest.raises(z.TopicError, match='not a declared topic'):
-            Reading(source='rtls', reader_id=7).concrete_topic(topic='ct/other/{reader_id}')
+            Reading(source='lab', unit_id=7).concrete_topic(topic='ct/other/{unit_id}')
 
     def test_subscribe_only_topic_raises(self):
         with pytest.raises(z.TopicError, match='subscribe-only'):
-            Reading(source='rtls', reader_id=7).concrete_topic(topic='ct/any/**')
+            Reading(source='lab', unit_id=7).concrete_topic(topic='ct/any/**')
 
     def test_none_slot_raises_like_send(self):
         @z.zeared
@@ -66,25 +66,25 @@ class TestInstanceForm:
 
 class TestClassForm:
     def test_from_slots(self):
-        assert Reading.concrete_topic(source='rtls', reader_id=7) == 'ct/read/rtls/7'
+        assert Reading.concrete_topic(source='lab', unit_id=7) == 'ct/read/lab/7'
 
     def test_extra_kwargs_ignored(self):
         # A full field dict can be passed as-is: identity comes from the slots.
-        values = {'source': 'rtls', 'reader_id': 7, 'rssi': -50.0, 'note': 'x'}
-        assert Reading.concrete_topic(**values) == 'ct/read/rtls/7'
+        values = {'source': 'lab', 'unit_id': 7, 'rssi': -50.0, 'note': 'x'}
+        assert Reading.concrete_topic(**values) == 'ct/read/lab/7'
 
     def test_declared_topic_override(self):
-        assert Reading.concrete_topic(topic='ct/legacy/{reader_id}', reader_id=7) == 'ct/legacy/7'
+        assert Reading.concrete_topic(topic='ct/legacy/{unit_id}', unit_id=7) == 'ct/legacy/7'
 
     def test_missing_slot_raises(self):
-        with pytest.raises(z.TopicError, match=r"Reading\.concrete_topic: missing slot 'reader_id'"):
-            Reading.concrete_topic(source='rtls')
+        with pytest.raises(z.TopicError, match=r"Reading\.concrete_topic: missing slot 'unit_id'"):
+            Reading.concrete_topic(source='lab')
 
     def test_none_slot_raises(self):
         # Unlike a selector, which widens a missing slot to a wildcard.
         with pytest.raises(z.TopicError, match="missing slot 'source'"):
-            Reading.concrete_topic(source=None, reader_id=7)
+            Reading.concrete_topic(source=None, unit_id=7)
 
     def test_agrees_with_instance_form(self):
-        msg = Reading(source='rtls', reader_id=7)
-        assert Reading.concrete_topic(source='rtls', reader_id=7) == msg.concrete_topic()
+        msg = Reading(source='lab', unit_id=7)
+        assert Reading.concrete_topic(source='lab', unit_id=7) == msg.concrete_topic()

@@ -11,7 +11,14 @@ class SubscriptionError(ZearedError):
 
 
 class TopicError(ZearedError):
-    """Raised when a Message's TOPIC template is malformed or refers to unknown fields."""
+    """Raised for a key that can't be built or used.
+
+    A malformed ``TOPIC`` template; a slot field that can't render as its
+    segment, or a value that would split one (0.4.0); a missing slot; a
+    ``topic=`` override that matches no declared template; or an operation
+    the class doesn't support (retained calls without ``RETAINED``,
+    presence without ``LIVELINESS``, ``on_query`` on a ``RETAINED`` class).
+    """
 
 
 class SubscriberError(ZearedError):
@@ -48,9 +55,10 @@ class CallbackError(SubscriberError):
 class RetainedFetchError(SubscriberError):
     """Raised when a retained-fetch reply fails to dispatch.
 
-    Raised when a retained-fetch reply (issued by the subscriber's initial
-    ``session.get(wildcard)``) fails to dispatch. Original exception available via
-    ``__cause__``.
+    Raised when a retained-fetch reply fails to dispatch: one from the
+    subscriber's subscribe-time ``session.get(wildcard)``, or from the same
+    fetch re-run after a reconnect or by the re-attach walk. Original
+    exception available via ``__cause__``.
     """
 
 
@@ -58,9 +66,10 @@ class QueryableError(ZearedError):
     """Raised when a queryable cannot be declared or maintained.
 
     Fatal at declare-time (mirrors :class:`SubscriptionError` on the
-    subscribe side) — e.g. ``Cls.on_query`` on a ``RETAINED = True`` class,
-    or a failed ``declare_queryable``. Distinct from :class:`QueryError`,
-    which is per-reply and non-fatal.
+    subscribe side): a failed ``declare_queryable``. It is also what the
+    serving side hands ``on_error`` when a query's context can't be built,
+    a reply fails, or the handler raises. Distinct from :class:`QueryError`,
+    which the getting side gets per reply.
     """
 
 

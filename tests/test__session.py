@@ -289,94 +289,10 @@ class TestTimestampingInjection:
             sess.close()
 
 
-class TestGcIntervalKwarg:
-    """Pin: ``peer(gc_interval=...)`` stashes the value on the
-    ManagedSession, and the per-session presence observer reads it via
-    ``getattr(session, '_gc_interval', default)``."""
+class TestGcIntervalRemoved:
+    """0.4.0: ``gc_interval=`` went with the presence observer's GC loop."""
 
-    def test_managed_session_stashes_gc_interval(self):
-        sess = z.peer(auto_reconnect=True, probe_interval=0, gc_interval=42.0)
-        try:
-            assert isinstance(sess, z.ManagedSession)
-            assert sess._gc_interval == 42.0
-        finally:
-            z.release(session=sess)
-
-    def test_observer_picks_up_gc_interval_from_managed(self):
-        from zeared.presence import _resolve_gc_interval, get_observer
-
-        sess = z.peer(auto_reconnect=True, probe_interval=0, gc_interval=0.05)
-        try:
-            obs = get_observer(sess)
-            # Observer-level override is None (loop reads from session
-            # on each iteration); the resolved interval reflects the
-            # wrapper's value.
-            assert obs._gc_interval is None
-            resolved = _resolve_gc_interval(sess, obs._gc_interval)
-            assert resolved == 0.05
-        finally:
-            z.release(session=sess)
-
-    def test_raw_session_uses_default_gc_interval(self):
-        from zeared.presence import (
-            _GC_INTERVAL_SECONDS,
-            _resolve_gc_interval,
-            get_observer,
-        )
-
-        sess = z.peer()  # no auto_reconnect → raw session
-        try:
-            obs = get_observer(sess)
-            assert obs._gc_interval is None
-            resolved = _resolve_gc_interval(sess, obs._gc_interval)
-            assert resolved == _GC_INTERVAL_SECONDS
-        finally:
-            sess.close()
-
-    def test_runtime_gc_interval_change_propagates(self):
-        """Pin: ``_gc_interval`` is read on every loop iteration, so
-        runtime mutations to the wrapper or the observer override
-        propagate without restarting the session."""
-        from zeared.presence import _resolve_gc_interval, get_observer
-
-        sess = z.peer(auto_reconnect=True, probe_interval=0, gc_interval=10.0)
-        try:
-            obs = get_observer(sess)
-            assert _resolve_gc_interval(sess, obs._gc_interval) == 10.0
-
-            # Mutate the wrapper-level value — observer picks it up.
-            sess._gc_interval = 30.0
-            assert _resolve_gc_interval(sess, obs._gc_interval) == 30.0
-
-            # Direct observer override wins.
-            obs._gc_interval = 0.05
-            assert _resolve_gc_interval(sess, obs._gc_interval) == 0.05
-        finally:
-            z.release(session=sess)
-
-
-class TestTimestampingPlusGcInterval:
-    """Cross-test: setting both flags simultaneously is the realistic
-    daemon invocation. Pins that the two features don't accidentally
-    interact in a future refactor."""
-
-    def test_both_kwargs_layer_independently(self):
-        from zeared.presence import _resolve_gc_interval, get_observer
-
-        sess = z.peer(
-            auto_reconnect=True,
-            probe_interval=0,
-            timestamping=True,
-            gc_interval=30.0,
-        )
-        try:
-            # GC interval flowed into the wrapper.
-            assert sess._gc_interval == 30.0
-            obs = get_observer(sess)
-            # Observer's override is None; the resolved value reflects
-            # the wrapper.
-            assert obs._gc_interval is None
-            assert _resolve_gc_interval(sess, obs._gc_interval) == 30.0
-            assert sess.state == 'IDLE'
-        finally:
-            z.release(session=sess)
+    @pytest.mark.parametrize('factory', [z.peer, z.client, z.apeer, z.aclient])
+    def test_rejected(self, factory):
+        with pytest.raises(TypeError, match='gc_interval'):
+            factory(gc_interval=1.0)

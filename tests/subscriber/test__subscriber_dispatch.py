@@ -9,7 +9,7 @@ Folds in the retention-dedupe coverage that previously lived in
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import logging
 import time
 from collections import OrderedDict
@@ -22,7 +22,7 @@ from zeared import _codec as codec
 from zeared.subscriber._subscriber_dispatch import (
     _adapt_async_callback,
     _build_dispatch,
-    _make_presence_dispatcher,
+    _build_presence_handler,
     _pick_encoding,
     _safe_on_error,
     _wants_meta,
@@ -37,7 +37,7 @@ class TestPublicSurface:
     def test_helpers_callable(self):
         assert callable(_wants_meta)
         assert callable(_adapt_async_callback)
-        assert callable(_make_presence_dispatcher)
+        assert callable(_build_presence_handler)
         assert callable(_pick_encoding)
         assert callable(_build_dispatch)
 
@@ -159,16 +159,16 @@ class TestDedupeOptOut:
         assert 99 in received
 
 
-class TestSynthesisedWillBypassesDedupe:
-    """Wills carry timestamp=None and must always dispatch even when
-    DEDUPE is on."""
+class TestPresenceIndependentOfDedupe:
+    """0.4.0: offline arrives on ``on_offline``, outside the dispatch path, so
+    dedupe can't swallow it; ``cb`` still gets the retained record."""
 
-    def test_will_synthesis_dispatched(self, connected_pair):
+    def test_offline_reaches_on_offline_with_dedupe_on(self, connected_pair):
         session_a, session_b = connected_pair
 
         @z.zeared
         class Status(z.Message):
-            TOPIC = 'dd/will/{name}'
+            TOPIC = 'dd/presence/{name}'
             RETAINED = True
             LIVELINESS = True
             DEDUPE = True
@@ -176,13 +176,15 @@ class TestSynthesisedWillBypassesDedupe:
             state: str = z.Str(required=True)
 
         Status(name='alice', state='online').send(session=session_a)
-        Status(name='alice', state='offline').register_will(session=session_a)
+        Status.declare_presence(name='alice', session=session_a)
         wait(0.3)
 
         states: list[str] = []
+        offline: list[str] = []
         sub = Status.on_message(
             lambda m: states.append(m.state),
             session=session_b,
+            on_offline=lambda meta: offline.append(meta.captures['name']),
         )
         wait(0.3)
 
@@ -190,8 +192,8 @@ class TestSynthesisedWillBypassesDedupe:
         wait(0.5)
         sub.close()
 
-        assert 'online' in states
-        assert 'offline' in states
+        assert states == ['online']
+        assert offline == ['alice']
 
 
 class TestNonRetainedClassUnaffected:
@@ -222,7 +224,7 @@ class TestOriginSignal:
     """The replay-vs-live signal (0.3.0): ``meta.origin`` carries the
     sample's provenance, determined by the local delivery path — the
     live subscriber callback (LIVE), a retained-fetch reply (REPLAY),
-    or presence will synthesis (WILL)."""
+    or, on the presence feed, a key going offline (WILL)."""
 
     def test_live_sample_marked_live(self, session):
         @z.zeared
@@ -270,25 +272,26 @@ class TestOriginSignal:
         assert (10, z.Origin.REPLAY) in received
         assert (20, z.Origin.LIVE) in received
 
-    def test_synthesised_will_marked_will(self, connected_pair):
+    def test_offline_marked_will(self, connected_pair):
         session_a, session_b = connected_pair
 
         @z.zeared
         class Status(z.Message):
-            TOPIC = 'orig/will/{name}'
+            TOPIC = 'orig/presence/{name}'
             RETAINED = True
             LIVELINESS = True
             name: str = z.Str(required=True)
             state: str = z.Str(required=True)
 
         Status(name='alice', state='online').send(session=session_a)
-        Status(name='alice', state='offline').register_will(session=session_a)
+        Status.declare_presence(name='alice', session=session_a)
         wait(0.3)
 
         received: list[tuple[str, z.Origin]] = []
         sub = Status.on_message(
             lambda m, meta: received.append((m.state, meta.origin)),
             session=session_b,
+            on_offline=lambda meta: received.append(('offline', meta.origin)),
         )
         wait(0.3)
 
@@ -296,7 +299,7 @@ class TestOriginSignal:
         wait(0.5)
         sub.close()
 
-        # 'online' arrived via the retained fetch; 'offline' via synthesis.
+        # 'online' arrived via the retained fetch; offline via the token's DELETE.
         assert ('online', z.Origin.REPLAY) in received
         assert ('offline', z.Origin.WILL) in received
 
@@ -416,7 +419,7 @@ class TestDedupeSkewCeiling:
 
         class FakeTs:
             def get_time(self):
-                return datetime.datetime.fromtimestamp(epoch_seconds, tz=datetime.UTC)
+                return dt.datetime.fromtimestamp(epoch_seconds, tz=dt.UTC)
 
             def __str__(self):
                 return f'{ntp64:d}/fakezid'

@@ -1,9 +1,8 @@
-"""Per-session presence state — one liveliness token + N registered wills.
+"""Per-session presence state — the liveliness tokens a session holds.
 
 Holds ``_SessionPresence``, the module-level registry, ``get_presence``,
-and ``clear_presence_state``. Lazy-declares the liveliness token + will
-queryable on the first ``register_will()`` call so publishers that never
-register anything pay zero presence overhead.
+and ``clear_presence_state``. A session that never declares presence pays
+nothing: the state is created on the first ``declare_presence``.
 """
 
 from __future__ import annotations
@@ -11,203 +10,93 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from .._managed_session import resolve_raw
+from .presence import PresenceToken
 
 if TYPE_CHECKING:
-    import zenoh
-
     from .._managed_session import SessionLike
-
-from .. import _codec as codec
-from .._managed_session import resolve_raw
-from .._prefix_index import _PrefixIndex
-from .presence import (
-    ALIVE_PREFIX,
-    WILL_PREFIX,
-    _envelope_encoding,
-    _slug,
-    _WillEnvelope,
-)
 
 _log = logging.getLogger('zeared.presence')
 
 
 class _SessionPresence:
-    """Per-session presence state: one liveliness token + N registered wills.
+    """The liveliness tokens one session holds, one per concrete key.
 
-    The liveliness token and the wills-queryable are declared lazily on the
-    first ``register_will()`` call. Publishers that never register a will
-    pay zero presence overhead.
+    Each entry pairs the Zenoh token with the :class:`PresenceToken` handed
+    to the caller. The handle stays the same across a reconnect, while
+    :meth:`replay_to` swaps the Zenoh token underneath it.
     """
 
-    __slots__ = (
-        '_index',
-        '_lock',
-        '_queryable',
-        '_registered',
-        '_token',
-        '_wills',
-        'session',
-        'zid',
-    )
+    __slots__ = ('_lock', '_tokens', 'session')
 
     def __init__(self, session: SessionLike) -> None:
         self.session = session
-        self.zid = str(session.zid())
-        self._token: zenoh.LivelinessToken | None = None
-        self._queryable: zenoh.Queryable | None = None
-        # full will_key (`__zeared/will/<zid>/<slug>`) → envelope
-        self._wills: dict[str, _WillEnvelope] = {}
-        # Trie of will_keys — replaces the iterate-and-intersect loop in
-        # `_handle_will_query`.
-        self._index = _PrefixIndex()
         self._lock = threading.Lock()
-        # (cls_qualname, envelope) pairs — kept so the reconnect machinery
-        # can replay every registered will under the post-reconnect zid.
-        # Keyed by (cls_qualname, target_key_expr) so re-registers update
-        # rather than duplicate.
-        self._registered: dict[tuple, _WillEnvelope] = {}
+        # concrete key → (zenoh.LivelinessToken, PresenceToken)
+        self._tokens: dict[str, tuple[Any, PresenceToken]] = {}
 
-    def _ensure_declared(self) -> None:
-        """Declare the liveliness token and will queryable if not already."""
-        if self._token is not None:
-            return
+    def declare(self, key: str) -> PresenceToken:
+        """Hold ``key``, returning its handle; the same handle if already held."""
         with self._lock:
-            if self._token is not None:
+            held = self._tokens.get(key)
+            if held is not None:
+                # One Zenoh token per key: a second one would outlive the
+                # first ``undeclare()``, and the key would never go offline.
+                return held[1]
+            token = resolve_raw(self.session).liveliness().declare_token(key)
+            handle = PresenceToken(self, key)
+            self._tokens[key] = (token, handle)
+            return handle
+
+    def undeclare(self, key: str, handle: PresenceToken) -> None:
+        """Withdraw ``key`` if ``handle`` still holds it."""
+        with self._lock:
+            held = self._tokens.get(key)
+            if held is None or held[1] is not handle:
                 return
-            alive_key = f'{ALIVE_PREFIX}/{self.zid}'
-            raw = resolve_raw(self.session)
-            self._token = raw.liveliness().declare_token(alive_key)
-            will_wildcard = f'{WILL_PREFIX}/{self.zid}/**'
-            self._queryable = raw.declare_queryable(
-                will_wildcard,
-                self._handle_will_query,
-            )
+            del self._tokens[key]
+        with contextlib.suppress(Exception):
+            held[0].undeclare()
 
-    def register_will(
-        self,
-        cls_qualname: str,
-        envelope: _WillEnvelope,
-    ) -> None:
-        """Register an envelope as the will for its target topic.
-
-        Publishes retained (via session.put) to ``__zeared/will/<zid>/<slug>``
-        so live subscribers see it immediately, stashes it for the queryable
-        to serve late subscribers, and ensures the liveliness token is
-        declared.
-        """
-        self._ensure_declared()
-        slug = _slug(cls_qualname, envelope.target_key_expr)
-        will_key = f'{WILL_PREFIX}/{self.zid}/{slug}'
-        env_enc = _envelope_encoding()
-        raw = codec.pack(_WillEnvelope.dump(envelope), env_enc)
+    def holds(self, key: str, handle: PresenceToken) -> bool:
+        """Whether ``handle`` is the live holder of ``key``."""
         with self._lock:
-            new_entry = will_key not in self._wills
-            self._wills[will_key] = envelope
-            if new_entry:
-                self._index.add(will_key)
-            self._registered[(cls_qualname, envelope.target_key_expr)] = envelope
-        try:
-            self.session.put(
-                will_key,
-                raw,
-                encoding=codec.MIME[env_enc],
-            )
-        except Exception as exc:
-            # If the publish fails, pull the will back out; no stale state.
-            with self._lock:
-                if self._wills.pop(will_key, None) is not None:
-                    self._index.remove(will_key)
-            _log.warning(
-                'register_will: publish of %s failed: %s',
-                will_key,
-                exc,
-            )
-            raise
+            held = self._tokens.get(key)
+        return held is not None and held[1] is handle
 
-    def _handle_will_query(self, query: zenoh.Query) -> None:
-        """Answer a late subscriber's will query from the stash.
-
-        Answer a late subscriber's ``session.get(__zeared/will/<zid>/**)`` with every
-        stashed will whose concrete key intersects the query.
-
-        Uses the trie index — O(query depth × matches) rather than O(N)
-        across all stashed wills.
-        """
-        query_key = str(query.key_expr)
+    def keys(self) -> list[str]:
+        """The concrete keys held, in declaration order."""
         with self._lock:
-            matches = list(self._index.matching(query_key))
-            items = [(k, self._wills[k]) for k in matches if k in self._wills]
-        env_enc = _envelope_encoding()
-        for will_key, envelope in items:
-            try:
-                raw = codec.pack(_WillEnvelope.dump(envelope), env_enc)
-                query.reply(will_key, raw, encoding=codec.MIME[env_enc])
-            except Exception as exc:  # noqa: BLE001
-                _log.warning(
-                    'will-queryable reply failed on %s: %s',
-                    will_key,
-                    exc,
-                )
+            return list(self._tokens)
 
     def replay_to(self, new_session: SessionLike) -> None:
-        """Re-register every previously-registered will against ``new_session``.
+        """Re-declare every held key on ``new_session``'s current raw session.
 
-        Used by the reconnect machinery: the old raw session is dead, the
-        wrapper has swapped in a new raw, and peers will see the OLD zid's
-        liveliness token DELETE (firing our wills on their side). We mint
-        a fresh ``_SessionPresence`` under the new zid and replay every
-        envelope so we come back online with the same wills wired up.
-
-        The caller must have removed the old ``_SessionPresence`` from the
-        module registry before calling this.
+        Used by the reconnect machinery once the raw session is swapped. The
+        old tokens died with the old raw session, so they are dropped, not
+        undeclared. Every :class:`PresenceToken` stays valid. A key whose
+        re-declare fails is logged and released.
         """
         with self._lock:
-            pairs = list(self._registered.items())
-            # Drop our local state — the underlying token + queryable are
-            # tied to the dead raw session. Don't try to undeclare; just
-            # forget.
-            self._wills.clear()
-            self._index = _PrefixIndex()
-            self._registered.clear()
-            self._token = None
-            self._queryable = None
-
-        new_state = get_presence(new_session)
-        new_zid = str(new_session.zid())
-        for (cls_qualname, target), envelope in pairs:
-            new_envelope = _WillEnvelope(
-                source_zid=new_zid,
-                target_key_expr=envelope.target_key_expr,
-                encoding=envelope.encoding,
-                payload=envelope.payload,
-                schema=envelope.schema,
-            )
-            try:
-                new_state.register_will(cls_qualname, new_envelope)
-            except Exception:  # noqa: BLE001
-                _log.exception(
-                    'replay_to: register_will failed for %s @ %s',
-                    cls_qualname,
-                    target,
-                )
+            self.session = new_session
+            raw = resolve_raw(new_session)
+            for key, (_dead, handle) in list(self._tokens.items()):
+                try:
+                    self._tokens[key] = (raw.liveliness().declare_token(key), handle)
+                except Exception:  # noqa: BLE001
+                    _log.exception('presence: re-declaring %s after reconnect failed; releasing it', key)
+                    del self._tokens[key]
 
     def drop(self) -> None:
-        """Undeclare the token + queryable, clear state. Idempotent."""
+        """Withdraw every token and forget them. Idempotent."""
         with self._lock:
-            token = self._token
-            queryable = self._queryable
-            self._token = None
-            self._queryable = None
-            self._wills.clear()
-            self._index = _PrefixIndex()
-        if token is not None:
+            tokens = [token for token, _handle in self._tokens.values()]
+            self._tokens.clear()
+        for token in tokens:
             with contextlib.suppress(Exception):
                 token.undeclare()
-        if queryable is not None:
-            with contextlib.suppress(Exception):
-                queryable.undeclare()
-        _registry.pop(id(self.session), None)
 
 
 # ---------------------------------------------------------------------------
@@ -235,25 +124,13 @@ def get_presence(session: SessionLike) -> _SessionPresence:
 
 
 def clear_presence_state(*, session: SessionLike | None = None) -> None:
-    """Drop per-session presence state. Without ``session=``, clears all."""
+    """Withdraw a session's presence tokens and drop its state. Without ``session=``, every session's."""
     with _registry_lock:
         if session is None:
             states = list(_registry.values())
             _registry.clear()
         else:
-            sid = id(session)
-            state = _registry.pop(sid, None)
+            state = _registry.pop(id(session), None)
             states = [state] if state is not None else []
-    for s_state in states:
-        # Undeclare directly; drop() re-pops from the registry but we already
-        # did that above (no-op second time).
-        with contextlib.suppress(Exception):
-            if s_state._token is not None:  # noqa: SLF001
-                s_state._token.undeclare()  # noqa: SLF001
-        with contextlib.suppress(Exception):
-            if s_state._queryable is not None:  # noqa: SLF001
-                s_state._queryable.undeclare()  # noqa: SLF001
-        s_state._token = None  # noqa: SLF001
-        s_state._queryable = None  # noqa: SLF001
-        s_state._wills.clear()  # noqa: SLF001
-        s_state._index = _PrefixIndex()  # noqa: SLF001
+    for state in states:
+        state.drop()

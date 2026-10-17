@@ -7,15 +7,19 @@ modules as stateless mixins, composed here via the MRO so they stay
 methods rather than helper functions taking ``cls``:
 
 - ``_MessageTopicMixin`` (``_message_topic.py``) — template parsing,
-  schema attachment cache, multi-segment field-binding validation.
+  schema attachment cache, slot field-binding validation (multi-segment,
+  and from 0.4.0 single-segment).
 - ``_MessageSendMixin`` (``_message_send.py``) — sync ``send`` /
   ``send_batch``.
 - ``_MessageAsyncMixin`` (``_message_async.py``) — async siblings:
   ``asend`` / ``asend_batch`` / ``aunretain`` / ``alisten``.
-- ``_MessageWillMixin`` (``_message_will.py``) — LWT registration:
-  ``register_will`` / ``aregister_will``.
+- ``_MessagePresenceMixin`` (``_message_presence.py``) — presence:
+  ``declare_presence`` / ``adeclare_presence`` (0.4.0; ``register_will``
+  and ``aregister_will`` raise a pointer).
 - ``_MessageSubscribeMixin`` (``_message_subscribe.py``) — subscribe
   + introspection: ``on_message`` / ``published_topics``.
+- ``_MessageQueryMixin`` (``_message_query.py``) — queries: ``on_query``
+  serving, and ``query`` / ``query_one`` / ``iter_query`` getting.
 
 Plus ``_message_unretain.py`` for the ``_UnretainDescriptor`` and the
 shared ``_unretain_impl`` function (instance-vs-class ``unretain``
@@ -35,13 +39,13 @@ from .. import _codec as codec
 from ..effect import Effect, EffectName  # noqa: TC001
 from ._message_async import _MessageAsyncMixin
 from ._message_concrete_topic import _ConcreteTopicDescriptor
+from ._message_presence import _MessagePresenceMixin
 from ._message_query import _MessageQueryMixin
 from ._message_render import _coerce_captures
 from ._message_send import _MessageSendMixin
 from ._message_subscribe import _MessageSubscribeMixin
 from ._message_topic import _MessageTopicMixin
 from ._message_unretain import _UnretainDescriptor
-from ._message_will import _MessageWillMixin
 
 Encoding = Literal['msgpack', 'json']
 
@@ -50,7 +54,7 @@ class Message(
     _MessageTopicMixin,
     _MessageSendMixin,
     _MessageAsyncMixin,
-    _MessageWillMixin,
+    _MessagePresenceMixin,
     _MessageSubscribeMixin,
     _MessageQueryMixin,
     s.Seared,
@@ -94,8 +98,8 @@ class Message(
     # poisoned watermark takes longer to be rejected.
     DEDUPE_MAX_SKEW: ClassVar[float | None] = 300.0
     # Optional retention TTL in seconds. ``None`` (default) means
-    # retained values live forever (or until the publishing session
-    # closes / a tombstone is emitted). Any positive float opts the
+    # retained values live until a tombstone, ``z.release`` or
+    # ``clear_retention_cache`` drops them. Any positive float opts the
     # class into lazy time-based expiration: entries older than the
     # TTL are skipped + pruned at query time. No background thread —
     # expiration is checked when ``_RetentionCache._handle_query`` runs

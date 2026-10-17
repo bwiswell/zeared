@@ -10,10 +10,12 @@ exercises a real session-close + probe-driven recovery.
 from __future__ import annotations
 
 import contextlib
+import sys
 import threading
+import time
 
 import pytest
-from conftest import _peer_session, wait
+from conftest import _peer_session, wait, wait_until
 
 import zeared as z
 from zeared._managed_session import ManagedSession, resolve_raw
@@ -322,9 +324,9 @@ class TestSubscriberRedeclared:
         which redeclare reuses — so it keeps firing after reconnect."""
 
         @z.zeared
-        class Reader(z.Message):
-            TOPIC = 'reco/rm/{reader_id}'
-            reader_id: int = z.Int(required=True)
+        class Unit(z.Message):
+            TOPIC = 'reco/rm/{unit_id}'
+            unit_id: int = z.Int(required=True)
 
         new_raw = _peer_session()
         try:
@@ -338,7 +340,7 @@ class TestSubscriberRedeclared:
                 max_attempts=None,
             )
             removed: list[dict] = []
-            sub = Reader.on_message(
+            sub = Unit.on_message(
                 lambda r: None,
                 on_remove=lambda meta: removed.append(meta.captures),
                 session=m,
@@ -360,7 +362,7 @@ class TestSubscriberRedeclared:
             wait(0.3)
             sub.close()
 
-            assert removed == [{'reader_id': '7'}]
+            assert removed == [{'unit_id': '7'}]
         finally:
             with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
@@ -411,15 +413,15 @@ class TestSubscriberRedeclared:
 
 
 # ---------------------------------------------------------------------------
-# Presence will replay
+# Presence re-declared on reconnect
 # ---------------------------------------------------------------------------
 
 
-class TestWillReplay:
-    def test_will_replayed_under_new_zid(self, session):
+class TestPresenceRedeclared:
+    def test_token_redeclared_under_new_zid(self, session):
         @z.zeared
         class Status(z.Message):
-            TOPIC = 'reco/will/{name}'
+            TOPIC = 'reco/presence/{name}'
             LIVELINESS = True
             name: str = z.Str(required=True)
             state: str = z.Str(required=True)
@@ -429,7 +431,7 @@ class TestWillReplay:
             m = ManagedSession(
                 session,
                 lambda: new_raw,
-                endpoint_label='will-replay',
+                endpoint_label='presence-redeclare',
                 probe_interval=0,
                 initial_backoff=0.001,
                 max_backoff=0.005,
@@ -439,7 +441,7 @@ class TestWillReplay:
             new_zid = str(new_raw.zid())
             assert old_zid != new_zid
 
-            Status(name='alice', state='offline').register_will(session=m)
+            token = Status.declare_presence(name='alice', session=m)
 
             done = threading.Event()
             m._on_reconnect = lambda mgr: done.set()
@@ -448,20 +450,15 @@ class TestWillReplay:
             assert done.wait(timeout=3.0)
             wait(0.2)
 
-            # The new presence state should have a will registered under
-            # the NEW zid; the envelope's source_zid is updated.
-            from zeared.presence import _registry
-
-            new_state = None
-            for state in _registry.values():
-                if state.session is m:
-                    new_state = state
-                    break
-            assert new_state is not None
-            envelopes = list(new_state._registered.values())
-            assert len(envelopes) == 1
-            assert envelopes[0].source_zid == new_zid
-            assert envelopes[0].target_key_expr == 'reco/will/alice'
+            # 0.4.0: the token is re-declared on the new raw session, and the
+            # caller's handle stays valid.
+            assert token.active
+            held = [
+                str(r.ok.key_expr)
+                for r in new_raw.liveliness().get('reco/presence/**', timeout=1.0)
+                if r.ok is not None
+            ]
+            assert held == ['reco/presence/alice']
         finally:
             with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
@@ -508,7 +505,7 @@ class TestOnReconnectHook:
                 fired.set()
 
             handle = m.on_reconnect(cb)
-            assert isinstance(handle, z.OnReconnectHandle)
+            assert isinstance(handle, z.CallbackHandle)
 
             # Replace the controlled open_fn so reconnect succeeds.
             m._open_fn = lambda: new_raw
@@ -1176,3 +1173,106 @@ class TestPublisherCacheRebuild:
                 m._teardown(call_close=False)
             with contextlib.suppress(Exception):
                 new_raw.close()
+
+
+class TestLinkSignalsAroundAReconnect:
+    """0.4.0: a reconnect is a link loss too — lost, then on_reconnect, then restored."""
+
+    def test_order_lost_reconnect_restored(self, session):
+        new_raw = _peer_session()
+        try:
+            m = _make_managed(session, probe_interval=0)
+            order: list[str] = []
+            m.on_link_lost(lambda _s: order.append('lost'))
+            m.on_reconnect(lambda _s: order.append('reconnect'))
+            m.on_link_restored(lambda _s: order.append('restored'))
+            m._open_fn = lambda: new_raw
+
+            from zeared._reconnect import _reconnect
+
+            _reconnect(m)  # synchronous, to avoid timing flakes
+
+            assert order == ['lost', 'reconnect', 'restored']
+            assert m._link_state == 'up'
+        finally:
+            with contextlib.suppress(Exception):
+                m._teardown(call_close=False)
+            with contextlib.suppress(Exception):
+                new_raw.close()
+
+    def test_the_probe_leaves_a_restoring_reconnect_alone(self, session, monkeypatch):
+        """After the swap the state reads IDLE while the restore still runs: the probe skips its link check."""
+        checks: list[bool] = []
+        monkeypatch.setattr(sys.modules['zeared._reconnect._reconnect'], '_check_link', lambda m: checks.append(True))
+        m = _make_managed(session, probe_interval=0.02)
+        try:
+            m._restoring = True
+            start_probe(m)
+            wait(0.2)
+            assert checks == []
+            m._restoring = False
+            wait(0.2)
+            assert checks
+        finally:
+            with contextlib.suppress(Exception):
+                m._teardown(call_close=False)
+
+    def test_a_slow_restore_still_restores_once_after_on_reconnect(self, restartable_hub, monkeypatch):
+        """End to end, with a router: a probe tick inside the restore window used to restore the
+        link itself, firing ``on_link_restored`` before ``on_reconnect`` (or twice)."""
+        reconnect_mod = sys.modules['zeared._reconnect._reconnect']
+        restore_queryables = reconnect_mod._restore_queryables
+
+        def slow_restore(managed: ManagedSession) -> None:
+            time.sleep(0.5)  # a restore with plenty to do
+            restore_queryables(managed)
+
+        monkeypatch.setattr(reconnect_mod, '_restore_queryables', slow_restore)
+
+        @z.zeared
+        class Val(z.Message):
+            TOPIC = 'reco/slowrestore/{k}'
+            RETAINED = True
+            k: str = z.Str(required=True)
+
+        hub = restartable_hub.start()
+        Val(k='a').send(session=hub)
+        client = z.client(restartable_hub.endpoint, auto_reconnect=True, probe_interval=0.05, resync_jitter=0)
+        order: list[str] = []
+        client.on_link_lost(lambda _s: order.append('lost'))
+        client.on_reconnect(lambda _s: order.append('reconnect'))
+        client.on_link_restored(lambda _s: order.append('restored'))
+        try:
+            Val.on_message(lambda m: None, session=client)
+            wait(0.3)
+            client.raw().close()  # the session dies; the probe triggers the reconnect
+            wait_until(lambda: 'restored' in order, 5)
+            wait(0.5)
+            assert order == ['lost', 'reconnect', 'restored']
+        finally:
+            z.release(session=client)
+
+    def test_a_dead_session_never_restores(self, session):
+        def failing_open():
+            msg = 'still down'
+            raise RuntimeError(msg)
+
+        m = ManagedSession(
+            session,
+            failing_open,
+            endpoint_label='dead-link',
+            probe_interval=0,
+            initial_backoff=0.001,
+            max_backoff=0.005,
+            max_attempts=2,
+        )
+        order: list[str] = []
+        m.on_link_lost(lambda _s: order.append('lost'))
+        m.on_link_restored(lambda _s: order.append('restored'))
+
+        from zeared._reconnect import _reconnect
+
+        _reconnect(m)
+
+        assert m.state == 'DEAD'
+        assert order == ['lost']

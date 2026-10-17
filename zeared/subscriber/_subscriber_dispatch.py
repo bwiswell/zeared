@@ -12,8 +12,7 @@ the same closure).
 
 from __future__ import annotations
 
-import contextlib
-import datetime
+import datetime as dt
 import inspect
 import logging
 from typing import TYPE_CHECKING, Any
@@ -25,7 +24,7 @@ from ..errors import (
     SchemaMismatchError,
     SubscriptionError,
 )
-from ..meta import Origin, _parse_attachment_schema, _parse_hlc, from_sample
+from ..meta import Origin, _is_republish, _parse_attachment_schema, _parse_hlc, _parse_origin_zid, from_sample
 
 if TYPE_CHECKING:
     from collections import OrderedDict
@@ -57,9 +56,9 @@ def _safe_on_error(
     logging when none is registered.
 
     Dispatch runs on Zenoh's callback thread. An ``on_error`` that raises
-    used to escape into it — the same defect fixed on the queryable side
-    in 0.3.2, and the one this module's own docstring already promises
-    against ("every failure mode through ``on_error`` / ``_log``").
+    used to escape into it, which this module's own docstring promises
+    against ("every failure mode through ``on_error`` / ``_log``"). The
+    queryable side has its own copy of this guard (0.4.0).
 
     Zenoh's handler does absorb the escape, so the subscription survives
     either way; what it does not do is say what the *original* error was.
@@ -117,8 +116,8 @@ def _adapt_async_callback(cb: Callable) -> Callable:
     except RuntimeError as e:
         msg = (
             'async callback passed to on_message, but no running event loop '
-            'at subscribe time; call from within an async context or use '
-            'Cls.alisten() instead'
+            'at subscribe time; subscribe from inside a running loop (in a '
+            'coroutine), or pass a sync callback'
         )
         raise SubscriptionError(msg) from e
     inner = cb
@@ -132,33 +131,50 @@ def _adapt_async_callback(cb: Callable) -> Callable:
     return _sync_shim
 
 
-def _make_presence_dispatcher(
-    msg_cls: type[Message],  # noqa: ARG001  (kept for call-site symmetry)
+def _build_presence_handler(
+    msg_cls: type[Message],
     templates: Any,
-    dispatch: Callable[..., None],
-) -> Callable:
-    """Build an interested-party dispatcher for a presence observer.
+    on_online: Callable[..., None] | None,
+    on_offline: Callable[..., None] | None,
+    on_error: Callable[[Exception, bytes], None] | None,
+) -> Callable[..., None]:
+    """Build the handler a subscriber's liveliness subscriptions call (0.4.0).
 
-    The dispatcher receives synthesised samples; it checks whether the
-    sample's key_expr matches any of the class's declared templates, and
-    if so, threads it through the subscriber's normal ``dispatch`` path.
-    Returns True iff a match was found (informational; dispatcher output
-    isn't used for control flow).
+    A token PUT is the key coming online, a DELETE the key going offline. The
+    handler builds an identity-only ``ZenohMeta`` (the key's template
+    captures; a token carries no payload) and calls ``on_online(meta)`` or
+    ``on_offline(meta)``. ``origin`` defaults to ``LIVE`` for online and
+    ``WILL`` for offline; the subscribe-time liveliness ``get`` passes
+    ``REPLAY`` for the keys already online. A callback that raises routes
+    through ``on_error`` like any other callback failure.
     """
+    import zenoh as _zenoh
 
-    def on_presence(syn_sample: zenoh.Sample) -> bool:
-        key = syn_sample.key_expr
-        # Match against the class's declared templates.
-        match = templates.match(key)
+    def handle(sample: zenoh.Sample, *, origin: Origin | None = None) -> None:
+        online = sample.kind == _zenoh.SampleKind.PUT
+        cb = on_online if online else on_offline
+        if cb is None:
+            return
+        key_expr = str(sample.key_expr)
+        match = templates.match(key_expr)
         if match is None:
-            return False
-        # dispatch() already routes its own exceptions through on_error
-        # / logging — nothing extra to do here.
-        with contextlib.suppress(Exception):
-            dispatch(syn_sample, origin=Origin.WILL)
-        return True
+            return  # a token on a key none of the class's templates names
+        try:
+            meta = from_sample(sample)
+            meta.origin = origin if origin is not None else (Origin.LIVE if online else Origin.WILL)
+            _tpl, captures = match
+            if captures:
+                meta.captures = dict(captures)
+            cb(meta)
+        except Exception as exc:  # noqa: BLE001
+            which = 'on_online' if online else 'on_offline'
+            wrapped = CallbackError(f'{msg_cls.__name__} {which} raised on key_expr={key_expr!r}: {exc}')
+            wrapped.__cause__ = exc
+            # A token carries no payload — hand on_error empty bytes.
+            if not _safe_on_error(on_error, wrapped, b'', msg_cls):
+                _log.exception('%s %s callback raised', msg_cls.__name__, which)
 
-    return on_presence
+    return handle
 
 
 def _pick_encoding(
@@ -204,9 +220,10 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
 
     The returned closure takes a keyword-only ``origin`` (default
     ``Origin.LIVE`` — the underlying ``zenoh.Subscriber`` calls it with the
-    sample alone). The retained-fetch and presence paths pass ``REPLAY`` /
-    ``WILL`` respectively; the value lands on ``meta.origin`` and gates the
-    watchdog ping (cadence measures the live stream only).
+    sample alone). The retained-fetch path passes ``REPLAY``; the value
+    lands on ``meta.origin`` and gates the watchdog ping (cadence measures
+    the live stream only). Presence events don't come through here: see
+    ``_build_presence_handler``.
     """
     import zenoh as _zenoh
 
@@ -231,7 +248,7 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
         issued = _parse_hlc(ts)
         if issued is None:
             return True
-        skew = (issued - datetime.datetime.now(datetime.UTC)).total_seconds()
+        skew = (issued - dt.datetime.now(dt.UTC)).total_seconds()
         if skew <= max_skew:
             return True
         if key_expr not in skew_warned:
@@ -286,10 +303,14 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
             return
         raw = bytes(sample.payload)
         key_expr = str(sample.key_expr)
+        # A publisher's republish on link restore (0.4.0) arrives through the
+        # live subscriber but carries an old value: deliver it as a replay.
+        if origin is Origin.LIVE and _is_republish(sample.attachment):
+            origin = Origin.REPLAY
 
-        # Retention dedupe (RETAINED + DEDUPE classes only). Synthesised
-        # will samples carry timestamp=None and bypass dedupe — they
-        # represent a meaningful single-fire offline event.
+        # Retention dedupe (RETAINED + DEDUPE classes only). A sample with
+        # no timestamp (an unstamped publisher) bypasses dedupe: there is
+        # nothing to order it by.
         if dedupe_active:
             ts = sample.timestamp
             if ts is not None:
@@ -312,14 +333,16 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
         # attachment; mismatches drop the sample (route via on_error
         # as SchemaMismatchError) and warn-once per (sender_zid,
         # observed_schema) pair to avoid log spam from a misaligned
-        # peer.
+        # peer. The sender is the zid in the sample's HLC timestamp:
+        # Zenoh leaves ``source_info`` unset on an ordinary put, so
+        # keying on it put every sender in one pair. A sample with no
+        # timestamp has no sender to name ('').
         if expected_schema is not None:
             attach = sample.attachment
             attach_bytes = bytes(attach) if attach is not None else None
             observed_schema = _parse_attachment_schema(attach_bytes)
             if observed_schema != expected_schema:
-                src_info = sample.source_info
-                sender_zid = str(src_info) if src_info is not None else ''
+                sender_zid = _parse_origin_zid(sample.timestamp) or ''
                 pair = (sender_zid, observed_schema)
                 if pair in seen_mismatches:
                     # Touch the entry — keeps recently-seen pairs hot
@@ -377,8 +400,7 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
             return
         # Successful dispatch — feed the watchdog (if any). Live samples
         # only: cadence measures the live stream, so a retained replay
-        # can't establish it from stale data and a will (the producer
-        # died) can't reset the quiet timer.
+        # can't establish it from stale data.
         if watchdog is not None and origin is Origin.LIVE:
             watchdog.ping()
 

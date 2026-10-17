@@ -1,23 +1,26 @@
-"""Characterisation tests: how zeared behaves across a hub restart, today.
+"""How zeared behaves across a hub restart.
 
-They pin current behaviour and are rewritten when 0.4.0 changes it. Each test's
-docstring names the 0.4.0 work that will flip it, so 0.4.0's diff is pure behaviour
-with its harness already in place.
+Written in 0.3.10 as characterisation tests of the old behaviour, each naming the
+0.4.0 work that would flip it; 0.4.0 flipped them. Each docstring says what changed.
 
 One real restart cycle runs once for the module (``restart_record``), and each test
 asserts one facet of what it recorded. The cycle, in the hub topology where the
 publisher is the hub:
 
 1. Hub A boots and publishes a ``RETAINED`` + ``LIVELINESS`` status with a fresh boot
-   id, and registers a will.
-2. A managed client attaches (``auto_reconnect=True``) with a typed subscriber, a raw
-   liveliness subscriber, transport and link event listeners, and an ``on_reconnect``
-   counter.
-3. A closes. The client sees A's will.
-4. The hub reopens on the same endpoint as B, which publishes and registers its will
-   at once, while the client is still detached: the client's re-dial is slowed so this
+   id, and declares presence on its key.
+2. A managed client attaches (``auto_reconnect=True``) with a typed subscriber that
+   also takes ``on_online`` / ``on_offline``, transport and link event listeners, an
+   ``on_reconnect`` counter, and ``on_link_lost`` / ``on_link_restored`` recorders.
+   Nothing else on the client subscribes to liveliness: a raw ``history=True``
+   subscriber would make the session learn A's token itself, and hide whether the
+   presence feed's own subscribers see A go offline.
+3. A closes. The client sees A's key go offline.
+4. The hub reopens on the same endpoint as B, which publishes and declares presence at
+   once, while the client is still detached: the client's re-dial is slowed so this
    lands inside the re-attach window (see ``slow_redial_client``).
-5. The client re-attaches. Then ``fetch_retained``, then B closes.
+5. The client re-attaches; the re-attach walk runs, then ``on_link_restored``. Then
+   ``fetch_retained``, then B closes.
 
 The tests run real sessions and take about 6 s together. They carry the ``restart``
 marker, so ``-m "not restart"`` deselects them.
@@ -64,14 +67,21 @@ class RestartRecord:
     events: list[tuple[str, bool, str]] = field(default_factory=list)  # (boot, alive, origin)
     events_after_restart: list[tuple[str, bool, str]] = field(default_factory=list)
     events_after_kill_b: list[tuple[str, bool, str]] = field(default_factory=list)
-    raw_liveliness: list[tuple[str, str]] = field(default_factory=list)  # (zid, PUT/DELETE)
+    presence: list[tuple[str, str]] = field(default_factory=list)  # (online/offline, origin)
+    presence_keys: list[str] = field(default_factory=list)  # each presence event's key
     transport_events: list[str] = field(default_factory=list)
     link_events: list[str] = field(default_factory=list)
     routers_timeline: list[tuple[str, int]] = field(default_factory=list)
     states: list[str] = field(default_factory=list)
     reconnects: int = 0
+    link_signals: list[str] = field(default_factory=list)  # 'lost' / 'restored'
     fetched: list[tuple[str, bool]] = field(default_factory=list)
     published_in_window: bool = False
+
+
+def _note_presence(rec: RestartRecord, state: str, meta: z.ZenohMeta) -> None:
+    rec.presence.append((state, meta.origin.value))
+    rec.presence_keys.append(meta.key_expr)
 
 
 @pytest.fixture(scope='module')
@@ -85,7 +95,7 @@ def restart_record() -> RestartRecord:
             setattr(rec, f'boot_{slot}', boot_id)
             setattr(rec, f'zid_{slot}', str(session.zid()))
             Status(node='n', boot=boot_id, alive=True).send(session=session)
-            Status(node='n', boot=boot_id, alive=False).register_will(session=session)
+            Status.declare_presence(node='n', session=session)
 
         return _boot
 
@@ -94,18 +104,15 @@ def restart_record() -> RestartRecord:
     handles: list = []
     try:
         client.on_reconnect(lambda _s: setattr(rec, 'reconnects', rec.reconnects + 1))
+        client.on_link_lost(lambda _s: rec.link_signals.append('lost'))
+        client.on_link_restored(lambda _s: rec.link_signals.append('restored'))
         Status.on_message(
             lambda m, meta: rec.events.append((m.boot, m.alive, meta.origin.value)),
             session=client,
+            on_online=lambda meta: _note_presence(rec, 'online', meta),
+            on_offline=lambda meta: _note_presence(rec, 'offline', meta),
         )
         raw = client.raw()
-        handles.append(
-            raw.liveliness().declare_subscriber(
-                '__zeared/alive/**',
-                lambda s: rec.raw_liveliness.append((str(s.key_expr).rsplit('/', 1)[-1], _kind(s))),
-                history=True,
-            )
-        )
         handles.append(raw.info.declare_transport_events_listener(lambda e: rec.transport_events.append(_kind(e))))
         handles.append(raw.info.declare_link_events_listener(lambda e: rec.link_events.append(_kind(e))))
 
@@ -116,7 +123,7 @@ def restart_record() -> RestartRecord:
         time.sleep(0.5)
         mark('attached')
 
-        hub.stop()  # A goes away; its will fires at the client
+        hub.stop()  # A goes away; its key goes offline at the client
         wait_until(lambda: routers(client) == 0, 5)
         time.sleep(0.5)
         mark('after_kill_a')
@@ -132,7 +139,8 @@ def restart_record() -> RestartRecord:
 
         wait_until(lambda: routers(client) == 1, 10)
         mark('after_reattach')
-        time.sleep(1.5)
+        wait_until(lambda: rec.link_signals[-1:] == ['restored'], 10)  # the walk has run
+        time.sleep(0.3)
         rec.events_after_restart = list(rec.events)
         rec.fetched = [(m.boot, m.alive) for m in Status.fetch_retained(session=client)]
 
@@ -152,67 +160,76 @@ def restart_record() -> RestartRecord:
 
 
 def test_on_reconnect_does_not_fire_on_a_hub_restart(restart_record):
-    """The client's own session never closed, so auto-reconnect sees nothing.
+    """The client's own session never closed, so it was never swapped: no ``on_reconnect``.
 
-    Changes with plan 11 §2.2 (link re-attach): new link-lost / link-restored signals
-    fire across this cycle; ``on_reconnect`` itself still doesn't (decision 1.2).
+    Unchanged in 0.4.0: ``on_reconnect`` keeps its narrow meaning, the session was
+    swapped, and the link signals cover the rest.
     """
     assert restart_record.reconnects == 0
     assert set(restart_record.states) == {'IDLE'}
 
 
-def test_retained_value_published_in_the_window_is_not_delivered(restart_record):
-    """B's boot status, published while the client was detached, never reaches the subscriber.
+def test_link_signals_pair_across_the_restart(restart_record):
+    """0.4.0: the link signals cover what ``on_reconnect`` doesn't.
 
-    Changes with plan 11 §2.2: the re-attach walk re-fetches it, delivered as ``REPLAY``.
+    Lost when A went, restored once the client re-attached to B (after the walk), lost
+    again when B went.
+    """
+    assert restart_record.link_signals == ['lost', 'restored', 'lost']
+
+
+def test_retained_value_published_in_the_window_is_delivered(restart_record):
+    """B's boot status, published while the client was detached, reaches the subscriber.
+
+    Flipped in 0.4.0: the re-attach walk re-fetches it, delivered as
+    ``REPLAY`` before ``on_link_restored`` fires. (A's offline no longer reaches ``cb`` as
+    a typed will: presence has its own callbacks.)
     """
     rec = restart_record
-    assert rec.events_after_restart == [
-        (rec.boot_a, True, 'replay'),
-        (rec.boot_a, False, 'will'),
-    ]
+    assert rec.events_after_restart == [(rec.boot_a, True, 'replay'), (rec.boot_b, True, 'replay')]
 
 
 def test_fetch_retained_recovers_it(restart_record):
     """The value was never lost: B's retention cache serves it on demand.
 
-    Stays true. It pins that this is a trigger problem, not a protocol problem.
+    Stays true. The value was never lost; the re-attach walk is the trigger that was
+    missing.
     """
     assert restart_record.fetched == [(restart_record.boot_b, True)]
 
 
-def test_restarted_publishers_death_is_unannounced(restart_record):
-    """B's will was registered while the client was detached, so its death produces no event.
+def test_restarted_publishers_death_is_announced(restart_record):
+    """B declared presence while the client was detached, and its death is still announced.
 
-    A's death, before the restart, is the control: announced as a will. Changes with plan
-    11 §2.1 (presence as a liveliness token on the contract key), which announces B's death.
+    Flipped in 0.4.0: presence is a liveliness token at the contract key,
+    so there is no will stash to miss. The client sees A online (``REPLAY``, already up when
+    it subscribed) and offline, then B's token appear once the link is back (``LIVE``) and go.
+    A's offline is the case the presence watch's ``history=True`` keeper exists for: the
+    client learned A's key from the replay, and without the keeper nothing reported it gone.
     """
-    rec = restart_record
-    assert (rec.boot_a, False, 'will') in rec.events_after_restart
-    assert rec.events_after_kill_b == rec.events_after_restart
-
-
-def test_liveliness_history_delivers_the_new_zids_put_and_delete(restart_record):
-    """The client's raw liveliness subscriber sees B's token come and go.
-
-    Stays true. It pins the mechanism plan 11 §2.1 relies on: under the token model those
-    two samples are the online and offline events, with no stash to miss.
-    """
-    rec = restart_record
-    assert rec.raw_liveliness == [
-        (rec.zid_a, 'PUT'),
-        (rec.zid_a, 'DELETE'),
-        (rec.zid_b, 'PUT'),
-        (rec.zid_b, 'DELETE'),
+    assert restart_record.presence == [
+        ('online', 'replay'),
+        ('offline', 'will'),
+        ('online', 'live'),
+        ('offline', 'will'),
     ]
+
+
+def test_each_boots_token_sits_at_the_contract_key(restart_record):
+    """Every presence event, A's and B's, coming and going, names the contract key.
+
+    The mechanism the presence feed is built on (0.4.0): the tokens sit on the contract
+    key itself, where ``__zeared/alive/<zid>`` carried them before.
+    """
+    assert restart_record.presence_keys == ['restart/status/n'] * 4
 
 
 def test_router_link_state_is_observable(restart_record):
     """The router link's loss and return are visible, by polling and as pushed events.
 
-    Stays true. It pins the inputs plan 11 §2.2's detection can use: ``routers_zid()``
-    (which doc 10 planned to poll) and the transport / link event listeners (present from
-    ``eclipse-zenoh`` 1.9.0, zeared's floor).
+    Stays true. It pins the inputs link detection can use: ``routers_zid()``, which the
+    probe polls, and the transport / link event listeners (present from ``eclipse-zenoh``
+    1.9.0, zeared's floor).
     """
     rec = restart_record
     assert rec.routers_timeline == [

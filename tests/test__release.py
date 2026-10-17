@@ -6,7 +6,6 @@ import pytest
 from conftest import wait
 
 import zeared as z
-from zeared.presence import _observer_registry
 from zeared.presence import _registry as _pres_registry
 from zeared.publisher import _registry as _pub_registry
 from zeared.retention import _registry as _ret_registry
@@ -39,14 +38,13 @@ class TestReleaseWalksAllResources:
         M.on_message(lambda m: None)  # subscribers
         wait()
         M(id=1, v=1).send()  # publisher cache + retention
-        M(id=1, v=1).register_will()  # presence state
+        M.declare_presence(id=1)  # presence state
         wait()
 
         sid = id(session)
         assert sid in {k[1] for k in _pub_registry}
         assert sid in {k[1] for k in _ret_registry}
         assert sid in _pres_registry
-        assert sid in _observer_registry
         assert sid in _subscribers
 
         z.release(session=session)
@@ -55,7 +53,6 @@ class TestReleaseWalksAllResources:
         assert sid not in {k[1] for k in _pub_registry}
         assert sid not in {k[1] for k in _ret_registry}
         assert sid not in _pres_registry
-        assert sid not in _observer_registry
         assert sid not in _subscribers
 
 
@@ -82,16 +79,15 @@ class TestReleaseDoesNotUseDefault:
             z.release()  # explicit-always: must pass session=
 
 
-class TestReleasePropagatesPeerWill:
-    """Verify the step-5-before-step-6 invariant empirically.
+class TestReleasePropagatesPeerOffline:
+    """Verify the step-4-before-step-5 invariant empirically.
 
-    A peer subscribed to a LIVELINESS class on session B should observe
-    A's registered will SYNTHESISED locally when ``z.release(session=A)``
-    is called — proving that the liveliness DELETE escaped the transport
-    before the session.close().
+    A peer subscribed to a LIVELINESS class on session B should see A's key
+    go offline when ``z.release(session=A)`` is called — the token's
+    liveliness DELETE escaped the transport before the session closed.
     """
 
-    def test_will_propagates_through_release(self, connected_pair):
+    def test_offline_propagates_through_release(self, connected_pair):
         session_a, session_b = connected_pair
 
         @z.zeared
@@ -101,13 +97,14 @@ class TestReleasePropagatesPeerWill:
             name: str = z.Str(required=True)
             state: str = z.Str(required=True)
 
-        Status(name='alice', state='offline').register_will(session=session_a)
+        Status.declare_presence(name='alice', session=session_a)
         wait(0.3)
 
-        received: list[tuple[str, str]] = []
+        received: list[str] = []
         sub = Status.on_message(
-            lambda m: received.append((m.name, m.state)),
+            lambda m: None,
             session=session_b,
+            on_offline=lambda meta: received.append(meta.captures['name']),
         )
         wait(0.3)
 
@@ -116,7 +113,7 @@ class TestReleasePropagatesPeerWill:
         wait(0.5)
         sub.close()
 
-        assert ('alice', 'offline') in received
+        assert received == ['alice']
 
 
 class TestReleaseClosesSubscribers:
@@ -154,12 +151,7 @@ class TestReleaseAll:
     def test_releases_multiple_sessions(self):
         """Open three sessions, register varied state on each, call
         release_all, assert all registries empty."""
-        from zeared.presence import (
-            _observer_registry as _obs_registry,
-        )
-        from zeared.presence import (
-            _registry as _pres_registry,
-        )
+        from zeared.presence import _registry as _pres_registry
         from zeared.publisher import _registry as _pub_registry
         from zeared.retention import _registry as _ret_registry
         from zeared.subscriber import _subscribers
@@ -196,7 +188,6 @@ class TestReleaseAll:
             assert _pub_registry == {}
             assert _ret_registry == {}
             assert _pres_registry == {}
-            assert _obs_registry == {}
 
             # Calling again is a no-op — idempotent.
             z.release_all()

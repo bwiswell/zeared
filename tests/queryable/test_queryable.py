@@ -7,6 +7,7 @@ retention's queryable answers a same-session retained-fetch.
 
 from __future__ import annotations
 
+import logging
 import time
 
 import pytest
@@ -18,36 +19,36 @@ import zeared as z
 class TestRoundTrip:
     def test_concrete_query_returns_reply(self, session):
         @z.zeared
-        class TagState(z.Message):
-            TOPIC = 'q/tag/{epc}'
-            epc: str = z.Str(required=True)
+        class Position(z.Message):
+            TOPIC = 'q/tag/{robot}'
+            robot: str = z.Str(required=True)
             x: float = z.Float(required=True)
 
         z.session = session
-        qbl = TagState.on_query(
-            lambda ctx: TagState(epc=ctx.captures['epc'], x=1.5),
+        qbl = Position.on_query(
+            lambda ctx: Position(robot=ctx.captures['robot'], x=1.5),
         )
         wait()
-        res = TagState.query(epc='E280A', timeout=2.0)
+        res = Position.query(robot='r-1', timeout=2.0)
         qbl.close()
 
         assert len(res) == 1
-        assert res[0].epc == 'E280A'
+        assert res[0].robot == 'r-1'
         assert res[0].x == 1.5
 
     def test_query_one_returns_first(self, session):
         @z.zeared
-        class TagState(z.Message):
-            TOPIC = 'q/one/{epc}'
-            epc: str = z.Str(required=True)
+        class Position(z.Message):
+            TOPIC = 'q/one/{robot}'
+            robot: str = z.Str(required=True)
             x: float = z.Float(required=True)
 
         z.session = session
-        with TagState.on_query(lambda ctx: TagState(epc=ctx.captures['epc'], x=2.0)):
+        with Position.on_query(lambda ctx: Position(robot=ctx.captures['robot'], x=2.0)):
             wait()
-            one = TagState.query_one(epc='AAA', timeout=2.0)
+            one = Position.query_one(robot='r-2', timeout=2.0)
         assert one is not None
-        assert one.epc == 'AAA'
+        assert one.robot == 'r-2'
         assert one.x == 2.0
 
     def test_query_one_none_when_no_answer(self, session):
@@ -62,25 +63,25 @@ class TestRoundTrip:
 
     def test_wildcard_query_fans_out(self, session):
         @z.zeared
-        class TagState(z.Message):
-            TOPIC = 'q/fan/{epc}'
-            epc: str = z.Str(required=True)
+        class Position(z.Message):
+            TOPIC = 'q/fan/{robot}'
+            robot: str = z.Str(required=True)
             x: float = z.Float(required=True)
 
         db = {'A': 1.0, 'B': 2.0, 'C': 3.0}
 
         def handler(ctx):
-            epc = ctx.captures.get('epc')
-            if epc in db:
-                return TagState(epc=epc, x=db[epc])
+            robot = ctx.captures.get('robot')
+            if robot in db:
+                return Position(robot=robot, x=db[robot])
             # wildcard '*' → return all
-            return [TagState(epc=k, x=v) for k, v in db.items()]
+            return [Position(robot=k, x=v) for k, v in db.items()]
 
         z.session = session
-        with TagState.on_query(handler):
+        with Position.on_query(handler):
             wait()
-            res = TagState.query(timeout=2.0)
-        got = sorted((m.epc, m.x) for m in res)
+            res = Position.query(timeout=2.0)
+        got = sorted((m.robot, m.x) for m in res)
         assert got == [('A', 1.0), ('B', 2.0), ('C', 3.0)]
 
     def test_handler_returning_none_replies_nothing(self, session):
@@ -182,6 +183,38 @@ class TestGeneratorHandler:
         # ...and the getter is told the stream was truncated, rather than
         # believing [0, 1] was a complete answer.
         assert any(isinstance(e, z.QueryError) and 'boom mid-stream' in str(e) for e in got), got
+
+    def test_a_raising_on_error_still_sends_the_error_reply(self, session, caplog):
+        """Regression: the serving ``on_error`` was called unguarded, so one that raised
+        escaped into Zenoh's callback and skipped the ``reply_err``: the getter took the
+        cut-off stream for the whole answer."""
+
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/badonerror/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        def handler(ctx):
+            yield Row(id=ctx.captures['id'], v=0)
+            msg = 'boom mid-stream'
+            raise RuntimeError(msg)
+
+        def on_error(exc, raw):
+            msg = 'on_error broke too'
+            raise ValueError(msg)
+
+        got: list[Exception] = []
+        z.session = session
+        with caplog.at_level(logging.ERROR, logger='zeared.queryable'), Row.on_query(handler, on_error=on_error):
+            wait()
+            res = Row.query(id='k', timeout=1.0, on_error=lambda e, raw: got.append(e))
+
+        assert [m.v for m in res] == [0]
+        assert any(isinstance(e, z.QueryError) and 'boom mid-stream' in str(e) for e in got), got
+        logged = [r for r in caplog.records if 'on_error callback itself raised' in r.getMessage()]
+        assert logged
+        assert 'boom mid-stream' in logged[0].getMessage()
 
 
 class TestParamsAndRequest:

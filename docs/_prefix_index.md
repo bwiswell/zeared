@@ -1,15 +1,14 @@
 # `_prefix_index.py`
 
-Internal trie-based index of path-segmented topics. Used by
-[`retention`](retention.md) and [`presence`](presence/presence.md) queryable
-handlers to avoid the O(N) iterate-and-intersect loop on every incoming
-query.
+Internal trie-based index of path-segmented topics. Used by the
+[`retention`](retention.md) queryable handler to avoid the O(N)
+iterate-and-intersect loop on every incoming query.
 
 ## Why it exists
 
-Cached concrete topics (retention) and stashed will keys (presence) are
-both indexed by full key — and in both cases, every incoming query has
-to find which cached entries intersect the query's key expression.
+Cached concrete topics (retention) are indexed by full key, and every
+incoming query has to find which cached entries intersect the query's key
+expression. (Presence's stashed will keys used it too, until 0.4.0.)
 Pre-0.0.10 this was a linear scan with `query_ke.intersects(...)` per
 entry, fine at small N but quadratic when both the cache and the query
 rate grow.
@@ -36,18 +35,26 @@ segments, trailing `**` matches one or more.
 
 ## Wildcard semantics
 
-These match the regex-equivalent reference implementation in
-`tests/test_prefix_index.py::_linear_match`:
+What `matching` returns, as an equivalent regex:
 
 | Query | Equivalent regex |
 |-------|------------------|
 | `a/b/c`     | `^a/b/c$`         |
 | `a/*/c`     | `^a/[^/]+/c$`     |
 | `a/**`      | `^a/.+$` (one or more trailing) |
-| `a/**/c`    | `^a/.*?/c$` (zero or more inside) |
+| `a/**/c`    | `^a(/.+)?/c$` (zero or more inside: `a/c`, `a/b/c`, `a/b/x/c`) |
 
-Output is identical to the prior linear scan; pinned by parity tests
-across a randomised topic-and-query corpus.
+For concrete, `*` and trailing-`**` queries the output is identical to
+the regex reference `tests/test__prefix_index.py::_linear_match`, pinned
+by parity tests across a randomised topic-and-query corpus. The corpus
+never puts `**` inside a query (zeared's own selectors only end in one),
+and the reference's `.*?` there wouldn't match `a/c`;
+`test_starstar_inside_pattern` pins the trie's zero-or-more behaviour
+instead.
+
+A trailing `**` here needs at least one segment, where Zenoh's own `**`
+also matches none (`a/**` intersects `a`), so a query `a/**` doesn't
+return a cached topic that is exactly `a`.
 
 ## Implementation notes
 

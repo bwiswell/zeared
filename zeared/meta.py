@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import enum
 import logging
 import re
@@ -20,14 +20,21 @@ _log = logging.getLogger('zeared.meta')
 class Origin(enum.StrEnum):
     """Provenance of a dispatched sample — how it reached this subscriber.
 
-    Determined entirely by the local delivery path (never read from the
-    wire): the live ``zenoh.Subscriber`` callback, a retained-fetch
-    ``session.get`` reply, or the presence observer's will synthesis.
+    Determined by the local delivery path: the live ``zenoh.Subscriber``
+    callback, a retained-fetch ``session.get`` reply (at subscribe time,
+    after a reconnect, or from the re-attach walk), or a presence event
+    (0.4.0). One signal does ride the wire: a publisher's republish after
+    its link comes back marks its attachment ``replay``, and the subscriber
+    delivers that sample as ``REPLAY`` (0.4.0).
+
+    On the presence feed (``on_online`` / ``on_offline``), online arrives as
+    ``REPLAY`` for a key already online when the subscriber (re)started and
+    ``LIVE`` afterwards, and offline always arrives as ``WILL``.
     """
 
     LIVE = 'live'  # delivered by the live zenoh subscriber
-    REPLAY = 'replay'  # from a retention cache (subscribe-time or post-reconnect)
-    WILL = 'will'  # synthesised by the presence observer
+    REPLAY = 'replay'  # a retained value delivered again (fetch or republish), or a key already online
+    WILL = 'will'  # a presence key going offline (on_offline)
 
 
 @s.seared
@@ -48,7 +55,7 @@ class ZenohMeta(s.Seared):
 
     ``issued_at`` is parsed from ``sample.timestamp`` (Zenoh HLC) when
     timestamping is enabled. ``None`` when no timestamp on the sample
-    (synthesised wills, raw publishes pre-0.0.13, etc.).
+    (raw publishes pre-0.0.13, etc.).
 
     ``origin_zid`` is the Zenoh session id of whoever stamped the sample's
     HLC — normally the publisher. It is **attribution, not
@@ -60,10 +67,12 @@ class ZenohMeta(s.Seared):
     ``None`` when the sample carries no timestamp.
 
     ``origin`` is the sample's provenance — ``Origin.LIVE`` for a real
-    publish through the live subscriber, ``Origin.REPLAY`` for a
-    retained-fetch delivery (subscribe-time or post-reconnect), and
-    ``Origin.WILL`` for a presence-synthesised will. Set by the dispatch
-    layer; ``from_sample`` defaults it to ``LIVE``.
+    publish through the live subscriber, ``Origin.REPLAY`` for a retained
+    value delivered again (a retained-fetch reply at subscribe time, after
+    a reconnect or from the re-attach walk, or a publisher's republish). On
+    the presence feed it marks a key already online (``REPLAY``), coming
+    online (``LIVE``) or going offline (``WILL``). Set by the dispatch layer;
+    ``from_sample`` defaults it to ``LIVE``.
     """
 
     # fmt: off
@@ -71,7 +80,7 @@ class ZenohMeta(s.Seared):
     # wire-contract table. The formatter would collapse it.
     key_expr:    str                      = s.Str(required=True)
     timestamp:   str | None               = s.Str(default=None)       # raw HLC string
-    issued_at:   datetime.datetime | None = s.DateTime(default=None)  # parsed UTC
+    issued_at:   dt.datetime | None = s.DateTime(default=None)  # parsed UTC
     encoding:    str | None               = s.Str(default=None)
     source_info: str | None               = s.Str(default=None)
     origin_zid:  str | None               = s.Str(default=None)      # HLC id half
@@ -116,7 +125,7 @@ def _ntp64_seconds(raw: str) -> float | None:
     return None
 
 
-def _parse_hlc_string(s_repr: str) -> datetime.datetime | None:
+def _parse_hlc_string(s_repr: str) -> dt.datetime | None:
     """Parse the ``<ntp64>/<id>`` string form into a UTC ``datetime``."""
     m = _HLC_RE.match(s_repr)
     if not m:
@@ -125,12 +134,12 @@ def _parse_hlc_string(s_repr: str) -> datetime.datetime | None:
     if epoch is None:
         return None
     try:
-        return datetime.datetime.fromtimestamp(epoch, tz=datetime.UTC)
+        return dt.datetime.fromtimestamp(epoch, tz=dt.UTC)
     except ValueError, OSError, OverflowError:
         return None
 
 
-def _parse_hlc(ts: object) -> datetime.datetime | None:
+def _parse_hlc(ts: object) -> dt.datetime | None:
     """Parse a Zenoh HLC sample timestamp into a UTC ``datetime``.
 
     Prefers ``zenoh.Timestamp.get_time()``, which returns an aware UTC
@@ -188,19 +197,37 @@ def _parse_attachment_schema(attachment: bytes | None) -> str | None:
     return schema if isinstance(schema, str) else None
 
 
-def build_attachment_schema(schema: str | None) -> bytes | None:
-    """Pack a ``schema`` value into the msgpack attachment shape.
+def _replay_attachment(attachment: bytes | None) -> bytes:
+    """``attachment`` with the republish marker added: ``{..., 'replay': True}`` (0.4.0).
 
-    Inverse of :func:`_parse_attachment_schema` — returns the wire bytes a
-    subscriber's schema check reads, or ``None`` when ``schema`` is unset.
-    Used to stamp the attachment on a synthesised will sample so the
-    presence path passes the same schema check as a live publish (the
-    ``Message._schema_attachment_bytes`` classmethod caches the equivalent
-    for the publish path).
+    A retained value a publisher re-puts when its link comes back carries this
+    so a subscriber's dispatch delivers it as ``Origin.REPLAY``, not as a new
+    live publish. Any ``schema`` already in the attachment is kept.
     """
-    if schema is None:
-        return None
-    return codec.pack({'schema': schema}, 'msgpack')
+    data: dict = {}
+    if attachment is not None:
+        try:
+            decoded = codec.unpack(bytes(attachment), 'msgpack')
+        except Exception:  # noqa: BLE001
+            decoded = None
+        if isinstance(decoded, dict):
+            data.update(decoded)
+    data['replay'] = True
+    return codec.pack(data, 'msgpack')
+
+
+def _is_republish(attachment: object) -> bool:
+    """Whether a sample's attachment carries the republish marker. Cheap when it doesn't."""
+    if attachment is None:
+        return False
+    raw = bytes(attachment)  # ty: ignore[invalid-argument-type]
+    if b'replay' not in raw:
+        return False
+    try:
+        decoded = codec.unpack(raw, 'msgpack')
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(decoded, dict) and decoded.get('replay') is True
 
 
 def from_sample(sample: zenoh.Sample) -> ZenohMeta:

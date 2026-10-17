@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.3.13"
+version = "0.4.0"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -9,7 +9,7 @@ requires-python = ">=3.14,<4.0"
 dependencies = [
     "eclipse-zenoh>=1.9.0",
     "msgpack>=1.1.2",
-    "seared>=0.3.3,<0.4.0",
+    "seared>=0.4.0,<0.5.0",
 ]
 
 [project.scripts]
@@ -29,13 +29,20 @@ bench = [
 dev = [
     "deptry",
     "prek",
-    "pytest>=8.0,<9.0",
+    "pytest>=8.0,<10.0",
     "ruff",
+    # seared's own extras, so the tests that load YAML configs and send
+    # pandas / polars frames run here rather than skip. Dev only: zeared
+    # installs no extra of seared's.
+    "seared[yaml,pandas,polars]",
     "ty",
 ]
 
 [tool.uv.sources]
-seared = { git = "https://github.com/bwiswell/seared", tag = "v0.3.4" }
+# uv doesn't check the range above against a git source, so the tag is what
+# pins seared. Moving to a new seared release means moving the tag, then
+# `uv lock --upgrade-package seared`.
+seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.0" }
 
 [build-system]
 requires = ["hatchling"]

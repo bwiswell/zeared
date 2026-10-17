@@ -7,6 +7,7 @@ from __future__ import annotations
 from zeared._managed_session import (
     _DECLARE_HANDLE_WARNING,
     _DEFAULT_PROBE_INTERVAL,
+    CallbackHandle,
     ManagedSession,
     OnReconnectHandle,
     _is_dead,
@@ -19,7 +20,7 @@ from zeared._managed_session import (
 class TestReExports:
     def test_classes(self):
         assert ManagedSession is not None
-        assert OnReconnectHandle is not None
+        assert OnReconnectHandle is CallbackHandle  # the pre-0.4.0 name
 
     def test_helpers_callable(self):
         assert callable(_is_dead)

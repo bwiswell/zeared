@@ -1,5 +1,5 @@
-"""Tests for the relay hub — ``z.hub()`` factory, router-mode config, and the
-``python -m zeared.hubd`` daemon.
+"""Tests for ``zeared/hubd.py``, the ``python -m zeared.hubd`` relay daemon, and the
+``z.hub()`` factory and router-mode config it is built on.
 
 The hub lets nodes that can't reach each other directly (e.g. both NAT-gated,
 outbound-only) communicate: each connects out to the hub, which relays
@@ -188,7 +188,7 @@ class TestHubRelaysZearedMessages:
 
         @z.zeared
         class Reading(z.Message):
-            TOPIC = 'rio/telemetry/reading/{id}'
+            TOPIC = 'fleet/telemetry/reading/{id}'
             RETAINED = True
             id: int = z.Int(required=True)
             v: int = z.Int(required=True)
@@ -206,7 +206,8 @@ class TestHubRelaysZearedMessages:
             sess.close()
         assert got == [(1, 42)]
 
-    def test_liveliness_will_through_hub(self):
+    def test_presence_through_hub(self):
+        """0.4.0: a presence token relayed by the hub; its holder's close reads as offline."""
         ep = _endpoint()
         h = z.hub(listen=[ep])
         pub = z.client(router=ep)
@@ -215,26 +216,28 @@ class TestHubRelaysZearedMessages:
 
         @z.zeared
         class Status(z.Message):
-            TOPIC = 'rio/presence/status/{name}'
+            TOPIC = 'fleet/presence/status/{name}'
             LIVELINESS = True
             name: str = z.Str(required=True)
-            state: str = z.Str(required=True)
+            state: str = z.Str(default='up')
 
-        Status(name='alice', state='offline').register_will(session=pub)
+        Status.declare_presence(name='alice', session=pub)
         wait(0.3)
 
-        received: list[tuple[str, str]] = []
+        events: list[tuple[str, str, z.Origin]] = []
         s = Status.on_message(
-            lambda m: received.append((m.name, m.state)),
+            lambda m: None,
             session=sub_sess,
+            on_online=lambda meta: events.append(('online', meta.captures['name'], meta.origin)),
+            on_offline=lambda meta: events.append(('offline', meta.captures['name'], meta.origin)),
         )
         wait(0.3)
-        pub.close()  # will fires via hub-relayed liveliness DELETE
+        pub.close()  # its token goes; the hub relays the liveliness DELETE
         wait(0.5)
         s.close()
         for sess in (sub_sess, h):
             sess.close()
-        assert ('alice', 'offline') in received
+        assert events == [('online', 'alice', z.Origin.REPLAY), ('offline', 'alice', z.Origin.WILL)]
 
 
 class TestHubDaemon:

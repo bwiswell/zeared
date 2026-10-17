@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import logging
 import time
 
 import pytest
@@ -306,6 +306,55 @@ class TestApeerAclient:
 
         asyncio.run(main())
 
+    @staticmethod
+    def _recording(monkeypatch, name: str) -> dict:
+        """Swap ``z.<name>`` for a recorder that opens a plain peer, whatever it was asked."""
+        seen: dict = {}
+        real_peer = z.peer
+
+        def fake(*args, **kwargs):
+            seen.update(kwargs, args=args)
+            return real_peer()
+
+        monkeypatch.setattr(z, name, fake)
+        return seen
+
+    def test_apeer_layers_explicit_kwargs_over_config(self, monkeypatch):
+        """With ``config=``, ``apeer`` used to drop ``connect``, ``listen``, ``zenoh_config`` and the retry knobs."""
+        import zenoh
+
+        seen = self._recording(monkeypatch, 'peer')
+        cfg = z.SessionConfig(mode=z.Mode.PEER)
+        zc = zenoh.Config()
+
+        async def main():
+            async with z.apeer(config=cfg, connect=['tcp/127.0.0.1:1'], zenoh_config=zc, retry=True, max_attempts=3):
+                pass
+
+        asyncio.run(main())
+        assert seen['config'] is cfg
+        assert seen['connect'] == ['tcp/127.0.0.1:1']
+        assert seen['zenoh_config'] is zc
+        assert (seen['retry'], seen['max_attempts']) == (True, 3)
+        assert 'initial_backoff' not in seen  # not given: the config's applies
+
+    def test_aclient_layers_explicit_kwargs_over_config(self, monkeypatch):
+        import zenoh
+
+        seen = self._recording(monkeypatch, 'client')
+        cfg = z.SessionConfig(mode=z.Mode.CLIENT, router='tcp/127.0.0.1:1')
+        zc = zenoh.Config()
+
+        async def main():
+            async with z.aclient(config=cfg, zenoh_config=zc, retry=True, max_backoff=1.0):
+                pass
+
+        asyncio.run(main())
+        assert seen['config'] is cfg
+        assert seen['zenoh_config'] is zc
+        assert (seen['retry'], seen['max_backoff']) == (True, 1.0)
+        assert 'max_attempts' not in seen
+
     def test_aopen_async_with(self):
         async def main():
             cfg = z.SessionConfig(mode=z.Mode.PEER)
@@ -523,17 +572,17 @@ class TestAlistenMeta:
 
 
 class TestBoundedAlisten:
-    def test_bounded_alisten_drops_with_queuefull_in_a_loop_callback(self, session):
-        """Pin (0.3.10): ``alisten(maxsize=N)`` drops what arrives while its queue is full.
+    def test_bounded_alisten_drops_the_oldest_and_counts(self, session, caplog):
+        """``alisten(maxsize=N)`` drops the oldest queued message when full (0.4.0).
 
-        Each drop is a ``QueueFull`` raised inside a loop callback, which asyncio reports
-        through the loop's exception handler (0.3.8 documented this). Changes with plan 11
-        B.4 in 0.4.0: drops are counted, and nothing is raised.
+        Flipped from 0.3.10's characterisation, where each drop was a ``QueueFull`` raised
+        inside a loop callback: now the drop is counted on ``stream.dropped``, logged once,
+        and nothing reaches the loop's exception handler.
 
         Deterministic by construction: the five sends happen on the loop thread, which then
-        blocks, so all five deliveries queue onto the loop before it runs again. The first
-        fills the queue and wakes the waiting consumer; that wake-up is queued behind the
-        other four, which each find the queue full.
+        blocks, so all five deliveries queue onto the loop before it runs again. Each one
+        after the first finds the queue full and evicts the one before it, so the waiting
+        consumer gets the newest.
         """
 
         @z.zeared
@@ -545,24 +594,52 @@ class TestBoundedAlisten:
             loop = asyncio.get_running_loop()
             errors: list = []
             loop.set_exception_handler(lambda _loop, ctx: errors.append(ctx.get('exception')))
-            agen = Tick.alisten(session=session, maxsize=1)
-            first = asyncio.ensure_future(anext(agen))
+            stream = Tick.alisten(session=session, maxsize=1)
+            first = asyncio.ensure_future(anext(stream))
             await asyncio.sleep(0.2)  # the subscription is declared, and waiting
             for i in range(5):
                 Tick(n=i).send(session=session)
             time.sleep(0.3)  # noqa: ASYNC251 — deliberately block the loop: all five deliveries queue behind it
             await asyncio.sleep(0.1)
             got = [(await first).n]
-            more = asyncio.ensure_future(anext(agen))
-            await asyncio.sleep(0.2)
-            nothing_else = not more.done()
-            more.cancel()
-            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
-                await more
-            return got, errors, nothing_else
+            dropped = stream.dropped
+            await stream.aclose()
+            return got, dropped, errors
 
-        got, errors, nothing_else = asyncio.run(main())
-        assert got == [0]
-        assert nothing_else
-        assert len(errors) == 4
-        assert all(isinstance(e, asyncio.QueueFull) for e in errors)
+        with caplog.at_level(logging.WARNING, logger='zeared.stream'):
+            got, dropped, errors = asyncio.run(main())
+        assert got == [4]
+        assert dropped == 4
+        assert errors == []
+        assert sum('stream full' in r.getMessage() for r in caplog.records) == 1
+
+    def test_default_bound_is_1024_and_zero_is_unbounded(self, session):
+        @z.zeared
+        class Tick(z.Message):
+            TOPIC = 'aio/bound-default'
+            n: int = z.Int(required=True)
+
+        async def main():
+            default = Tick.alisten(session=session)
+            unbounded = z.alisten(Tick, session=session, maxsize=0)
+            out = (isinstance(default, z.Stream), default.maxsize, unbounded.maxsize)
+            await default.aclose()
+            await unbounded.aclose()
+            return out
+
+        assert asyncio.run(main()) == (True, 1024, 0)
+
+
+class TestAopenManaged:
+    def test_aopen_yields_a_managed_session_and_releases_it(self):
+        """0.4.0: ``SessionConfig.auto_reconnect`` reaches ``aopen``, as it does ``open``."""
+        cfg = z.SessionConfig(mode=z.Mode.PEER, auto_reconnect=True, probe_interval=0)
+
+        async def main():
+            async with z.aopen(cfg) as sess:
+                inside = isinstance(sess, z.ManagedSession)
+            return inside, sess.raw().is_closed()
+
+        inside, closed = asyncio.run(main())
+        assert inside
+        assert closed  # released on exit

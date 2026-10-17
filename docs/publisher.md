@@ -35,23 +35,31 @@ class itself beyond `size` (for testing).
 4. Otherwise → `session.declare_publisher(...)`, cache, then `pub.put(raw)`.
 
 Any send failure (most commonly: the session was closed out from under us)
-drops the entire cache for this pair and raises with a clear message. On a
-`ManagedSession` the failure is first reported to the wrapper via
-`_note_failure`, so a dead session gets detected even on the cached path
-(a `zenoh.Publisher` bypasses the wrapper, so unlike the `PUBLISHER =
-False` fallback it has to report the failure itself); if that CASes the
-session into `RECONNECTING` / `DEAD`, the raise is the more specific
-`SessionDeadError`. Against a raw `zenoh.Session` — nothing to notify, no
-state machine to consult — it stays a plain `ZearedError`. Both extend
-`ZearedError`, so generic handlers are unaffected.
+invalidates the cache for this pair, undeclaring every handle while the
+cache and its `_emitted` history stay registered, and raises with a clear
+message. On a `ManagedSession` the failure is first reported to the
+wrapper via `_note_failure`, so a dead session gets detected on every path:
+a cached `zenoh.Publisher`, and the declare of a new topic's publisher,
+bypass the wrapper and report it themselves, where the `session.put`
+fallback goes through it. If that CASes the session into `RECONNECTING` /
+`DEAD`, the raise is the more specific `SessionDeadError`. Against a raw
+`zenoh.Session` (nothing to notify, no state machine to consult) it stays
+a plain `ZearedError`. Both extend `ZearedError`, so generic handlers are
+unaffected. A tombstone's failed `session.delete`, direct or batched,
+raises the same way: `send_error(session, msg, exc)` picks the class for
+every path.
+
+Before 0.4.0 a failure dropped the cache from the registry, truncating
+`published_topics()`, and a failed declare raised a plain `ZearedError`
+without reporting anything.
 
 ## `invalidate()` vs `drop()`
 
 Both undeclare every cached `zenoh.Publisher`; only `drop()` also removes
 the cache from `_registry`.
 
-`invalidate()` is the reconnect counterpart, called by
-`_reconnect/_restore.py::_restore_publishers` after the raw swap. The
+`invalidate()` is what a failed send calls, and the reconnect counterpart,
+called by `_reconnect/_restore.py::_restore_publishers` after the raw swap. The
 handles are bound to the dead raw and must go, but the cache object itself
 carries `_emitted` — process-lifetime state whose contract is literally
 "emitted during this process lifetime" — so it stays registered and the
@@ -63,8 +71,9 @@ truncate `published_topics()`.
 
 Returns (creating if necessary) the cache for the pair. Keyed on
 `(cls, id(session))` — weakrefs aren't supported on `zenoh.Session`, so
-stale entries only get cleaned up via explicit calls to
-`clear_publisher_cache()` or through send-time failure detection.
+entries are removed only by `clear_publisher_cache()` or `z.release`. Each
+cache holds its session, so an `id` can't be reused while its entry
+exists.
 
 ## `clear_publisher_cache(*, session=None) -> None`
 

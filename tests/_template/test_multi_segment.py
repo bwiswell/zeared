@@ -330,8 +330,9 @@ class TestRetentionRoundTrip:
         assert ('svc', '2026/04/24/info', 'boot') in received
 
 
-class TestPresenceWillRoundTrip:
-    def test_will_with_multi_segment_topic(self, connected_pair):
+class TestPresenceRoundTrip:
+    def test_presence_with_multi_segment_topic(self, connected_pair):
+        """0.4.0: a token at a deep concrete key; offline carries the tail capture whole."""
         session_a, session_b = connected_pair
 
         @z.zeared
@@ -340,29 +341,22 @@ class TestPresenceWillRoundTrip:
             LIVELINESS = True
             service: str = z.Str(required=True)
             path: str = z.Str(required=True)
-            state: str = z.Str(required=True)
+            state: str = z.Str(default='up')
 
-        # Producer A registers a will at a deep concrete topic.
-        Heartbeat(
-            service='svc',
-            path='region/eu/host1',
-            state='offline',
-        ).register_will(session=session_a)
+        Heartbeat(service='svc', path='region/eu/host1').declare_presence(session=session_a)
         wait(0.3)
 
-        received: list[tuple[str, str, str]] = []
+        offline: list[dict] = []
         sub = Heartbeat.on_message(
-            lambda m: received.append((m.service, m.path, m.state)),
-            session=session_b,
+            lambda m: None, session=session_b, on_offline=lambda meta: offline.append(meta.captures)
         )
         wait(0.3)
 
-        # Producer dies → subscriber synthesises will from the stashed envelope.
-        session_a.close()
+        session_a.close()  # the producer dies → its token goes
         wait(0.5)
         sub.close()
 
-        assert ('svc', 'region/eu/host1', 'offline') in received
+        assert offline == [{'service': 'svc', 'path': 'region/eu/host1'}]
 
 
 class TestBatchRoundTrip:

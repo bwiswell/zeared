@@ -76,15 +76,18 @@ class _MessageSubscribeMixin:
         dedupe: bool | None = None,
         on_remove: Callable[[ZenohMeta], None] | None = None,
         retained_fetch: bool = True,
+        on_online: Callable[[ZenohMeta], None] | None = None,
+        on_offline: Callable[[ZenohMeta], None] | None = None,
     ) -> Subscriber[_M]:
         """Subscribe to this message's topic(s) — all declared templates.
 
         ``cb`` may be ``cb(msg)`` or ``cb(msg, meta)``; arity is inspected once
         at subscribe time. ``meta`` is a ``ZenohMeta`` seared dataclass.
         ``meta.origin`` carries the sample's provenance — ``Origin.LIVE``
-        for a real publish, ``Origin.REPLAY`` for a retained-fetch delivery
-        (subscribe-time or post-reconnect), ``Origin.WILL`` for a
-        presence-synthesised will.
+        for a real publish, ``Origin.REPLAY`` for a retained value delivered
+        again: a retained-fetch reply (at subscribe time, after a reconnect,
+        or from the re-attach walk) or a publisher's republish after its link
+        came back (0.4.0).
 
         ``retained_fetch`` (default ``True``) controls the subscribe-time
         retained fetch on ``RETAINED`` classes. Pass ``False`` for a
@@ -104,6 +107,17 @@ class _MessageSubscribeMixin:
         pair it with periodic :meth:`fetch_retained` for a durable set,
         since a subscriber offline during the DELETE never sees it.
         ``async def`` on_remove is supported (scheduled like an async ``cb``).
+
+        ``on_online`` / ``on_offline`` (optional, ``LIVELINESS = True``
+        classes only; ``TopicError`` otherwise) are the presence feed
+        (0.4.0): a publisher's ``declare_presence`` token at a concrete key
+        appearing and going away. Each receives an identity-only
+        ``ZenohMeta`` — ``captures`` hold the key's template slots; a token
+        carries no payload. Online arrives with ``Origin.REPLAY`` for the
+        keys already online at subscribe time (and again after a
+        reconnect), ``Origin.LIVE`` afterwards; offline with
+        ``Origin.WILL``. Neither reaches ``cb``, and ``on_remove`` stays
+        the tombstone feed. ``async def`` callbacks are supported.
 
         ``expected_interval`` (seconds, optional) opts into a per-subscription
         watchdog. ``on_quiet`` fires the first time no message arrives within
@@ -141,6 +155,8 @@ class _MessageSubscribeMixin:
             dedupe=dedupe,
             on_remove=on_remove,
             retained_fetch=retained_fetch,
+            on_online=on_online,
+            on_offline=on_offline,
         )
 
     @classmethod
@@ -150,7 +166,7 @@ class _MessageSubscribeMixin:
         ``on_remove`` (and ``meta.captures`` generally) hands back template
         slots as raw strings. This runs each slot that maps to a declared
         seared field through that field's ``deserialize`` — so a
-        ``{reader_id}`` slot bound to ``z.Int`` comes back as ``int`` — and
+        ``{unit}`` slot bound to ``z.Int`` comes back as ``int`` — and
         passes capture-only slots (no matching field) through unchanged.
         Handy for keying removal-reconcile on typed identity.
 

@@ -30,15 +30,25 @@ alone as a whole segment.
 
 ### Publishability
 
-A template is publishable iff it contains **no anonymous wildcards**.
-Both kinds of named slot are publishable; only `*` and `**` (anonymous)
-mark a template subscribe-only.
+A template is publishable unless it contains an anonymous `**` segment
+(`publishable = not has_anon_multi`). Both kinds of named slot are
+publishable.
+
+An anonymous `*` segment doesn't make a template subscribe-only: the
+parser treats it as literal text. `send()` puts on the key as written,
+`*` included (a wildcard key expression). On receive, the match regex
+escapes the `*`, so only that literal key decodes: the Zenoh subscriber
+on `robot/*/status` does receive a concrete `robot/r1/status`, but the
+key matches no template and the sample fails decode (`DecodeError` via
+`on_error`). To accept any segment, use a `{name}` slot (capture-only
+when it isn't a declared field).
 
 | Template form                          | Subscribe | Publish |
 |----------------------------------------|-----------|---------|
 | `peer/{name}/status` (named single)    | ✓         | ✓       |
 | `peer/{cluster}/{host}/status`         | ✓         | ✓       |
 | `log/{service}/{tail**}` (named multi) | ✓         | ✓       |
+| `robot/*/status` (anonymous single)    | the literal `robot/*/status` key only | ✓ (on `robot/*/status`) |
 | `peer/**` (anonymous trailing multi)   | ✓         | ✗       |
 | `**` (lone anonymous multi)            | ✓         | ✗       |
 
@@ -58,10 +68,11 @@ Validates and constructs. Raises `TopicError` on:
 
 ### `__zeared/**` namespace reservation
 
-Templates whose first literal segment is `__zeared` collide with
-zeared's internal routing (liveliness tokens at `__zeared/alive/<zid>`,
-will envelopes at `__zeared/will/<zid>/<slug>`, the presence observer's
-subscriptions). Parse-time `TopicError` rather than silent stomping.
+The `__zeared` prefix is reserved for zeared's internal keys. Presence
+used it until 0.4.0 (`__zeared/alive/<zid>`, `__zeared/will/<zid>/<slug>`);
+its tokens sit on contract keys now, and the prefix stays reserved so a
+future internal key can't stomp on a user's. Parse-time `TopicError`
+rather than silent stomping.
 
 Exemption: the unmodified anonymous catch-all forms `**` (universal)
 and `__zeared/**` (diagnostic — "subscribe to all internal traffic
@@ -85,7 +96,7 @@ on internal routing.
 ## `Template.render(values: dict) -> str`
 
 Renders the concrete topic for publish. Raises `TopicError` if:
-- The template isn't publishable (contains anonymous wildcards).
+- The template isn't publishable (contains an anonymous `**`).
 - A `{name}` or `{name**}` slot is missing from `values`.
 - A `{name**}` slot's value is the empty string (`''`) — the wire
   semantics of `**` is one-or-more segments, so an empty tail would
@@ -94,6 +105,29 @@ Renders the concrete topic for publish. Raises `TopicError` if:
 For a named multi-segment slot, the supplied value is substituted
 verbatim — slashes pass through unescaped, so
 `Log(service='svc', tail='a/b/c').send()` renders `log/svc/a/b/c`.
+
+## `Template.render_selector(partial: dict) -> str`
+
+Renders a query selector key. The query getters (`Cls.query`,
+`iter_query`, `query_one`) call it on the canonical template, after
+running the supplied slot values through the canonical render.
+
+- A supplied slot is substituted as `str(value)`.
+- A slot that is absent or `None` widens: a `{name}` slot to `*`, a
+  trailing `{name**}` slot to `**`.
+- Keys that aren't slots of the template are ignored.
+- Values pass through verbatim, with no `/` check, so wildcards survive:
+  a whole `*` segment, or Zenoh's `$*` inside a segment (`'r-$*'`).
+- A subscribe-only template (anonymous `**`) renders as its plain
+  `wildcard`, whatever is passed.
+
+```python
+t = Template.parse('log/{service}/{tail**}')
+t.render_selector({})                                    # 'log/*/**'
+t.render_selector({'service': 'api'})                    # 'log/api/**'
+t.render_selector({'service': 'api-$*', 'tail': 'a/b'})  # 'log/api-$*/a/b'
+Template.parse('peer/**').render_selector({'x': 1})      # 'peer/**'
+```
 
 ## `Template.match(key_expr: str) -> Optional[dict[str, str]]`
 
@@ -105,13 +139,24 @@ captures `(?P<name>.+)` (slashes included).
 
 ## Field-binding validation
 
-When a template carries `{name**}`, the corresponding declared seared
-field (if any) must be `z.Str(many=False, keyed=False)`. Other field
-types (`Int`, `Float`, `Bool`, `Enum`, `T`, `Union`, `NDArray`, `Bytes`,
-`Date*`, `UUID`, `many=True` / `keyed=True` collections) make no sense
-for a path-tail string and are rejected at the first `_templates()`
-call (`Message._validate_multi_segment_field_bindings`). Capture-only
-slots (no declared field) land on `meta.captures[name]: str` as usual.
+A slot's declared seared field must render as its key segment(s). Both
+checks run at the first `_templates()` call
+(`Message._validate_slot_field_bindings`), so a bad binding fails before
+any key is built:
+
+- **`{name**}`:** the field (if any) must be
+  `z.Str(many=False, keyed=False)`. Other field types (`Int`, `Float`,
+  `Bool`, `Enum`, `T`, `Union`, `NDArray`, `Bytes`, `Date*`, `UUID`,
+  `many=True` / `keyed=True` collections) make no sense for a path-tail
+  string.
+- **`{name}`** (0.4.0): the field's string form must never contain `/`,
+  or the rendered key splits and matches no template. `Path` can, and so
+  can `Bytes` in its default base64 form, so both raise `TopicError`;
+  `Bytes(encoding='hex')` can't. A value that still renders with a `/`
+  (a `Str` slot holding `'a/b'`) raises when a key is built to send on.
+
+Capture-only slots (no declared field) land on `meta.captures[name]: str`
+as usual.
 
 ## `Templates`
 
@@ -131,7 +176,7 @@ slot-set requirement.
 
 Restrictive publish override. Raises `TopicError` if `override` isn't
 one of the declared raw templates, or if the resolved template isn't
-publishable (contains anonymous wildcards).
+publishable (contains an anonymous `**`).
 
 ### `Templates.match(key_expr: str) -> Optional[tuple[Template, dict]]`
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 
-from zeared._managed_session._on_reconnect_handle import OnReconnectHandle
+from zeared._managed_session._callback_handle import CallbackHandle
 from zeared._managed_session._on_reconnect_mixin import _OnReconnectMixin
 
 
@@ -31,13 +31,15 @@ class _FakeManaged(_OnReconnectMixin):
     def __init__(self):
         self._lock = threading.RLock()
         self._on_reconnect_callbacks = []
+        self._on_link_lost_callbacks = []
+        self._on_link_restored_callbacks = []
 
 
 class TestRegistrationAndFire:
     def test_register_returns_handle(self):
         m = _FakeManaged()
         h = m.on_reconnect(lambda s: None)
-        assert isinstance(h, OnReconnectHandle)
+        assert isinstance(h, CallbackHandle)
         assert len(m._on_reconnect_callbacks) == 1
 
     def test_fire_calls_each_sync_callback(self):
@@ -69,3 +71,40 @@ class TestRegistrationAndFire:
         h.cancel()
         m._fire_reconnect_callbacks()
         assert seen == []
+
+
+class TestLinkSignals:
+    """0.4.0: ``on_link_lost`` / ``on_link_restored`` share the driver, each with its own registry."""
+
+    def test_each_kind_fires_only_its_own(self):
+        m = _FakeManaged()
+        seen: list = []
+        m.on_reconnect(lambda s: seen.append('reconnect'))
+        m.on_link_lost(lambda s: seen.append('lost'))
+        m.on_link_restored(lambda s: seen.append('restored'))
+        m._fire('link_lost')
+        m._fire('link_restored')
+        m._fire_reconnect_callbacks()
+        assert seen == ['lost', 'restored', 'reconnect']
+
+    def test_handles_cancel_their_own_kind(self):
+        m = _FakeManaged()
+        seen: list = []
+        handle = m.on_link_restored(lambda s: seen.append('restored'))
+        m.on_link_lost(lambda s: seen.append('lost'))
+        assert isinstance(handle, CallbackHandle)
+        handle.cancel()
+        m._fire('link_restored')
+        m._fire('link_lost')
+        assert seen == ['lost']
+
+    def test_async_callback_needs_a_running_loop(self):
+        import pytest
+
+        m = _FakeManaged()
+
+        async def cb(s):
+            pass
+
+        with pytest.raises(RuntimeError, match='on_link_lost: async callback requires a running event loop'):
+            m.on_link_lost(cb)

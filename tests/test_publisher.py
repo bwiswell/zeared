@@ -368,8 +368,11 @@ class TestClosedSession:
         session.close()
         with pytest.raises(ZearedError):
             M(v=2).send()
-        # Cache entry cleaned up on failure.
-        assert (M, id(session)) not in _registry
+        # The failure undeclares the handles but keeps the cache, and with it
+        # the history behind ``published_topics()``; it used to drop both.
+        cache = _registry[(M, id(session))]
+        assert cache.size == 0
+        assert cache.emitted == {'closed/topic'}
 
 
 class TestInvalidate:
@@ -527,6 +530,38 @@ class TestCachedPublisherFailureDetection:
             old_raw.close()
             with pytest.raises(SessionDeadError):
                 M(v=2).send(session=m)
+        finally:
+            with contextlib.suppress(Exception):
+                m._teardown(call_close=False)
+            with contextlib.suppress(Exception):
+                new_raw.close()
+
+    def test_a_failed_declare_on_a_new_topic_triggers_reconnect(self):
+        """The first send on a topic declares its publisher on the raw session, past
+        the wrapper: a failure there raised a plain ``ZearedError`` and reported
+        nothing, so neither the reconnect nor ``except SessionDeadError`` fired."""
+
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'detect/declare/{n}'
+            n: int = z.Int(required=True)
+
+        old_raw, new_raw = _peer_session(), _peer_session()
+        m = self._managed(old_raw, new_raw)
+        try:
+            start_probe(m)
+            M(n=1).send(session=m)
+            wait(0.2)
+
+            old_raw.close()
+            with pytest.raises(SessionDeadError):
+                M(n=2).send(session=m)  # a new topic: the declare path
+
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline and m.raw() is not new_raw:
+                wait(0.05)
+            assert m.raw() is new_raw
+            assert M.published_topics(session=m) == {'detect/declare/1', 'detect/declare/2'}
         finally:
             with contextlib.suppress(Exception):
                 m._teardown(call_close=False)

@@ -14,7 +14,7 @@ Public surface unchanged: callers continue to write
 from ._subscriber_dispatch import (
     _adapt_async_callback,
     _build_dispatch,
-    _make_presence_dispatcher,
+    _build_presence_handler,
     _pick_encoding,
     _wants_meta,
 )
@@ -35,10 +35,10 @@ __all__ = [
     'Subscriber',
     '_adapt_async_callback',
     '_build_dispatch',
+    '_build_presence_handler',
     '_close_subscribers_for',
     '_deregister_subscriber',
     '_fetch_retained',
-    '_make_presence_dispatcher',
     '_pick_encoding',
     '_register_subscriber',
     '_subscribers',

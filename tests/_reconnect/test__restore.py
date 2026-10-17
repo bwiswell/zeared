@@ -1,6 +1,6 @@
 """Smoke tests for ``zeared/_reconnect/_restore.py`` — the post-reopen
 walks (``_restore_publishers`` / ``_restore_retention`` /
-``_restore_subscribers`` / ``_restore_queryables`` / ``_restore_wills``)
+``_restore_subscribers`` / ``_restore_queryables`` / ``_restore_presence``)
 plus the cancellable ``_open_with_backoff``.
 
 End-to-end reconnect coverage lives in ``test__reconnect.py``. This
@@ -17,11 +17,11 @@ import pytest
 from zeared._reconnect._restore import (
     _open_with_backoff,
     _ReconnectAbortedError,
+    _restore_presence,
     _restore_publishers,
     _restore_queryables,
     _restore_retention,
     _restore_subscribers,
-    _restore_wills,
 )
 
 
@@ -32,7 +32,7 @@ class TestPublicSurface:
         assert callable(_restore_retention)
         assert callable(_restore_subscribers)
         assert callable(_restore_queryables)
-        assert callable(_restore_wills)
+        assert callable(_restore_presence)
 
     def test_aborted_is_exception(self):
         assert issubclass(_ReconnectAbortedError, Exception)

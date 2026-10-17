@@ -13,15 +13,18 @@ same session, same ``z.batch()`` buffer (backed by ``contextvars``).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
+from ._factories import _MISSING
 from .batch import batch as _batch_cm
+from .stream import Stream, _open_channel
 
 if TYPE_CHECKING:
     import types
-    from collections.abc import AsyncIterator, Callable, Iterable
+    from collections.abc import AsyncGenerator, Callable, Iterable
 
     import zenoh
 
@@ -40,10 +43,14 @@ if TYPE_CHECKING:
 # class — rather than flattening it to a bare ``list`` / ``Message | None``
 # and pushing a ``cast`` onto every caller.
 #
-# ``alisten`` is deliberately not in this set: its ``meta=`` flag makes the
-# return ``AsyncIterator[M] | AsyncIterator[tuple[M, ZenohMeta]]``, which
-# needs overloads rather than a type parameter. Deferred to 0.4.0, where
-# that surface is being revisited anyway.
+# ``alisten`` gets overloads instead (0.4.0): its ``meta=`` flag decides the
+# element type, ``Stream[M]`` or ``Stream[tuple[M, ZenohMeta]]``, which a
+# single type parameter can't express.
+
+
+def _given(**kwargs: Any) -> dict[str, Any]:
+    """The keyword arguments the caller actually passed: the rest defer to ``config=``."""
+    return {k: v for k, v in kwargs.items() if v is not _MISSING}
 
 
 class _AsyncSessionContextManager:
@@ -100,43 +107,46 @@ def apeer(  # noqa: PLR0913
     listen: list[str] | None = None,
     config: SessionConfig | None = None,
     zenoh_config: zenoh.Config | None = None,
-    retry: bool = False,
-    initial_backoff: float = 0.1,
-    max_backoff: float = 30.0,
-    max_attempts: int | None = None,
-    auto_reconnect: bool = False,
-    probe_interval: float = 10.0,
+    retry: object = _MISSING,
+    initial_backoff: object = _MISSING,
+    max_backoff: object = _MISSING,
+    max_attempts: object = _MISSING,
+    auto_reconnect: object = _MISSING,
+    probe_interval: object = _MISSING,
     timestamping: bool = True,
-    gc_interval: float = 60.0,
     retention_ttl: float | None = None,
+    resync_jitter: object = _MISSING,
+    resync_concurrency: object = _MISSING,
 ) -> _AsyncSessionContextManager:
     """Async-context-managed peer session.
 
     Returns an async context manager — use as
     ``async with z.apeer(...) as sess: ...``. The ``await z.apeer()``
     form from ≤0.0.14 is removed (pre-0.1.0 break).
+
+    Takes :func:`zeared.peer`'s arguments and hands every one given to it,
+    so explicit kwargs layer over ``config=`` exactly as they do there.
     """
     from . import peer
 
     kwargs: dict = {
+        'connect': connect,
+        'listen': listen,
+        'config': config,
+        'zenoh_config': zenoh_config,
         'timestamping': timestamping,
-        'gc_interval': gc_interval,
-        'auto_reconnect': auto_reconnect,
-        'probe_interval': probe_interval,
         'retention_ttl': retention_ttl,
-    }
-    if config is not None:
-        kwargs['config'] = config
-    else:
-        kwargs.update(
-            connect=connect,
-            listen=listen,
-            zenoh_config=zenoh_config,
+        **_given(
             retry=retry,
             initial_backoff=initial_backoff,
             max_backoff=max_backoff,
             max_attempts=max_attempts,
-        )
+            auto_reconnect=auto_reconnect,
+            probe_interval=probe_interval,
+            resync_jitter=resync_jitter,
+            resync_concurrency=resync_concurrency,
+        ),
+    }
     return _AsyncSessionContextManager(peer, kwargs)
 
 
@@ -145,38 +155,37 @@ def aclient(  # noqa: PLR0913
     *,
     config: SessionConfig | None = None,
     zenoh_config: zenoh.Config | None = None,
-    retry: bool = False,
-    initial_backoff: float = 0.1,
-    max_backoff: float = 30.0,
-    max_attempts: int | None = None,
-    auto_reconnect: bool = False,
-    probe_interval: float = 10.0,
+    retry: object = _MISSING,
+    initial_backoff: object = _MISSING,
+    max_backoff: object = _MISSING,
+    max_attempts: object = _MISSING,
+    auto_reconnect: object = _MISSING,
+    probe_interval: object = _MISSING,
     timestamping: bool = True,
-    gc_interval: float = 60.0,
     retention_ttl: float | None = None,
+    resync_jitter: object = _MISSING,
+    resync_concurrency: object = _MISSING,
 ) -> _AsyncSessionContextManager:
-    """Async-context-managed client session. See :func:`apeer`."""
+    """Async-context-managed client session, taking :func:`zeared.client`'s arguments. See :func:`apeer`."""
     from . import client
 
     kwargs: dict = {
+        'router': router,
+        'config': config,
+        'zenoh_config': zenoh_config,
         'timestamping': timestamping,
-        'gc_interval': gc_interval,
-        'auto_reconnect': auto_reconnect,
-        'probe_interval': probe_interval,
         'retention_ttl': retention_ttl,
-    }
-    if router is not None:
-        kwargs['router'] = router
-    if config is not None:
-        kwargs['config'] = config
-    else:
-        kwargs.update(
-            zenoh_config=zenoh_config,
+        **_given(
             retry=retry,
             initial_backoff=initial_backoff,
             max_backoff=max_backoff,
             max_attempts=max_attempts,
-        )
+            auto_reconnect=auto_reconnect,
+            probe_interval=probe_interval,
+            resync_jitter=resync_jitter,
+            resync_concurrency=resync_concurrency,
+        ),
+    }
     return _AsyncSessionContextManager(client, kwargs)
 
 
@@ -266,48 +275,75 @@ async def afetch_retained[M: Message](
     )
 
 
-async def alisten(
+@overload
+def alisten[M: Message](
+    cls: type[M],
+    *,
+    session: zenoh.Session | None = ...,
+    maxsize: int = ...,
+    meta: Literal[False] = ...,
+) -> Stream[M]: ...
+
+
+@overload
+def alisten[M: Message](
+    cls: type[M],
+    *,
+    session: zenoh.Session | None = ...,
+    maxsize: int = ...,
+    meta: Literal[True],
+) -> Stream[tuple[M, ZenohMeta]]: ...
+
+
+@overload
+def alisten[M: Message](
+    cls: type[M],
+    *,
+    session: zenoh.Session | None = ...,
+    maxsize: int = ...,
+    meta: bool = ...,
+) -> Stream[M] | Stream[tuple[M, ZenohMeta]]: ...
+
+
+def alisten(
     cls: type[Message],
     *,
     session: zenoh.Session | None = None,
-    maxsize: int = 0,
+    maxsize: int = 1024,
     meta: bool = False,
-) -> AsyncIterator:
-    """Async generator yielding decoded messages for ``cls``.
+) -> Stream[Any]:
+    """Subscribe to ``cls`` and return a :class:`~zeared.Stream` of its decoded messages.
 
-    Bridges the sync ``on_message`` callback to an ``asyncio.Queue`` fed via
-    ``loop.call_soon_threadsafe``. Cancellation or a break out of the loop
-    undeclares the underlying subscriber cleanly.
+    ``async for msg in z.alisten(Cls): ...``. The subscription is declared
+    when ``alisten`` is called, so call it from inside a running event loop;
+    what arrives before the first iteration waits in the stream.
 
-    ``maxsize=0`` (default) means an unbounded queue. A positive value bounds
-    the queue but does **not** apply backpressure: delivery is a
-    ``put_nowait`` scheduled from Zenoh's callback thread and never waits,
-    so a message that arrives while the queue is full is dropped. asyncio
-    logs each drop as an "Exception in callback" (``QueueFull``); there is
-    no drop counter.
+    ``maxsize`` bounds the stream (default 1024; ``0`` is unbounded). A full
+    stream drops its *oldest* message to make room, counts the drop on
+    ``stream.dropped`` and logs the first one; nothing is raised (0.4.0).
+    Delivery never applies backpressure: Zenoh's callback thread never waits.
 
     ``meta=True`` yields ``(msg, meta)`` tuples instead of bare messages —
     ``meta`` is the same ``ZenohMeta`` a 2-arg ``on_message`` callback
     receives (captures, schema, ``origin``, ...).
+
+    ``stream.aclose()``, leaving ``async with stream``, or the stream being
+    collected after a ``break`` undeclares the subscriber.
     """
-    queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
-    loop = asyncio.get_running_loop()
+    channel = _open_channel(maxsize, cls.__name__)
+    feed = channel.feed  # the subscriber holds the channel, never the Stream
 
     if meta:
 
         def _cb(msg: Message, m: ZenohMeta) -> None:
-            loop.call_soon_threadsafe(queue.put_nowait, (msg, m))
+            feed((msg, m))
     else:
 
         def _cb(msg: Message) -> None:
-            loop.call_soon_threadsafe(queue.put_nowait, msg)
+            feed(msg)
 
     sub = cls.on_message(_cb, session=session)
-    try:
-        while True:
-            yield await queue.get()
-    finally:
-        sub.close()
+    return Stream(channel, sub.close)
 
 
 async def aquery[M: Message](  # noqa: PLR0913
@@ -339,48 +375,49 @@ async def aquery[M: Message](  # noqa: PLR0913
     )
 
 
-async def aquery_iter[M: Message](  # noqa: PLR0913
+def aquery_iter[M: Message](  # noqa: PLR0913
     cls: type[M],
     *,
     session: zenoh.Session | None = None,
     params: dict | None = None,
     request: Any = None,
     # Mirrors the sync `Cls.iter_query(timeout=...)` public API.
-    timeout: float | None = None,  # noqa: ASYNC109
+    timeout: float | None = None,
     target: Any = None,
     consolidation: Any = None,
     on_error: Callable[[Exception, bytes], None] | None = None,
     **key_fields: Any,
-) -> AsyncIterator[M]:
-    """Async generator yielding decoded replies as they arrive.
+) -> Stream[M]:
+    """Issue a query and return a :class:`~zeared.Stream` of its decoded replies as they arrive.
 
     ``async for row in z.aquery_iter(Cls, id='x'): ...`` — the streaming
     sibling of :func:`aquery`, which collects the whole list before
-    returning.
+    returning. The query starts when ``aquery_iter`` is called, so call it
+    from inside a running event loop.
 
     Zenoh's bindings are sync, so the blocking channel loop runs in a
     worker thread and hands items to the loop via ``call_soon_threadsafe``
     — the same bridge :func:`alisten` uses for subscribers. Unlike a
-    subscriber a query *ends*, so a sentinel closes the queue; an
-    exception raised in the worker is re-raised in the consumer.
+    subscriber a query *ends*, and the stream ends with it; an exception
+    raised in the worker is re-raised in the consumer.
 
-    Breaking out of the loop stops this side promptly — the worker is told
-    to stop and exits at the next reply or the timeout, whichever comes
-    first — but it does **not** stop the serving queryable, which runs to
-    completion. Zenoh's cancellation is client-side only.
+    Closing the stream early (``aclose()``, ``async with``, or a ``break``)
+    stops this side promptly — the worker is told to stop and exits at the
+    next reply or the timeout, whichever comes first — but it does **not**
+    stop the serving queryable, which runs to completion. Zenoh's
+    cancellation is client-side only.
 
-    There is no ``maxsize``: replies are already in flight from the
-    channel, so bounding the queue would relocate buffering rather than
-    apply backpressure. The bound that matters is ``timeout``.
+    The stream is unbounded, so ``stream.dropped`` stays ``0``: replies are
+    already in flight from the channel, so bounding the queue would relocate
+    buffering rather than apply backpressure. The bound that matters is
+    ``timeout``.
     """
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue = asyncio.Queue()
-    done = object()
+    channel = _open_channel(0, cls.__name__)
     stop = threading.Event()
 
     def _pump() -> None:
-        # Runs on a worker thread. Every hand-off goes through the loop,
-        # never touching the queue directly.
+        # Runs on a worker thread; every hand-off goes through the loop.
+        failure: BaseException | None = None
         try:
             for msg in cls.iter_query(
                 session=session,
@@ -394,29 +431,23 @@ async def aquery_iter[M: Message](  # noqa: PLR0913
             ):
                 if stop.is_set():
                     return
-                loop.call_soon_threadsafe(queue.put_nowait, msg)
+                channel.feed(msg)
         except Exception as exc:  # noqa: BLE001
-            # Surface it to the consumer rather than losing it on a
-            # detached thread.
-            loop.call_soon_threadsafe(queue.put_nowait, exc)
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, done)
+            # Surface it to the consumer rather than losing it on a detached thread.
+            failure = exc
+        channel.end(failure)
 
     worker = asyncio.ensure_future(asyncio.to_thread(_pump))
-    try:
-        while True:
-            item = await queue.get()
-            if item is done:
-                return
-            if isinstance(item, Exception):
-                raise item
-            yield item
-    finally:
-        # ``asyncio.to_thread`` can't interrupt a blocked worker, so ask it
-        # to stand down; it notices at the next reply or the timeout.
+
+    def _close() -> None:
+        # ``asyncio.to_thread`` can't interrupt a blocked worker, so ask it to
+        # stand down; it notices at the next reply or the timeout.
         stop.set()
         if not worker.done():
-            worker.cancel()
+            with contextlib.suppress(RuntimeError):  # the loop has closed (interpreter shutdown)
+                worker.cancel()
+
+    return Stream(channel, _close)
 
 
 async def aquery_one[M: Message](cls: type[M], **kwargs: Any) -> M | None:
@@ -455,7 +486,7 @@ async def aon_query(
 
 
 @asynccontextmanager
-async def abatch() -> AsyncIterator[_BatchHandle]:
+async def abatch() -> AsyncGenerator[_BatchHandle]:
     """Async version of :func:`zeared.batch`.
 
     Shares the same contextvar-backed buffer as ``z.batch()``. An

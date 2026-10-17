@@ -10,11 +10,10 @@ One long-running thread per watchdog instance. The thread does
 thread calls `ping()` from the dispatch path to wake the wait.
 
 **Only `Origin.LIVE` samples ping the watchdog** (0.2.9). A retained
-replay can't establish cadence from stale cached data, and a
-synthesised will — the producer *died* — can't reset the quiet timer.
+replay can't establish cadence from stale cached data.
 Consequence: a `startup_grace` subscriber whose only traffic was the
 subscribe-time replay correctly fires `on_quiet` when no live sample
-follows. (Pre-0.3.0, replays and wills pinged like live samples.)
+follows. (Before 0.2.9, replays pinged like live samples.)
 
 ```python
 class _SubscriberWatchdog:
@@ -46,7 +45,12 @@ of subscribing" — daemon liveness checks at startup.
 ## Threading model
 
 - The watchdog thread is a `daemon=True` thread named `zeared-watchdog`.
-- Callbacks (`on_quiet`, `on_active`) fire on the watchdog thread.
+- `on_quiet` fires on the watchdog thread; `on_active` fires on the Zenoh
+  delivery thread, inside the ping of the message that ended the quiet.
+- Each quiet spell fires `on_quiet` once, and the next message ends it,
+  whether or not an `on_active` is set. (Before 0.4.0, without an
+  `on_active` the first quiet spell never ended, and `on_quiet` never
+  fired again.)
 - User code that mutates shared state from these callbacks is responsible
   for its own locking.
 - `cancel()` is idempotent and safe from any thread.
@@ -80,7 +84,7 @@ choice. The async path exists for ergonomics, not throughput.
 ## Cancellation on subscriber close
 
 `Subscriber.close()` cancels its watchdog as the FIRST step (before
-undeclaring Zenoh subs and deregistering from the presence observer).
+undeclaring Zenoh subs and any liveliness subs).
 A pending `on_quiet` that would have fired after close is suppressed.
 
 ## Pinned with tests

@@ -2,7 +2,8 @@
 
 Pattern B subdir. The probe + reconnect-worker thread pair plus the
 post-reopen restoration walks. Never imported by user code; the public
-surface is `auto_reconnect=True` on `peer()` / `client()`.
+surface is `auto_reconnect=True` on `peer()` / `client()` (or
+`SessionConfig.auto_reconnect`).
 
 ## Files
 
@@ -14,10 +15,17 @@ surface is `auto_reconnect=True` on `peer()` / `client()`.
   - `_trigger_reconnect(managed)` — CAS into `RECONNECTING`, signal
     the worker.
   - `_reconnect(managed)` — the actual reopen + restoration pipeline.
+- `_link.py` — router-link detection and the re-attach walk (0.4.0):
+  - `_check_link(managed)` — one probe tick of detection;
+  - `_note_routers(managed)` — the baseline router set;
+  - `_link_lost` / `_link_restored` — the paired signals;
+  - `_republish_retained(managed)` — the session's retention caches re-put
+    their entries;
+  - `_run_link_walk(managed)` — the jittered, capped retained re-fetch.
 - `_restore.py` — post-reopen walks + the cancellable backoff:
   - `_open_with_backoff(open_fn, *, initial, cap, max_attempts, label,
     cancel)` — exponential-backoff retry with a cancel `Event`.
-  - `_ReconnectAborted` — raised by `_open_with_backoff` when the cancel
+  - `_ReconnectAbortedError` — raised by `_open_with_backoff` when the cancel
     fires (used to set `state = DEAD` cleanly during teardown).
   - `_restore_publishers(managed)` — invalidate the cached
     `zenoh.Publisher` handles on every publisher cache bound to this
@@ -28,8 +36,8 @@ surface is `auto_reconnect=True` on `peer()` / `client()`.
     Subscriber against the new raw.
   - `_restore_queryables(managed)` — re-declare each registered user
     Queryable against the new raw.
-  - `_restore_wills(managed)` — re-register every presence will under
-    the new zid (peers see legitimate offline → online).
+  - `_restore_presence(managed)` — re-declare every held presence token
+    on the new raw (peers see the keys go offline, then online).
 
 ## Detection paths
 
@@ -38,34 +46,102 @@ Two paths feed into the same reconnect implementation:
 1. **Probe** (`_probe_loop`) — daemon thread per `ManagedSession`,
    polls `is_closed()` (or `zid()` fallback) every `probe_interval`s.
    Required for subscriber-only daemons that never call `put()`.
+   `probe_interval=0` / `None` skips the thread, and with it link
+   detection (next section).
 2. **Send-failure** (`_trigger_reconnect`) — called from
    `ManagedSession.put` / `.get` / `.delete` exception paths via
    `_note_failure`. Catches the 0–`probe_interval` gap on
    publisher-heavy paths.
 
-Neither path sees a **lost router link**. A client whose hub goes away
-keeps an open session whose `zid()` still answers, and Zenoh re-dials the
-router by itself, so `state` stays `IDLE` and `on_reconnect` never fires
-across a hub restart. Subscribers and queryables survive the outage, but
-nothing replays what a restarted publisher retained or registered while the
-link was down; `Cls.fetch_retained()` recovers retained state.
-`tests/test_hub_restart.py` pins this behaviour (0.3.10). Detecting the
-re-attach, from `info.routers_zid()` or Zenoh's transport events, is 0.4.0
-work.
+Neither path sees a **lost router link**, which a hub restart causes:
+the session stays open and Zenoh re-dials by itself. The probe watches the
+link separately (next section).
 
-Both feed `_reconnect`, which:
+Both go through `_trigger_reconnect`, which CAS-es `state` IDLE →
+RECONNECTING (concurrent triggers collapse to one) and wakes the reconnect
+worker. The worker's `_reconnect`:
 
-1. CAS `state` IDLE → RECONNECTING.
-2. Open a new raw session via `open_fn` with backoff.
-3. Atomically swap the wrapper's raw reference.
-4. Walk the publisher registry and invalidate its cached handles.
-5. Walk the retention registry and redeclare queryables.
-6. Walk the subscriber registry and re-declare each.
-7. Walk the queryable registry and re-declare each.
-8. Replay every registered presence will under the new zid.
-9. Close the old raw session quietly.
+1. `_link_lost`: marks the link lost and fires `on_link_lost` (if it was
+   up).
+2. Opens a new raw session via `open_fn` with backoff.
+3. Atomically swaps the wrapper's raw reference.
+4. Walks the publisher registry and invalidates its cached handles.
+5. Walks the retention registry and redeclares queryables.
+6. Walks the subscriber registry and re-declares each.
+7. Walks the queryable registry and re-declares each.
+8. Re-declares every held presence token on the new raw.
+9. Closes the old raw session quietly.
+10. Fires the `on_reconnect` callbacks, in registration order.
+11. `_note_routers`: takes the new raw's router set as the link baseline.
+12. `_link_restored(walk=False)`: the republish, then `on_link_restored`.
+    No re-attach walk: step 6 already re-ran the retained fetch.
 
 If step 2 exhausts `max_attempts`, set `state = DEAD` and stop the probe.
+
+## Link re-attach (0.4.0)
+
+`_link.py`. Each probe tick, after the dead-session check, `_check_link`
+reads `info.routers_zid()` and compares the set of router zids with the
+last tick's (the probe is its only caller, so `probe_interval=0` / `None`
+means no link detection: no re-attach walk, and the republish and link
+signals run only around a reconnect):
+
+- non-empty → empty: `on_link_lost`;
+- empty → non-empty, while lost: the **republish**, the **re-attach
+  walk**, then `on_link_restored`;
+- a non-empty set replaced by a disjoint one: the router restarted between
+  two ticks (it came back with a new zid), so both at once.
+
+A session that never had a router never transitions, so peers are
+self-gated. A router that keeps a fixed zid and restarts within one
+`probe_interval` is invisible to polling; Zenoh's link events could catch
+it, a 0.4.x candidate once upstream confirms they're a stable API.
+
+**The republish** (`_republish_retained`) runs first: every retention cache
+bound to the session re-puts its live entries with their original
+timestamps and the republish marker, so a subscriber that walked before
+this session came back still gets what this session published while
+detached (`REPLAY`), and one that already has it dedupes the copy. See
+[`retention.md`](../retention.md#republish-on-link-restore-040). It runs on
+a reconnect's restore too.
+
+**The walk** (`_run_link_walk`) re-runs the retained fetch for every
+subscriber on the session that replays (`RETAINED`, `retained_fetch`,
+`auto_reconnect`): `Subscriber._replay_retained`, no redeclare, replies
+delivered as `REPLAY` and dedupe-safe. Presence needs no step: tokens come
+back through the liveliness subscribers themselves (the presence watch's
+`history=True` keeper is what makes a client session learn, and so lose
+and regain, every token the router knows; see
+[`presence.md`](../presence/presence.md#the-subscriber-side-subscriber)).
+
+- With no subscriber to replay, it returns at once — no jitter.
+- Otherwise it waits `random.uniform(0, resync_jitter)` (default 2 s,
+  interruptible by teardown), so a fleet re-attaching to a restarted hub
+  doesn't fetch all at once.
+- Then it fetches on at most `resync_concurrency` workers (default 4), one
+  task per subscriber, templates in order — so no subscriber's callback
+  runs concurrently with its own replay.
+- `on_link_restored` fires once every task has finished; failures are
+  logged.
+
+It runs on the probe thread, so two link walks never overlap. The
+reconnect walk is unchanged (serial, no jitter): a reconnect is a local
+event, not fleet-correlated. `_reconnect` fires `on_link_lost` before it
+opens a new raw and `on_link_restored` after `on_reconnect`'s callbacks.
+
+**One restore per loss.** Two paths restore the link, the probe and a
+reconnect, so:
+- the reconnect sets `_restoring` for its whole run, and the probe skips
+  its link check meanwhile. After the swap the state already reads
+  `IDLE`, and a tick that saw routers then would otherwise restore the
+  link alongside the restore walks, firing `on_link_restored` before
+  `on_reconnect`, or twice;
+- `_link_restored` claims the transition under the session lock
+  (`_link_state` goes `'lost'` → `'restoring'` → `'up'`), so a second
+  caller returns. A loss while a restore is in flight sets `'lost'`
+  again without firing `on_link_lost` (callbacks never saw the link come
+  back), and the in-flight restore then fires nothing: the loss's own
+  restore will.
 
 ## Restoration order
 
@@ -82,11 +158,13 @@ Dependencies before dependents:
    redeclare so a same-process publisher+subscriber pair finds a live
    queryable on the retained-fetch round.
 3. **Subscribers** — re-declare zenoh subs, re-fire retained fetch
-   (dedupe-safe), re-register presence dispatcher.
+   (dedupe-safe), re-declare the presence watch (its replay reports the
+   keys online now as `REPLAY`).
 4. **Queryables** — re-declare each user queryable (compute-serving, no
    replayed state) against the new raw.
-5. **Wills** — re-register every previously-registered envelope under
-   the new zid; peers see legitimate offline → online.
+5. **Presence** — re-declare every held token on the new raw; peers see
+   the keys come back online. After retention, so a peer that sees a key
+   return can already fetch its record.
 
 Publishers *invalidate* rather than redeclare, unlike retention: nothing
 reads a cached publisher until the next `send()`, so there is no ordering
@@ -99,5 +177,5 @@ registered also preserves `_emitted`, the process-lifetime history behind
 
 `_open_with_backoff` blocks via `cancel.wait(backoff)` rather than
 `time.sleep` so `z.release()` can interrupt a long reconnect. The
-`_ReconnectAborted` exception unwinds cleanly into a `state = DEAD`
+`_ReconnectAbortedError` exception unwinds cleanly into a `state = DEAD`
 without polluting logs.

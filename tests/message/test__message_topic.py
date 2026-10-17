@@ -96,6 +96,60 @@ class TestMultiSegmentFieldValidation:
             M._templates()
 
 
+class TestSingleSegmentFieldValidation:
+    """0.4.0: a single-segment slot's field must render without ``/``."""
+
+    def test_str_int_and_hex_bytes_pass(self):
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'dev/{name}/{n}/{blob}'
+            name: str = z.Str(required=True)
+            n: int = z.Int(required=True)
+            blob: bytes = z.Bytes(required=True, encoding='hex')
+
+        M._templates()
+
+    def test_capture_only_slot_passes(self):
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'dev/{anything}'
+            x: int = z.Int(default=0)
+
+        M._templates()
+
+    def test_base64_bytes_rejected(self):
+        with pytest.raises(z.TopicError, match=r"single-segment slot 'blob' is bound to Bytes"):
+
+            @z.zeared
+            class M(z.Message):
+                TOPIC = 'dev/{blob}'
+                blob: bytes = z.Bytes(required=True)
+
+            M._templates()
+
+    def test_path_rejected(self):
+        with pytest.raises(z.TopicError, match=r"single-segment slot 'where' is bound to Path"):
+
+            @z.zeared
+            class M(z.Message):
+                TOPIC = 'dev/{where}'
+                where: object = z.Path(required=True)
+
+            M._templates()
+
+    def test_extra_topic_single_slot_is_checked_too(self):
+        with pytest.raises(z.TopicError, match='single-segment slot'):
+
+            @z.zeared
+            class M(z.Message):
+                TOPIC = 'dev/{id}'
+                EXTRA_TOPICS = ('alt/{id}/{blob}',)
+                id: str = z.Str(required=True)
+                blob: bytes = z.Bytes(required=True)
+
+            M._templates()
+
+
 class TestFieldSpecs:
     """Pin (0.3.8): ``_field_specs`` maps attribute name → ``FieldSpec``,
     built once per class (a subclass gets its own)."""

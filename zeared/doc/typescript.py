@@ -51,7 +51,7 @@ _SCALAR: dict[str, str] = {
     'DateTime': 'string',
     'Time': 'string',
     'TimeDelta': 'number',  # seconds: seared serializes total_seconds()
-    'Bytes': 'string',  # base64 on the JSON wire
+    'Bytes': 'string',  # base64 (or hex, under encoding='hex') text on the JSON wire
     'Dict': 'Record<string, unknown>',
     'NDArray': 'unknown',
     'PandasFrame': 'unknown',
@@ -68,10 +68,12 @@ _HEADER = """\
 //     are also declared fields are included (a decoder merges them from the
 //     key). Capture-only slots (in the key, not declared) are routing
 //     metadata and are NOT part of these types.
-//   - `Bytes` is base64-encoded on the JSON wire; frames/ndarrays are left
-//     as `unknown` — decode them in the bridge if you need them.
+//   - `Bytes` is base64 text on the JSON wire (hex for `encoding='hex'`);
+//     frames/ndarrays are left as `unknown` — decode them in the bridge if
+//     you need them.
 //   - Optional (`?`) marks a field the sender may omit (it has a default).
-//     `| null` marks a nullable field (declared `X | None`).
+//     `| null` marks a `nullable=True` field, the only kind whose wire value
+//     may be `null`; an ordinary optional field is absent instead.
 """
 
 
@@ -137,16 +139,11 @@ def ts_type(f: Any) -> str:
 def _member(attr: str, wire_key: str, f: Any) -> list[str]:  # noqa: ARG001  (attr kept for call-site symmetry)
     """Emit the interface member line(s) for one field (with JSDoc)."""
     required = bool(f.required)
-    has_factory = getattr(f, 'default_factory', None) is not None
-    # ``f.default`` holds a ``default=`` value directly. ``missing`` is
-    # seared's deprecated alias (0.3.x folds ``default=`` into it; 0.4.0
-    # removes the slot), read only as a fallback for a field still declared
-    # with ``missing=``. Reading ``missing`` alone would make every
-    # defaulted optional field ``| null`` once the slot is gone.
-    default_val = getattr(f, 'default', None)
-    if default_val is None:
-        default_val = getattr(f, 'missing', None)
-    nullable = (not required) and (not has_factory) and (default_val is None)
+    # ``| null`` only where the wire can carry ``null``: a ``nullable=True``
+    # field (seared 0.4.0). An ordinary optional field is absent, never
+    # ``null``: ``dump`` leaves ``None`` out, and ``load`` reads a ``null``
+    # on it as absent. A nullable field may also be required (``req: T | null``).
+    nullable = bool(getattr(f, 'nullable', False))
 
     key = _key_token(wire_key)
     opt = '' if required else '?'

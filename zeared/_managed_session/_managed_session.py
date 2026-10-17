@@ -10,9 +10,9 @@ Primary file of the ``_managed_session`` subdir. Method clusters are
 extracted into sibling modules as stateless mixins, composed here via the
 MRO so they stay methods on ``ManagedSession``:
 
-- ``_OnReconnectMixin`` (in ``_on_reconnect_mixin.py``) — the
-  ``on_reconnect(cb)`` callback registry + ``_fire_reconnect_callbacks``
-  driver.
+- ``_OnReconnectMixin`` (in ``_on_reconnect_mixin.py``) — the three
+  callback registries (``on_reconnect``, ``on_link_lost``,
+  ``on_link_restored``) and the ``_fire`` driver.
 - ``_ZenohApiMixin`` (in ``_zenoh_api_mixin.py``) — pass-through
   delegators for ``zid`` / ``liveliness`` / ``info`` / ``put`` / ``get``
   / ``delete`` / ``declare_*``.
@@ -62,11 +62,13 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
     __slots__ = (
         '__weakref__',  # required for WeakSet membership
         '_endpoint_label',
-        '_gc_interval',  # presence-observer GC sweep period
         '_initial_backoff',
+        '_link_state',  # 'up' | 'lost' | 'restoring' — the link signals' pairing state
         '_lock',
         '_max_attempts',
         '_max_backoff',
+        '_on_link_lost_callbacks',  # registered via on_link_lost()
+        '_on_link_restored_callbacks',  # registered via on_link_restored()
         '_on_reconnect',  # legacy single-callback test hook
         '_on_reconnect_callbacks',  # public list — registered via on_reconnect()
         '_open_fn',
@@ -76,7 +78,11 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         '_raw',
         '_reconnect_signal',
         '_reconnect_thread',
+        '_restoring',  # a reconnect is restoring: the probe leaves the link alone
+        '_resync_concurrency',  # re-attach walk: max subscribers fetching at once
+        '_resync_jitter',  # re-attach walk: max random delay before it, seconds
         '_retention_ttl',  # session-wide retention TTL fallback
+        '_routers',  # router zids at the last probe tick
         '_state',
     )
 
@@ -108,13 +114,26 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         self._on_reconnect_callbacks: list[
             tuple[Callable[[ManagedSession], object], asyncio.AbstractEventLoop | None]
         ] = []
+        self._on_link_lost_callbacks: list[
+            tuple[Callable[[ManagedSession], object], asyncio.AbstractEventLoop | None]
+        ] = []
+        self._on_link_restored_callbacks: list[
+            tuple[Callable[[ManagedSession], object], asyncio.AbstractEventLoop | None]
+        ] = []
+        # Link signals (0.4.0): 'lost' between an on_link_lost and its
+        # on_link_restored, 'restoring' while one path runs the restore.
+        # ``_routers`` is what the probe saw last tick. ``_restoring`` is set
+        # for the whole of a reconnect, so the probe can't restore the link
+        # under it.
+        self._link_state = 'up'
+        self._restoring = False
+        self._routers: frozenset[str] = frozenset()
+        # Re-attach walk knobs, at their defaults; the factories set them.
+        self._resync_jitter = 2.0
+        self._resync_concurrency = 4
         # Single long-lived reconnect worker per ManagedSession.
         self._reconnect_thread: threading.Thread | None = None
         self._reconnect_signal = threading.Event()
-        # GC sweep period for the per-session presence observer. Factory
-        # callers override via ``peer(gc_interval=...)``; default mirrors
-        # ``presence._GC_INTERVAL_SECONDS``.
-        self._gc_interval = 60.0
         # Session-wide retention TTL fallback. ``None`` (default) means
         # no session-level fallback — class-level ``RETENTION_TTL`` is
         # the only knob. Factory ``peer(retention_ttl=N)`` overrides.
@@ -207,13 +226,14 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
     def _note_failure(self, exc: BaseException) -> None:  # noqa: ARG002  (kept for call-site symmetry)
         """Mark the session as needing a reconnect after a failed op.
 
-        Lazy-detection hook: if a put/get/delete fails on the raw, mark the session as
-        needing a reconnect (the probe loop will pick it up on the next tick, or the
-        next call will trigger eagerly via ``_maybe_reconnect``).
+        Lazy-detection hook, called when a put/get/delete (or a cached
+        publisher, or a publisher declare) fails on the raw session. If the
+        raw session is dead (``_is_dead``), the reconnect is triggered at
+        once, so a session whose probe is off (``probe_interval=0``) still
+        recovers. A failure on a live session does nothing.
 
-        Conservative: we don't try to classify the exception. Any failure
-        on the raw session is treated as "might be dead" — the probe will
-        confirm via ``is_closed()`` / ``zid()`` and trigger the reconnect.
+        The exception isn't classified: whether the session is dead is what
+        decides.
         """
         if _is_dead(self._raw):
             from .._reconnect import _trigger_reconnect

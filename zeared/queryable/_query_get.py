@@ -134,7 +134,7 @@ def _iter_query(  # noqa: PLR0913
     if target is not None:
         kwargs['target'] = target
     # Default to NO consolidation: a zeared query is a fan-out (ask every
-    # queryable — the RTLS "ask every reader" pattern), and each queryable
+    # queryable, as in "ask every device where it is"), and each queryable
     # may reply more than once. Zenoh's default (LATEST/MONOTONIC)
     # collapses replies that share a key expression, silently dropping
     # legitimate answers. Callers who want dedup pass ``consolidation=``.

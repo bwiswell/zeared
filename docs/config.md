@@ -23,19 +23,45 @@ class SessionConfig(z.Zeared):
     initial_backoff: float      = z.Float(default=0.1)
     max_backoff:     float      = z.Float(default=30.0)
     max_attempts:    int | None = z.Int(default=None)
+    auto_reconnect:     bool  = z.Bool(default=False)     # 0.4.0: return a ManagedSession
+    probe_interval:     float = z.Float(default=10.0)     # seconds between health / link checks
+    resync_jitter:      float = z.Float(default=2.0)      # re-attach walk: max delay before it
+    resync_concurrency: int   = z.Int(default=4)          # re-attach walk: max concurrent fetches
     zenoh_config_file: str | None = z.Str(default=None)   # JSON5 Zenoh config path
     zenoh_overrides:   dict       = z.Dict(default_factory=dict)
 ```
 
-`mode` is a `z.Mode` enum (`Mode.PEER` / `Mode.CLIENT`). Strings still
-load via seared's `Enum` field auto-coercion — YAML / JSON configs keep
-working — but natural construction needs the enum value:
+`mode` is a `z.Mode` enum (`Mode.PEER` / `Mode.CLIENT` / `Mode.ROUTER`).
+Strings still load via seared's `Enum` field auto-coercion — YAML / JSON
+configs keep working — but natural construction needs the enum value:
 
 ```python
 z.SessionConfig(mode=z.Mode.PEER)         # natural construction
 z.SessionConfig.load({'mode': 'peer'})    # string → enum on load
 z.SessionConfig.load({'mode': 'galactic'}) # → ValidationError up front
 ```
+
+### Reconnect knobs (0.4.0)
+
+`auto_reconnect = true` makes `z.open(cfg)` / `z.aopen(cfg)` (and a factory
+given `config=cfg`) return a `ManagedSession`: it reconnects a dead
+session, watches the router link, re-fetches retained values after a hub
+restart and fires `on_reconnect` / `on_link_lost` / `on_link_restored`.
+Peer and client modes only; router mode with it raises `ValueError`.
+`probe_interval` paces the health and link checks; `resync_jitter` and
+`resync_concurrency` shape the re-attach walk (see
+[`_reconnect.md`](_reconnect/_reconnect.md)). A factory keyword beats the
+field when both are given. In a TOML file read with
+`SessionConfig.from_toml(path)`, at the top level:
+
+```toml
+mode = "client"
+router = "tls/hub.example:7447"
+auto_reconnect = true
+```
+
+The environment reads them as `ZEARED_SESSION_AUTO_RECONNECT`,
+`_PROBE_INTERVAL`, `_RESYNC_JITTER` and `_RESYNC_CONCURRENCY`.
 
 ## Builders
 
@@ -115,7 +141,7 @@ zeared's factory kwargs split into two categories:
 | Category | Behavior under `zenoh_config=` |
 |----------|--------------------------------|
 | **Maps to a `zenoh.Config` field** (`timestamping`) | Silenced — you took over the Config; layer Config-level settings yourself or drop the high-level kwarg. |
-| **Out-of-band** (`retry`, `initial_backoff`, `max_backoff`, `max_attempts`, `auto_reconnect`, `probe_interval`, `gc_interval`) | Layered freely on top — they don't touch the `zenoh.Config`. |
+| **Out-of-band** (`retry`, `initial_backoff`, `max_backoff`, `max_attempts`, `auto_reconnect`, `probe_interval`, `resync_jitter`, `resync_concurrency`, `retention_ttl`) | Layered freely on top — they don't touch the `zenoh.Config`. |
 | **Endpoints** (`router`, `connect`, `listen`, as kwargs or `SessionConfig` fields) | Written over the Config when set; when unset, the endpoints the Config already names stand. A hub with listen endpoints nowhere binds `tcp/0.0.0.0:7447`; a client with connect endpoints nowhere raises `TypeError`. |
 
 ## Raw Zenoh settings: `zenoh_config_file` / `zenoh_overrides`
@@ -124,10 +150,9 @@ Anything zeared doesn't model — TLS/mTLS, access control, scouting,
 transport limits — comes from these two fields:
 
 ```toml
-[zenoh]
 mode = "client"
 router = "tcp/hub.local:7447"
-zenoh_config_file = "/etc/rio-node.json5"          # certs, ACL
+zenoh_config_file = "/etc/myapp/zenoh.json5"       # certs, ACL
 zenoh_overrides = { "scouting/multicast/enabled" = false }
 ```
 
@@ -157,18 +182,28 @@ flat env string legibly; put it in the file the config loads from.
 
 So `z.peer(zenoh_config=raw, timestamping=True)` does NOT inject
 timestamping; `raw` is your responsibility. But
-`z.peer(zenoh_config=raw, retry=True, gc_interval=30)` honors both
+`z.peer(zenoh_config=raw, retry=True, probe_interval=30)` honors both
 out-of-band kwargs while leaving `raw` untouched.
 
 ## Default `timestamping=True` injection
 
 When you don't pass `zenoh_config=`, the factory injects
 `timestamping/enabled=true` into the built `zenoh.Config` by default.
-This is what makes `RETAINED + DEDUPE` Just Work — Zenoh's default
-config doesn't add HLC timestamps, and without timestamps retention
-dedupe is a no-op. Pass `timestamping=False` to opt back out (e.g.
-debugging, or a config that for some reason can't have timestamping
-enabled).
+Zenoh's default config doesn't add HLC timestamps, and a sample without
+one has no `meta.issued_at` or `meta.origin_zid` and bypasses dedupe.
+Since 0.4.0 a retained send stamps its put itself
+(`Session.new_timestamp()`), and the retention cache replies with that
+timestamp, so retained values dedupe with session timestamping off too;
+other sends leave the stamping to Zenoh, which needs it on. Pass
+`timestamping=False` to opt back out (e.g. debugging, or a config that for
+some reason can't have timestamping enabled).
+
+The kwarg only reaches a config zeared builds from scratch. Under
+`zenoh_config=` it is silenced (above). Under `zenoh_config_file` /
+`zenoh_overrides`, zeared turns timestamping on before the overrides
+apply, whatever the kwarg says, so `timestamping=False` is ignored there;
+turn it off with a `zenoh_overrides` entry instead
+(`"timestamping/enabled" = false`).
 
 ## Shared memory off
 
@@ -207,27 +242,19 @@ cfg = z.SessionConfig.from_yaml('mode: peer\nretry: true\n')
 `from_env` reads `{prefix}MODE`, `{prefix}ROUTER`, `{prefix}CONNECT`
 (comma-separated list), `{prefix}LISTEN` (likewise), `{prefix}RETRY`
 (true/false), `{prefix}INITIAL_BACKOFF`, `{prefix}MAX_BACKOFF`,
-`{prefix}MAX_ATTEMPTS`. Missing optional fields fall back to seared
-defaults; missing required `MODE` raises `ValidationError`.
+`{prefix}MAX_ATTEMPTS`, `{prefix}AUTO_RECONNECT` (true/false),
+`{prefix}PROBE_INTERVAL`, `{prefix}RESYNC_JITTER`,
+`{prefix}RESYNC_CONCURRENCY` and `{prefix}ZENOH_CONFIG_FILE`. Missing or
+empty optional fields fall back to seared defaults; missing required
+`MODE` raises `ValidationError`. `zenoh_overrides` has no env form.
 
 `from_yaml` uses `PyYAML` (lazy import — raises `ImportError` with an
 install hint if missing). Top-level YAML must be a mapping; values
 flow into `SessionConfig.load`.
 
-## `gc_interval=` per-session presence GC
-
-Each `ManagedSession` runs a daemon GC sweep over the presence
-observer's stashed will entries every `gc_interval` seconds, dropping
-any whose peer is no longer in `_alive_zids`. Default 60s. Short-lived
-peer processes can lower this; long-lived observers can raise it. The
-value is stashed on the wrapper and read by `_PresenceObserver`
-on first declaration; the existing test pattern of poking
-`observer._gc_interval = 0.05` directly still works for fine-grained
-test control.
-
-Raw `zenoh.Session` callers (no `auto_reconnect=True`) fall back to the
-module default — `ManagedSession` is the strategic path for per-session
-tuning.
+`gc_interval=`, the presence observer's GC period, was removed in 0.4.0
+along with the observer: presence is a liveliness token now, with no
+stash to sweep.
 
 ## Retry semantics
 

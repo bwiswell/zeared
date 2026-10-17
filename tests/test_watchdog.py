@@ -60,6 +60,27 @@ class TestSubscriberWatchdogPrimitive:
         wd.cancel()
         assert events == ['quiet', 'active']
 
+    def test_quiet_fires_again_after_a_resume_without_on_active(self):
+        """Regression: only ``on_active`` cleared the quiet flag, so without one the
+        first quiet spell never ended and ``on_quiet`` never fired again."""
+        from zeared.watchdog import _SubscriberWatchdog
+
+        quiet: list[int] = []
+        wd = _SubscriberWatchdog(
+            interval=0.05,
+            on_quiet=lambda: quiet.append(1),
+            on_active=None,
+        )
+        try:
+            wd.ping()
+            time.sleep(0.15)
+            assert quiet == [1]
+            wd.ping()  # traffic resumes
+            time.sleep(0.15)
+            assert quiet == [1, 1]
+        finally:
+            wd.cancel()
+
     def test_cancel_suppresses_pending_quiet(self):
         from zeared.watchdog import _SubscriberWatchdog
 
@@ -267,8 +288,7 @@ class TestWatchdogViaOnMessage:
 
 # ---------------------------------------------------------------------------
 # Origin gating (0.3.0) — only LIVE samples feed the watchdog: a retained
-# replay can't establish cadence from stale data, and a will (the producer
-# died) can't reset the quiet timer.
+# replay can't establish cadence from stale data.
 # ---------------------------------------------------------------------------
 
 
@@ -297,19 +317,24 @@ class TestWatchdogOriginGating:
         )
 
     def _sample(self):
-        from zeared import _codec as codec
-        from zeared.presence._presence_synthesized_sample import (
-            _SynthesizedSample,
-        )
+        """A minimal stand-in for ``zenoh.Sample``: what dispatch and ``from_sample`` read."""
+        import types
 
-        return _SynthesizedSample(
+        import zenoh
+
+        from zeared import _codec as codec
+
+        return types.SimpleNamespace(
             key_expr='wdg/gate',
             payload=codec.pack({'v': 1}, 'msgpack'),
-            encoding_mime='application/msgpack',
-            source_zid='zid-test',
+            kind=zenoh.SampleKind.PUT,
+            encoding='application/msgpack',
+            timestamp=None,
+            source_info=None,
+            attachment=None,
         )
 
-    def test_live_pings_replay_and_will_do_not(self):
+    def test_live_pings_replay_does_not(self):
         class StubWatchdog:
             pings = 0
 
@@ -322,8 +347,6 @@ class TestWatchdogOriginGating:
         dispatch(self._sample())  # default LIVE
         assert wd.pings == 1
         dispatch(self._sample(), origin=z.Origin.REPLAY)
-        assert wd.pings == 1
-        dispatch(self._sample(), origin=z.Origin.WILL)
         assert wd.pings == 1
         dispatch(self._sample(), origin=z.Origin.LIVE)
         assert wd.pings == 2

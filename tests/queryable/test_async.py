@@ -214,6 +214,30 @@ class TestAqueryIter:
         asyncio.run(body())
         assert sorted(out['streamed']) == sorted(out['collected']) == [0, 1, 2, 3]
 
+    def test_returns_an_unbounded_stream(self, session):
+        """0.4.0: a ``z.Stream``, like ``alisten``'s, with nothing to drop."""
+
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/aiter-stream/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        z.session = session
+        out = {}
+
+        async def body():
+            qbl = await z.aon_query(Row, lambda ctx: Row(id=ctx.captures['id'], v=1))
+            await asyncio.sleep(0.3)
+            stream = z.aquery_iter(Row, id='a', timeout=2.0)
+            out['rows'] = [m.v async for m in stream]
+            out['shape'] = (isinstance(stream, z.Stream), stream.maxsize, stream.dropped)
+            qbl.close()
+
+        asyncio.run(body())
+        assert out['rows'] == [1]
+        assert out['shape'] == (True, 0, 0)
+
     def test_first_row_arrives_before_the_last_is_produced(self, session):
         @z.zeared
         class Row(z.Message):

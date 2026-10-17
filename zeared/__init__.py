@@ -8,7 +8,8 @@ Heavy lifting lives elsewhere:
 - ``_factories.py`` — session-opening factories (``peer`` / ``client`` /
   ``open`` plus retry / config-build helpers).
 - ``_release.py`` — session-tearing-down (``release`` / ``release_all``).
-- ``_module_class.py`` — the ``_ZearedModule`` metaclass.
+- ``_module_class.py`` — ``_ZearedModule``, the package's module class (a
+  ``types.ModuleType`` subclass).
 
 Re-exports the entire seared public surface so users can ``import
 zeared as z`` and pick up every Field type, the decorator (renamed
@@ -54,7 +55,7 @@ from seared import (
 
 from . import _codec as codec
 from ._factories import client, hub, open, peer  # noqa: A004 — `open` shadows builtin intentionally
-from ._managed_session import ManagedSession, OnReconnectHandle
+from ._managed_session import CallbackHandle, ManagedSession, OnReconnectHandle
 from ._mode import Mode
 from ._module_class import _ZearedModule
 from ._release import release, release_all
@@ -93,13 +94,14 @@ from .errors import (
 )
 from .message import Message
 from .meta import Origin, ZenohMeta
-from .presence import clear_observer, clear_presence_state
+from .presence import PresenceToken, clear_presence_state
 from .publisher import clear_publisher_cache, published_topics
 from .queryable import Queryable, QueryContext, clear_queryable_cache
 from .retention import clear_retention_cache
+from .stream import Stream
 from .subscriber import Subscriber
 
-__version__ = '0.3.13'
+__version__ = '0.4.0'
 
 # Module-level defaults.
 # ``session`` is a dual-role handle (see ``_SessionHandle`` docstring) — the
@@ -121,6 +123,7 @@ __all__ = [
     'Bytes',
     # zeared surface
     'CallbackError',
+    'CallbackHandle',
     'Date',
     'DateTime',
     'Decimal',
@@ -140,6 +143,7 @@ __all__ = [
     'PandasFrame',
     'Path',
     'PolarsFrame',
+    'PresenceToken',
     'QueryContext',
     'QueryError',
     'Queryable',
@@ -150,6 +154,7 @@ __all__ = [
     'SessionConfig',
     'SessionDeadError',
     'Str',
+    'Stream',
     'Subscriber',
     'SubscriberError',
     'SubscriptionError',
@@ -177,7 +182,6 @@ __all__ = [
     'asend_batch',
     'aunretain',
     'batch',
-    'clear_observer',
     'clear_presence_state',
     'clear_publisher_cache',
     'clear_queryable_cache',

@@ -9,10 +9,10 @@ from zeared.subscriber import (
     Subscriber,
     _adapt_async_callback,
     _build_dispatch,
+    _build_presence_handler,
     _close_subscribers_for,
     _deregister_subscriber,
     _fetch_retained,
-    _make_presence_dispatcher,
     _pick_encoding,
     _register_subscriber,
     _subscribers,
@@ -42,7 +42,7 @@ class TestReExports:
         assert callable(_close_subscribers_for)
         assert callable(_wants_meta)
         assert callable(_adapt_async_callback)
-        assert callable(_make_presence_dispatcher)
+        assert callable(_build_presence_handler)
         assert callable(_pick_encoding)
         assert callable(_build_dispatch)
         assert callable(_fetch_retained)
