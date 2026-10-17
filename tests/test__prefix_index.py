@@ -1,35 +1,22 @@
 from __future__ import annotations
 
 import random
-import re
 
 import pytest
+import zenoh
 
 from zeared._prefix_index import _PrefixIndex
+from zeared.keyexpr import intersects
 
 
 def _linear_match(cached: list[str], query: str) -> set[str]:
-    """Reference implementation: linear scan + Zenoh-equivalent regex.
+    """Reference: every cached topic Zenoh says ``query`` intersects, by a linear scan.
 
-    `*` → `[^/]+`, `**` (whole segment, trailing) → `.+`. Used only for
-    parity checks against the trie.
+    Until 0.4.2 this was a hand-written regex, which read a trailing ``**`` as
+    one chunk or more and had no ``$*``; the trie agreed with it, and both
+    differed from Zenoh. Now the reference is Zenoh's own answer.
     """
-    parts = query.split('/')
-    rx_parts = []
-    for i, seg in enumerate(parts):
-        if seg == '*':
-            rx_parts.append(r'[^/]+')
-        elif seg == '**':
-            # ** at the end matches one-or-more remaining segments.
-            if i != len(parts) - 1:
-                # Non-trailing ** — match anything (including slashes).
-                rx_parts.append(r'.*?')
-            else:
-                rx_parts.append(r'.+')
-        else:
-            rx_parts.append(re.escape(seg))
-    pattern = re.compile('^' + '/'.join(rx_parts) + '$')
-    return {t for t in cached if pattern.match(t)}
+    return {t for t in cached if intersects(query, t)}
 
 
 class TestBasic:
@@ -86,26 +73,14 @@ class TestSingleSegmentWildcard:
 
 
 class TestMultiSegmentWildcard:
-    def test_trailing_starstar_matches_one_or_more(self):
+    def test_trailing_starstar_matches_zero_or_more(self):
+        # As Zenoh's `a/**` does, it takes `a` itself (0.4.2). Until then the
+        # trie read it as one segment or more, so a getter on `a/**` missed a
+        # value retained at `a`, which a subscriber on `a/**` does receive.
         idx = _PrefixIndex()
-        for t in ['a/x', 'a/x/y', 'a/x/y/z']:
+        for t in ['a', 'a/x', 'a/x/y', 'a/x/y/z', 'b']:
             idx.add(t)
-        # The trie reads a trailing `**` as one or more segments, so `a` alone
-        # (zero trailing) doesn't match. Zenoh's own `a/**` also takes `a`;
-        # zeared's retained fetches always query a template wildcard, never
-        # a bare prefix, so they don't meet the difference.
-        idx.add('a')
-        result = set(idx.matching('a/**'))
-        assert 'a/x' in result
-        assert 'a/x/y' in result
-        assert 'a/x/y/z' in result
-        # `a` alone has no trailing segments under `a/**` per our regex.
-        # Acceptable either way; pin current behaviour:
-        # (the trie's `a/**` walk emits descendants of 'a' node — does NOT
-        #  include 'a' itself as a leaf because 'a' is the parent node.)
-        # If this test ever flips, compare with the linear reference.
-        ref = _linear_match(list({'a', 'a/x', 'a/x/y', 'a/x/y/z'}), 'a/**')
-        assert result == ref
+        assert set(idx.matching('a/**')) == {'a', 'a/x', 'a/x/y', 'a/x/y/z'}
 
     def test_starstar_at_root(self):
         idx = _PrefixIndex()
@@ -124,6 +99,25 @@ class TestMultiSegmentWildcard:
         # Manual reference: a/b/c (a → ** matches 'b' → c) ✓; a/x/c ✓;
         # a/b/x/c (a → ** matches 'b/x' → c) ✓; a/c (a → ** matches zero → c) ✓.
         assert result == {'a/b/c', 'a/x/c', 'a/b/x/c', 'a/c'}
+
+
+class TestWithinAChunk:
+    def test_dollar_star_matches_within_one_chunk(self):
+        # Until 0.4.2 the trie looked `r-$*` up as a literal chunk, so a
+        # retained class answered `query(robot='r-$*')` with nothing.
+        idx = _PrefixIndex()
+        for t in ['fleet/r-1/status', 'fleet/r-22/status', 'fleet/x-1/status', 'fleet/r-1/log']:
+            idx.add(t)
+        assert set(idx.matching('fleet/r-$*/status')) == {'fleet/r-1/status', 'fleet/r-22/status'}
+        assert set(idx.matching('fleet/$*-1/$*')) == {'fleet/r-1/status', 'fleet/x-1/status', 'fleet/r-1/log'}
+
+    def test_each_topic_is_yielded_once(self):
+        # A query with two `**` reaches `a/a/a` several ways, and until 0.4.2
+        # the walk yielded it each time; retention replied once per yield.
+        idx = _PrefixIndex()
+        for t in ['a/a/a', 'a/b', 'b/a/b']:
+            idx.add(t)
+        assert sorted(idx.matching('**/a/**')) == ['a/a/a', 'a/b', 'b/a/b']
 
 
 class TestParityAgainstLinearScan:
@@ -154,14 +148,17 @@ class TestParityAgainstLinearScan:
                 r = rng.random()
                 if r < 0.2:
                     parts.append('*')
-                elif r < 0.3 and not parts:
-                    pass  # leading ** is handled below
+                elif r < 0.3:
+                    parts.append('**')
+                elif r < 0.4:
+                    parts.append(rng.choice(segments)[:2] + '$*')  # within a chunk
                 else:
                     parts.append(rng.choice(segments))
             # Sometimes add trailing **
             if rng.random() < 0.3:
                 parts.append('**')
-            query = '/'.join(parts) if parts else '**'
+            # As Zenoh would deliver it: canonical (`**/**` → `**`, `**/*` → `*/**`).
+            query = str(zenoh.KeyExpr.autocanonize('/'.join(parts) if parts else '**'))
 
             trie_result = set(idx.matching(query))
             linear_result = _linear_match(topics, query)

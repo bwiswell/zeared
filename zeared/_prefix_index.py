@@ -3,16 +3,21 @@
 Used by the retention queryable handler to avoid the O(N)
 iterate-and-intersect loop on every incoming query.
 
-Cached topics are concrete (no wildcards). Queries may carry single-segment
-``*`` and trailing multi-segment ``**`` wildcards. The trie's ``matching``
-walk handles both. Output is a set of concrete topics that intersect the
-query — semantically identical to the prior linear search, just pruned
-by the trie structure.
+Cached topics are concrete (no wildcards). A query may carry any of Zenoh's
+wildcards: ``*`` (one chunk), ``**`` (any number of chunks, none included)
+and ``$*`` within a chunk. The trie's walk only narrows: it may collect a
+topic the query doesn't reach, never miss one that it does, and each
+candidate is then confirmed with ``zeared.keyexpr.intersects`` (0.4.2). So
+the answer is exactly the topics Zenoh would say the query intersects.
+Until 0.4.2 the walk was the answer: a ``$*`` chunk matched nothing, and a
+trailing ``**`` missed the key at its own prefix.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+from .keyexpr import intersects
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -76,16 +81,21 @@ class _PrefixIndex:
             path[i].pop(segs[i], None)
 
     def matching(self, query_key: str) -> Iterator[str]:
-        """Yield concrete topics that intersect ``query_key``.
+        """Yield each cached topic that ``query_key`` intersects, as Zenoh decides it, once.
 
-        Handles ``*`` (single-segment) and ``**`` (multi-segment) wildcards
-        anywhere in the query. Concrete queries (no wildcards) are an O(depth)
-        walk; wildcards may fan out across multiple branches.
+        A concrete query is an O(depth) walk; wildcards fan out over the
+        branches they could reach, and every candidate is confirmed.
         """
         segs = query_key.split('/')
-        yield from self._walk(self._root, segs, 0)
+        seen: set[str] = set()
+        for topic in self._walk(self._root, segs, 0):
+            if topic not in seen:
+                seen.add(topic)
+                if intersects(query_key, topic):
+                    yield topic
 
-    def _walk(self, node: dict, segs: list[str], i: int) -> Iterator[str]:  # noqa: C901
+    def _walk(self, node: dict, segs: list[str], i: int) -> Iterator[str]:
+        """Collect the topics under ``node`` that ``segs[i:]`` might reach: a superset, confirmed by ``matching``."""
         if i == len(segs):
             leaves = node.get(_LEAF_KEY)
             if leaves:
@@ -93,24 +103,10 @@ class _PrefixIndex:
             return
         seg = segs[i]
         if seg == '**':
-            # Match zero or more remaining segments. ``**`` may be the LAST
-            # segment of the query (the only form zeared currently produces),
-            # but handle anywhere for completeness.
-            remaining = segs[i + 1 :]
-            if not remaining:
-                # Trailing `**` matches one-or-more remaining segments.
-                # Emit only descendants — leaves at the current node
-                # would correspond to a zero-segment match.
-                for k, child in node.items():
-                    if k == _LEAF_KEY:
-                        continue
-                    yield from self._all_leaves(child)
-            else:
-                # `a/**/b/c` — ** matches some number of segments before
-                # `b/c` lines up. We delegate to a recursive walk that
-                # tries every depth.
-                yield from self._walk_starstar(node, remaining)
-        elif seg == '*':
+            # Zero chunks or more, here or anywhere below.
+            yield from self._walk_starstar(node, segs[i + 1 :])
+        elif seg == '*' or '$*' in seg:
+            # One chunk: any child, which ``matching`` then confirms for ``$*``.
             for k, child in node.items():
                 if k == _LEAF_KEY:
                     continue
@@ -121,7 +117,7 @@ class _PrefixIndex:
                 yield from self._walk(child, segs, i + 1)
 
     def _walk_starstar(self, node: dict, remaining: list[str]) -> Iterator[str]:
-        """Handle non-trailing ``**``: try each depth where ``remaining`` could line up against the trie structure."""
+        """Handle ``**``, trailing or not: zero chunks here, or one or more below, then ``remaining``."""
         # First option: ** matched zero segments here — try matching
         # `remaining` from this node directly.
         yield from self._walk(node, remaining, 0)
@@ -132,12 +128,3 @@ class _PrefixIndex:
                 continue
             # Equivalent to: try `**`+remaining at the child level.
             yield from self._walk_starstar(child, remaining)
-
-    def _all_leaves(self, node: dict) -> Iterator[str]:
-        leaves = node.get(_LEAF_KEY)
-        if leaves:
-            yield from leaves
-        for k, child in node.items():
-            if k == _LEAF_KEY:
-                continue
-            yield from self._all_leaves(child)
