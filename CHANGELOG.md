@@ -9,7 +9,7 @@ nodes on other versions, retained state and access rules can see.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.4.0 — unreleased
+## 0.4.0 — 2026-10-17
 
 **Presence and retained state survive a restart.** Presence is a Zenoh liveliness token at each contract key, a
 client re-fetches retained values when its link to a restarted hub comes back, and `alisten` stops buffering without
@@ -59,10 +59,10 @@ them with what to do.
   bytes, as a top-level `Bytes` field is, where it was base64 text. This comes from seared 0.4.0. `Bytes` reads
   either form, so nodes on 0.3.x and 0.4.0 still read each other's payloads; the JSON wire is unchanged.
 - The README gains *Upgrading to 0.4.0*, which lists each break with who it reaches and what to do.
-- **Dependencies:** seared follows its `version/0.4.0` branch (`>=0.4.0,<0.5.0`), with the lockfile pinning a
-  commit, until seared 0.4.0 is tagged. seared 0.4.0 reads a wire `null` on a field that isn't nullable as absent,
-  refuses lossy numeric coercion (a fractional float into an `Int`, a `2` into a `Bool`), prefixes validation errors
-  with their location and renames `Union(default=)` to `fallback=`; see its changelog.
+- **Dependencies:** seared `>=0.4.0,<0.5.0`, pinned to `tag = "v0.4.0"`. seared 0.4.0 reads a wire `null` on a
+  field that isn't nullable as absent, refuses lossy numeric coercion (a fractional float into an `Int`, a `2` into
+  a `Bool`), prefixes validation errors with their location and renames `Union(default=)` to `fallback=`; see its
+  changelog.
 - **Breaking:** a single-segment slot bound to `Path`, or to `Bytes` in its default base64 form, raises
   `TopicError` at first use, since either can render a `/` and split the key. Use `Bytes(encoding='hex')` or a
   `Str` slot, or a trailing `{name**}` slot for a path.
@@ -109,8 +109,8 @@ them with what to do.
 - The error for an `async def` callback with no running event loop suggests subscribing from a coroutine, where it
   pointed at `alisten`, which needs a loop too.
 - **Dependencies:** the dev group's `pytest` range lifts to `>=8.0,<10.0`, and the dev group installs seared's
-  `yaml`, `pandas` and `polars` extras, so the tests that use them run instead of skipping. zeared's own
-  dependencies are unchanged.
+  `yaml`, `pandas` and `polars` extras, so the tests that use them run instead of skipping. The refreshed lockfile
+  resolves pytest 9.1.1, ruff 0.17.1 and ty 0.0.89. zeared's own dependencies are unchanged.
 
 ### Fixed
 
