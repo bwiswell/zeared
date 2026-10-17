@@ -118,10 +118,11 @@ zeared/
 ├── errors.py       # ZearedError + NoSessionError / TopicError / SubscriptionError
 ├── message.py      # Message base class (sync + async methods)
 ├── meta.py         # ZenohMeta seared dataclass + from_sample helper
-├── presence.py     # _SessionPresence + _PresenceObserver + liveliness / LWT
+├── presence/       # PresenceToken + _SessionPresence: liveliness tokens at contract keys (0.4.0)
 ├── publisher.py    # _PublisherCache + module-level registry
 ├── queryable/      # on_query serving + query/query_one getting (request/response)
 ├── retention.py    # _RetentionCache + Queryable + module-level registry
+├── stream.py       # Stream: the bounded, drop-oldest async iterator alisten / aquery_iter return
 └── subscriber.py   # Subscriber handle with arity + coroutine + presence dispatch
 ```
 

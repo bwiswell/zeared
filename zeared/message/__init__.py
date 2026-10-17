@@ -6,12 +6,12 @@ and ``concrete_topic`` descriptors, and the ``_decode`` classmethod.
 Method clusters extracted into mixins:
 
 - ``_message_topic.py`` — ``_MessageTopicMixin`` (template parsing,
-  schema attachment cache, multi-segment field-binding validation).
+  schema attachment cache, slot field-binding validation).
 - ``_message_send.py`` — ``_MessageSendMixin`` (``send`` / ``send_batch``).
 - ``_message_async.py`` — ``_MessageAsyncMixin`` (``asend`` /
   ``asend_batch`` / ``aunretain`` / ``alisten``).
-- ``_message_will.py`` — ``_MessageWillMixin`` (``register_will`` /
-  ``aregister_will``).
+- ``_message_presence.py`` — ``_MessagePresenceMixin`` (``declare_presence`` /
+  ``adeclare_presence``; ``register_will`` / ``aregister_will`` raise a pointer).
 - ``_message_subscribe.py`` — ``_MessageSubscribeMixin`` (``on_message`` /
   ``published_topics``).
 

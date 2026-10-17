@@ -7,13 +7,17 @@ so the package init stays a thin re-export module.
 ## Public API (re-exported by `__init__.py`)
 
 - `peer(*, connect=, listen=, config=, zenoh_config=, retry=,
-  initial_backoff=, max_backoff=, max_attempts=, auto_reconnect=False,
-  probe_interval=10.0, timestamping=True, gc_interval=60.0,
-  retention_ttl=None) -> Session | ManagedSession`
+  initial_backoff=, max_backoff=, max_attempts=, auto_reconnect=,
+  probe_interval=, timestamping=True, retention_ttl=None,
+  resync_jitter=, resync_concurrency=) -> Session | ManagedSession`
 - `client(router=None, *, config=, zenoh_config=, retry=,
-  initial_backoff=, max_backoff=, max_attempts=, auto_reconnect=False,
-  probe_interval=10.0, timestamping=True, gc_interval=60.0,
-  retention_ttl=None) -> Session | ManagedSession`
+  initial_backoff=, max_backoff=, max_attempts=, auto_reconnect=,
+  probe_interval=, timestamping=True, retention_ttl=None,
+  resync_jitter=, resync_concurrency=) -> Session | ManagedSession`
+
+  The four reconnect knobs (0.4.0) resolve like the retry ones: an explicit
+  keyword, else `config`'s field, else `False` / `10.0` / `2.0` / `4`
+  (`_resolve_session_knobs`).
 - `hub(*, listen=, connect=, config=, zenoh_config=, retry=,
   initial_backoff=, max_backoff=, max_attempts=, timestamping=True) ->
   Session` — a **router-mode** relay for NAT-gated nodes (see
@@ -24,7 +28,8 @@ so the package init stays a thin re-export module.
   already names, and `['tcp/0.0.0.0:7447']` only when nothing names any
   (0.3.9); `connect` links to other hubs.
 - `open(cfg: SessionConfig) -> Session | ManagedSession` — dispatches
-  on `cfg.mode` (`PEER` / `CLIENT` / `ROUTER`).
+  on `cfg.mode` (`PEER` / `CLIENT` / `ROUTER`); a `ManagedSession` when
+  `cfg.auto_reconnect` is set (0.4.0). Router mode refuses it.
 
 `config=` provides a declarative base spec; explicit kwargs override
 per-call. `zenoh_config=` replaces the config zeared would build: it is

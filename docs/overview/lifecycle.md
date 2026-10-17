@@ -7,7 +7,7 @@ in the right order, then closes the session.
 z.release(session=my_session)
 ```
 
-Replaces the six-step manual dance of:
+Replaces the manual dance of:
 
 ```python
 # Equivalent (and easy to get wrong):
@@ -15,7 +15,6 @@ for sub in my_subs:
     sub.close()
 z.clear_publisher_cache(session=my_session)
 z.clear_retention_cache(session=my_session)
-z.clear_observer(session=my_session)
 z.clear_presence_state(session=my_session)
 my_session.close()
 ```
@@ -23,25 +22,22 @@ my_session.close()
 ## Order
 
 1. **Close zeared subscribers on this session.** Cancels any active
-   watchdogs, undeclares the underlying Zenoh subs, deregisters presence
-   dispatchers.
+   watchdogs, undeclares the underlying Zenoh subs and any liveliness
+   subs.
 2. **`clear_publisher_cache(session=...)`.** Undeclares cached
    `zenoh.Publisher` instances.
 3. **`clear_retention_cache(session=...)`.** Undeclares the retention
    queryable + drops cached payloads.
-4. **`clear_observer(session=...)`.** Stops the presence observer
-   (alive-sub + will-sub).
-5. **`clear_presence_state(session=...)`.** Undeclares the liveliness
-   token + will queryable. **This is the call that fires peers' will
-   synthesis** — the token DELETE propagates over the live transport
-   here.
-6. **`session.close()`.** Tears down the local Zenoh transport.
+4. **`clear_presence_state(session=...)`.** Withdraws every liveliness
+   token the session holds. **This is the call peers see as offline** —
+   the token DELETEs propagate over the live transport here.
+5. **`session.close()`.** Tears down the local Zenoh transport.
 
-The order between steps 5 and 6 is the easy one to get wrong: flipping
-them tears down the transport before the liveliness DELETE escapes,
-which silently breaks subscribers of peer wills. The code has an inline
-comment spelling this out; the test
-`tests/test_release.py::TestReleasePropagatesPeerWill` empirically pins
+The order between steps 4 and 5 is the easy one to get wrong: flipping
+them tears down the transport before the DELETEs escape, and peers see
+the offline only once they notice the session is gone. The code has an
+inline comment spelling this out; the test
+`tests/test__release.py::TestReleasePropagatesPeerOffline` empirically pins
 the invariant via a two-session `connected_pair` fixture.
 
 ## API contract

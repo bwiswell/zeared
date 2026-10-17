@@ -1,8 +1,8 @@
 """Canonical topic render — the one place a slot value becomes a key segment.
 
 Sibling helper inside the ``message`` Pattern B subdir. Every path that
-builds a concrete key goes through here: ``send`` and ``register_will``
-(from the instance), ``QueryContext.reply`` (from the reply instance),
+builds a concrete key goes through here: ``send`` and ``declare_presence``
+(from the instance or caller slots), ``QueryContext.reply`` (from the reply instance),
 ``unretain`` (instance or caller slots), the query getters' selectors, and
 the public ``concrete_topic``. Before 0.3.8 each path rendered from its own
 input and they disagreed for ``Enum``, ``DateTime``, ``TimeDelta`` and

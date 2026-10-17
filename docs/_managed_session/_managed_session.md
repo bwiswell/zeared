@@ -69,6 +69,11 @@ Two detection paths feed one reconnect:
 Both feed a single CAS path (`state IDLE → RECONNECTING`); concurrent
 triggers collapse to one reconnect attempt.
 
+The probe also watches the **router link** (0.4.0): a hub restart drops
+the link without killing the session, so it fires `on_link_lost`, runs the
+re-attach walk and fires `on_link_restored` itself — see
+[`_reconnect.md`](../_reconnect/_reconnect.md#link-re-attach-040).
+
 ## Restoration
 
 After the new raw session opens (with backoff via
@@ -77,11 +82,11 @@ After the new raw session opens (with backoff via
 1. Atomically swap the wrapper's raw reference (`_swap_raw`).
 2. Walk the subscriber registry keyed on `id(managed_session)` and call
    `Subscriber._redeclare(new_raw, managed)` on each. Re-fires retained
-   fetch (dedupe-safe via 0.0.9 `DEDUPE`); re-registers the presence
-   dispatcher.
-3. Walk presence state: `_SessionPresence.replay_to(managed)` re-runs
-   `register_will` for every previously-registered envelope under the
-   NEW zid. Peers see legitimate offline → online.
+   fetch (dedupe-safe via 0.0.9 `DEDUPE`); re-declares the presence
+   watch, if any.
+3. Walk presence state: `_SessionPresence.replay_to(managed)` re-declares
+   every held presence token on the new raw (0.4.0). Peers see the keys go
+   offline, then online.
 4. Quietly close the old raw.
 
 Subscribers opted out via `Cls.on_message(cb, auto_reconnect=False)`
@@ -107,7 +112,19 @@ the dead raw.
 transport errors — callers that want to queue, retry, or drop on
 reconnect can branch on it without losing reach to other exceptions.
 
-## `on_reconnect(cb)` hook
+## `on_reconnect(cb)`, `on_link_lost(cb)`, `on_link_restored(cb)`
+
+Three registries share one driver (0.4.0):
+
+| Signal | Fires when |
+|--------|------------|
+| `on_link_lost` | the routers drop to none while the raw lives, or the raw is found dead (before the reconnect starts) |
+| `on_link_restored` | after the re-attach walk, or after a reconnect's walks and `on_reconnect`'s callbacks; only after a loss, never on `DEAD` |
+| `on_reconnect` | the raw session was swapped and every restore walk ran |
+
+The link pair never fires twice in a row, and a session that never had a
+router never fires it. It doesn't care what caused the loss, so "re-sync
+now" is one registration on `on_link_restored`.
 
 Daemons that need to know a reconnect happened — to log it, refresh
 caller-side caches, re-publish authoritative state, etc. — register a
@@ -140,7 +157,8 @@ log and continue — never break the reconnect itself.
 > or use an `async def` callback (which schedules on the captured loop,
 > not the worker thread).
 
-The cancel handle (`OnReconnectHandle`) mirrors the `Subscriber.close()`
+The cancel handle (`z.CallbackHandle`, one class for all three;
+`OnReconnectHandle` is its pre-0.4.0 alias) mirrors the `Subscriber.close()`
 / `z.batch()` patterns — explicit, no callback-identity ambiguity for
 lambdas / bound methods, no zombie callbacks if the registering object
 dies.
@@ -209,13 +227,14 @@ without restart.
 `retention_ttl` is `ManagedSession`-only — passing it on a raw session
 (`auto_reconnect=False`) raises `TypeError`. Raw sessions have no
 place to stash the per-session value; class-level `RETENTION_TTL` is
-the only knob for them. (Same precedent as `gc_interval`.)
+the only knob for them.
 
 ## Threads per `ManagedSession`
 
 | Thread | Lifetime | Role |
 |--------|----------|------|
-| Probe (optional) | start_probe → _probe_cancel | Polls `is_closed()` / `zid()` every `probe_interval`s; signals worker on detected death. Skipped when `probe_interval ∈ {0, None}`. |
+| Probe (optional) | start_probe → _probe_cancel | Polls `is_closed()` / `zid()` every `probe_interval`s; signals worker on detected death. Also watches the router link and runs the re-attach walk (0.4.0). Skipped when `probe_interval ∈ {0, None}`. |
+| Re-attach walk pool | one walk | Up to `resync_concurrency` short-lived workers (`zeared-resync-*`), only while a walk re-fetches; joined before `on_link_restored` fires. |
 | Reconnect worker | start_probe → _probe_cancel | Single long-lived daemon; blocks on `_reconnect_signal`; runs `_reconnect` on each wake. Coalesces concurrent triggers via Event semantics. |
 
 Test paths that bypass `start_probe` and call `_trigger_reconnect`
@@ -238,15 +257,15 @@ is the underlying `zenoh.Session`; on reconnect we swap in a new one
 and the old becomes invalid. Call `raw()` each time you need the
 current handle.
 
-## New zid on reconnect
+## Presence across a reconnect
 
-Zenoh sessions get a fresh `zid` on every `zenoh.open()`. Our presence
-wills are keyed on zid, so:
+Zenoh sessions get a fresh `zid` on every `zenoh.open()`, and a session's
+liveliness tokens die with it. So:
 
-- The OLD zid's liveliness token DELETE propagates to peers as we
-  reconnect — peers fire our wills locally.
-- The NEW zid registers fresh wills via `_SessionPresence.replay_to`.
-- Peers then see the new zid come online.
+- The old session's tokens go — peers see those keys go offline.
+- The restore walk re-declares every held key on the new raw via
+  `_SessionPresence.replay_to`; the caller's `PresenceToken`s stay valid.
+- Peers then see the keys come back online.
 
 This is correct semantics — for any practical observer, we genuinely
 were offline for the reconnect window. Don't try to suppress the

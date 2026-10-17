@@ -120,23 +120,22 @@ the decode path. Behaviour depends on whether the subscriber registered an
   async-adapted like `cb`, and a raised `on_remove` routes through
   `on_error` as `CallbackError` (with empty payload bytes).
 
-## Presence / LWT dispatch (LIVELINESS classes)
+## Presence feed (`on_online` / `on_offline`, LIVELINESS classes)
 
-When the message class has `LIVELINESS = True`, `Subscriber._declare`
-additionally:
-1. Ensures the session's `_PresenceObserver` is running (one per session,
-   shared by all LIVELINESS subscribers).
-2. Registers an interested-party dispatcher with the observer.
+When `on_online` or `on_offline` is given (0.4.0; `TopicError` unless
+the class has `LIVELINESS = True`), `Subscriber._declare` additionally:
+1. Builds the presence handler (`_build_presence_handler`): a token PUT
+   calls `on_online(meta)`, a DELETE `on_offline(meta)`. `meta` is
+   identity-only — the key's template captures — with `origin` `LIVE`
+   (online) or `WILL` (offline).
+2. Declares one liveliness subscriber per template wildcard, then queries
+   the tokens already live and reports them as online with
+   `origin = REPLAY`.
 
-On a peer's liveliness-token disappearance, the observer iterates its
-stashed wills for that peer and calls each interested dispatcher with a
-synthesised sample. The dispatcher matches the will's `target_key_expr`
-against this class's templates; if it matches, the subscriber's normal
-`dispatch` function fires — the callback sees a regular `cb(msg)` (or
-`cb(msg, meta)`) with `meta.source_info = peer_zid` and
-`meta.origin = Origin.WILL`.
-
-`Subscriber.close()` unregisters from the observer. See [`presence.md`](../presence/presence.md).
+`cb` never sees presence events, and `on_remove` keeps its tombstone
+meaning. `_redeclare` rebuilds the liveliness subscribers after a
+reconnect (replaying the keys online then), and `Subscriber.close()`
+undeclares them. See [`presence.md`](../presence/presence.md).
 
 ## Encoding resolution (inbound)
 

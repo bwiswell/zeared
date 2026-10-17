@@ -28,7 +28,7 @@ the one sharp edge (raw `threading.Thread` does NOT propagate context).
 | `aopen` | `def aopen(cfg) -> _AsyncSessionContextManager` | async-context-managed dispatch on `SessionConfig` |
 | `asend` | `async def asend(msg, *, session=None, topic=None) -> None` | free-function form of `msg.asend(...)` |
 | `asend_batch` | `async def asend_batch(cls, items, *, session=None, topic=None) -> None` | free-function form of `Cls.asend_batch(...)` |
-| `alisten` | `async def alisten(cls, *, session=None, maxsize=0, meta=False) -> AsyncIterator` | async generator yielding messages (or `(msg, meta)` tuples) |
+| `alisten` | `def alisten(cls, *, session=None, maxsize=1024, meta=False) -> Stream` | a [`Stream`](stream.md) of messages (or `(msg, meta)` tuples); bounded, drops the oldest (0.4.0) |
 | `abatch` | `@asynccontextmanager async def abatch()` | async counterpart of `z.batch()` |
 
 ### Async session lifecycle
@@ -76,21 +76,35 @@ ergonomic wins are worth it. See `docs/overview/benchmarks.md`, or run
 
 ```python
 async def listen_forever():
-    async for msg in Telemetry.alisten():
-        process(msg)          # async generator; breaks close the sub
+    async with Telemetry.alisten() as stream:
+        async for msg in stream:
+            process(msg)
 ```
 
-Breaking out of the `async for` (or cancelling the consuming task) runs
-the generator's `finally`, which calls `Subscriber.close()` under the
-hood. No explicit cleanup required.
+`alisten` returns a [`Stream`](stream.md) (0.4.0; an async generator
+before). It declares the subscriber when it is called, so call it inside a
+running loop; anything that arrives before the first iteration waits in
+the stream. `stream.aclose()`, leaving `async with`, or the stream being
+collected after a `break` undeclares the subscriber.
 
-`maxsize=0` (default) gives an unbounded `asyncio.Queue`. A positive
-integer bounds the queue but does **not** apply backpressure: delivery is a
-`put_nowait` scheduled from Zenoh's callback thread and never waits, so a
-message that arrives while the queue is full is **dropped**. asyncio logs
-each drop as an "Exception in callback" (`QueueFull`); there is no drop
-counter. A consumer that can't afford silent loss should stay unbounded and
-keep up, or bridge `on_message` into its own queue and count what it drops.
+**The bound.** `maxsize=1024` by default; `maxsize=0` is unbounded. Delivery
+never applies backpressure (Zenoh's callback thread never waits), so a full
+stream **drops its oldest message** to make room for the new one: a consumer
+that has fallen behind on live state wants the freshest data. Each drop is
+counted on `stream.dropped`, and the first is logged once at `WARNING`;
+nothing is raised. Read `dropped` to account for loss, for example per
+capture window:
+
+```python
+stream = Reading.alisten(maxsize=10_000)
+before = stream.dropped
+...                                   # consume a window
+window_drops = stream.dropped - before
+```
+
+Before 0.4.0, `alisten` was unbounded by default, and a positive `maxsize`
+dropped the *newest* message with an uncounted `QueueFull` logged by
+asyncio for each one. Pass `maxsize=0` to keep the old unbounded behaviour.
 
 `meta=True` (0.2.9) yields `(msg, meta)` tuples instead of bare
 messages — `meta` is the same `ZenohMeta` a 2-arg `on_message` callback

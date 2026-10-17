@@ -58,10 +58,11 @@ Validates and constructs. Raises `TopicError` on:
 
 ### `__zeared/**` namespace reservation
 
-Templates whose first literal segment is `__zeared` collide with
-zeared's internal routing (liveliness tokens at `__zeared/alive/<zid>`,
-will envelopes at `__zeared/will/<zid>/<slug>`, the presence observer's
-subscriptions). Parse-time `TopicError` rather than silent stomping.
+The `__zeared` prefix is reserved for zeared's internal keys. Presence
+used it until 0.4.0 (`__zeared/alive/<zid>`, `__zeared/will/<zid>/<slug>`);
+its tokens sit on contract keys now, and the prefix stays reserved so a
+future internal key can't stomp on a user's. Parse-time `TopicError`
+rather than silent stomping.
 
 Exemption: the unmodified anonymous catch-all forms `**` (universal)
 and `__zeared/**` (diagnostic — "subscribe to all internal traffic

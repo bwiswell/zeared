@@ -12,8 +12,9 @@ methods rather than helper functions taking ``cls``:
   ``send_batch``.
 - ``_MessageAsyncMixin`` (``_message_async.py``) — async siblings:
   ``asend`` / ``asend_batch`` / ``aunretain`` / ``alisten``.
-- ``_MessageWillMixin`` (``_message_will.py``) — LWT registration:
-  ``register_will`` / ``aregister_will``.
+- ``_MessagePresenceMixin`` (``_message_presence.py``) — presence:
+  ``declare_presence`` / ``adeclare_presence`` (0.4.0; ``register_will``
+  and ``aregister_will`` raise a pointer).
 - ``_MessageSubscribeMixin`` (``_message_subscribe.py``) — subscribe
   + introspection: ``on_message`` / ``published_topics``.
 
@@ -35,13 +36,13 @@ from .. import _codec as codec
 from ..effect import Effect, EffectName  # noqa: TC001
 from ._message_async import _MessageAsyncMixin
 from ._message_concrete_topic import _ConcreteTopicDescriptor
+from ._message_presence import _MessagePresenceMixin
 from ._message_query import _MessageQueryMixin
 from ._message_render import _coerce_captures
 from ._message_send import _MessageSendMixin
 from ._message_subscribe import _MessageSubscribeMixin
 from ._message_topic import _MessageTopicMixin
 from ._message_unretain import _UnretainDescriptor
-from ._message_will import _MessageWillMixin
 
 Encoding = Literal['msgpack', 'json']
 
@@ -50,7 +51,7 @@ class Message(
     _MessageTopicMixin,
     _MessageSendMixin,
     _MessageAsyncMixin,
-    _MessageWillMixin,
+    _MessagePresenceMixin,
     _MessageSubscribeMixin,
     _MessageQueryMixin,
     s.Seared,

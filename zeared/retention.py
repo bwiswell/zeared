@@ -40,14 +40,17 @@ def _resolve_retention_ttl(cls: type[Message], session: SessionLike) -> float | 
     return getattr(session, '_retention_ttl', None)
 
 
-# Cache value: ``(raw_bytes, encoding, attachment, inserted_at_monotonic)``.
+# Cache value: ``(raw_bytes, encoding, attachment, inserted_at_monotonic, timestamp)``.
 # ``attachment`` is the per-class schema-attachment payload captured from
 # the original publish (or ``None`` when the class sets no ``SCHEMA``) — it
 # MUST ride back out on the queryable reply so a late subscriber's
 # retained-fetch / ``fetch_retained`` can pass the schema check and decode
 # the snapshot. The monotonic timestamp drives ``_RETENTION_TTL``
-# enforcement at query time and is immune to wall-clock jumps.
-_CacheValue = tuple[bytes, codec.Encoding, bytes | None, float]
+# enforcement at query time and is immune to wall-clock jumps. ``timestamp``
+# (0.4.0) is the Zenoh timestamp the value was published with, or ``None``;
+# the republish on link restore re-puts the value with it, so a subscriber
+# that already holds the value dedupes the copy.
+_CacheValue = tuple[bytes, codec.Encoding, bytes | None, float, 'zenoh.Timestamp | None']
 
 
 class _RetentionCache:
@@ -72,7 +75,7 @@ class _RetentionCache:
     def __init__(self, cls: type[Message], session: SessionLike) -> None:
         self._cls = cls
         self._session = session
-        # concrete_topic → (raw_bytes, encoding, attachment, inserted_monotonic)
+        # concrete_topic → (raw_bytes, encoding, attachment, inserted_monotonic, timestamp)
         self._cache: dict[str, _CacheValue] = {}
         # Trie of cached concrete topics — replaces the O(N) iterate-and-
         # intersect on every incoming query.
@@ -98,6 +101,7 @@ class _RetentionCache:
         raw: bytes,
         encoding: codec.Encoding,
         attachment: bytes | None = None,
+        timestamp: zenoh.Timestamp | None = None,
     ) -> None:
         """Record the last retained payload for ``concrete_topic`` and ensure the class's Queryable(s) are declared.
 
@@ -108,15 +112,52 @@ class _RetentionCache:
 
         Captures ``time.monotonic()`` at the call so ``_handle_query``
         can filter out entries older than ``cls.RETENTION_TTL`` (if set)
-        on read.
+        on read. ``timestamp`` is the one the value was published with, kept
+        for :meth:`republish`.
         """
         self._ensure_queryables()
         now = time.monotonic()
         with self._lock:
             new_entry = concrete_topic not in self._cache
-            self._cache[concrete_topic] = (raw, encoding, attachment, now)
+            self._cache[concrete_topic] = (raw, encoding, attachment, now, timestamp)
             if new_entry:
                 self._index.add(concrete_topic)
+
+    def republish(self) -> int:
+        """Re-put every live entry with its original timestamp and the replay marker (0.4.0).
+
+        Called when this session's link comes back (``on_link_restored``). A
+        value published while the session was detached reached nobody, and a
+        subscriber that re-fetched before this session re-attached missed it
+        too. Re-putting closes that gap: a subscriber that already holds the
+        value dedupes the copy (same timestamp), and one that doesn't receives
+        it as ``Origin.REPLAY``. Entries past ``RETENTION_TTL`` are skipped.
+        Returns how many were re-put; a failed put is logged.
+        """
+        from .meta import _replay_attachment
+
+        ttl = _resolve_retention_ttl(self._cls, self._session)
+        now = time.monotonic()
+        with self._lock:
+            entries = [
+                (concrete, raw, encoding, attachment, ts)
+                for concrete, (raw, encoding, attachment, inserted, ts) in self._cache.items()
+                if ttl is None or (now - inserted) <= ttl
+            ]
+        sent = 0
+        for concrete, raw, encoding, attachment, ts in entries:
+            try:
+                self._session.put(
+                    concrete,
+                    raw,
+                    encoding=codec.MIME[encoding],
+                    attachment=_replay_attachment(attachment),
+                    timestamp=ts,
+                )
+                sent += 1
+            except Exception as exc:  # noqa: BLE001
+                _log.warning('%s: republish failed on %s: %s', self._cls.__name__, concrete, exc)
+        return sent
 
     def delete(self, concrete_topic: str) -> None:
         """Drop the cached entry for ``concrete_topic``.
@@ -225,7 +266,8 @@ class _RetentionCache:
         Uses the trie index — O(query depth × matches) rather than O(N)
         across the whole cache. When ``cls.RETENTION_TTL`` is set,
         entries older than the TTL are pruned inline (lazy expiration —
-        no background thread).
+        no background thread). Each reply carries the value's original
+        timestamp (0.4.0), which is what lets a subscriber dedupe it.
         """
         query_key = str(query.key_expr)
         ttl = _resolve_retention_ttl(self._cls, self._session)
@@ -238,23 +280,28 @@ class _RetentionCache:
                 entry = self._cache.get(c)
                 if entry is None:
                     continue
-                raw, encoding, attachment, inserted = entry
+                raw, encoding, attachment, inserted, ts = entry
                 if ttl is not None and (now - inserted) > ttl:
                     expired.append(c)
                     continue
-                payloads.append((c, raw, encoding, attachment))
+                payloads.append((c, raw, encoding, attachment, ts))
             # Prune expired entries inline — bounded I/O cost amortised
             # across queries.
             for c in expired:
                 if self._cache.pop(c, None) is not None:
                     self._index.remove(c)
-        for concrete, raw, encoding, attachment in payloads:
+        for concrete, raw, encoding, attachment, ts in payloads:
             try:
+                # The reply carries the timestamp the value was published with
+                # (0.4.0), so a subscriber's dedupe drops a replay of a value it
+                # already holds. Before 0.4.0 replies carried none, and every
+                # replay was delivered.
                 query.reply(
                     concrete,
                     raw,
                     encoding=codec.MIME[encoding],
                     attachment=attachment,
+                    timestamp=ts,
                 )
             except Exception as exc:  # noqa: BLE001
                 _log.warning(

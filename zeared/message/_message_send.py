@@ -18,6 +18,16 @@ if TYPE_CHECKING:
     from .message import Message
 
 
+def _new_timestamp(session: object) -> zenoh.Timestamp | None:
+    """A fresh timestamp from ``session``'s clock, or ``None`` to let Zenoh stamp the put."""
+    from .._managed_session import resolve_raw
+
+    try:
+        return resolve_raw(session).new_timestamp()  # ty: ignore[invalid-argument-type]
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class _MessageSendMixin:
     """Sync publish surface for :class:`Message`."""
 
@@ -88,18 +98,23 @@ class _MessageSendMixin:
             )
             return
 
+        # A retained send stamps its put explicitly and keeps the timestamp
+        # with the cached value, for the republish on link restore (0.4.0).
+        timestamp = _new_timestamp(sess) if retain_flag else None
         if retain_flag:
             get_retention_cache(type(self), sess).store(
                 concrete_topic,
                 raw,
                 encoding,
                 attachment=attachment,
+                timestamp=timestamp,
             )
         get_cache(type(self), sess).put(
             concrete_topic,
             raw,
             encoding,
             attachment=attachment,
+            timestamp=timestamp,
         )
 
     @classmethod

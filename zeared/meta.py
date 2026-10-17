@@ -22,12 +22,16 @@ class Origin(enum.StrEnum):
 
     Determined entirely by the local delivery path (never read from the
     wire): the live ``zenoh.Subscriber`` callback, a retained-fetch
-    ``session.get`` reply, or the presence observer's will synthesis.
+    ``session.get`` reply, or a presence event (0.4.0).
+
+    On the presence feed (``on_online`` / ``on_offline``), online arrives as
+    ``REPLAY`` for a key already online when the subscriber (re)started and
+    ``LIVE`` afterwards, and offline always arrives as ``WILL``.
     """
 
     LIVE = 'live'  # delivered by the live zenoh subscriber
-    REPLAY = 'replay'  # from a retention cache (subscribe-time or post-reconnect)
-    WILL = 'will'  # synthesised by the presence observer
+    REPLAY = 'replay'  # from a retention cache, or a key already online (subscribe-time or post-reconnect)
+    WILL = 'will'  # a presence key going offline (on_offline)
 
 
 @s.seared
@@ -48,7 +52,7 @@ class ZenohMeta(s.Seared):
 
     ``issued_at`` is parsed from ``sample.timestamp`` (Zenoh HLC) when
     timestamping is enabled. ``None`` when no timestamp on the sample
-    (synthesised wills, raw publishes pre-0.0.13, etc.).
+    (raw publishes pre-0.0.13, etc.).
 
     ``origin_zid`` is the Zenoh session id of whoever stamped the sample's
     HLC — normally the publisher. It is **attribution, not
@@ -61,9 +65,10 @@ class ZenohMeta(s.Seared):
 
     ``origin`` is the sample's provenance — ``Origin.LIVE`` for a real
     publish through the live subscriber, ``Origin.REPLAY`` for a
-    retained-fetch delivery (subscribe-time or post-reconnect), and
-    ``Origin.WILL`` for a presence-synthesised will. Set by the dispatch
-    layer; ``from_sample`` defaults it to ``LIVE``.
+    retained-fetch delivery (subscribe-time or post-reconnect). On the
+    presence feed it marks a key already online (``REPLAY``), coming online
+    (``LIVE``) or going offline (``WILL``). Set by the dispatch layer;
+    ``from_sample`` defaults it to ``LIVE``.
     """
 
     # fmt: off
@@ -188,19 +193,37 @@ def _parse_attachment_schema(attachment: bytes | None) -> str | None:
     return schema if isinstance(schema, str) else None
 
 
-def build_attachment_schema(schema: str | None) -> bytes | None:
-    """Pack a ``schema`` value into the msgpack attachment shape.
+def _replay_attachment(attachment: bytes | None) -> bytes:
+    """``attachment`` with the republish marker added: ``{..., 'replay': True}`` (0.4.0).
 
-    Inverse of :func:`_parse_attachment_schema` — returns the wire bytes a
-    subscriber's schema check reads, or ``None`` when ``schema`` is unset.
-    Used to stamp the attachment on a synthesised will sample so the
-    presence path passes the same schema check as a live publish (the
-    ``Message._schema_attachment_bytes`` classmethod caches the equivalent
-    for the publish path).
+    A retained value a publisher re-puts when its link comes back carries this
+    so a subscriber's dispatch delivers it as ``Origin.REPLAY``, not as a new
+    live publish. Any ``schema`` already in the attachment is kept.
     """
-    if schema is None:
-        return None
-    return codec.pack({'schema': schema}, 'msgpack')
+    data: dict = {}
+    if attachment is not None:
+        try:
+            decoded = codec.unpack(bytes(attachment), 'msgpack')
+        except Exception:  # noqa: BLE001
+            decoded = None
+        if isinstance(decoded, dict):
+            data.update(decoded)
+    data['replay'] = True
+    return codec.pack(data, 'msgpack')
+
+
+def _is_republish(attachment: object) -> bool:
+    """Whether a sample's attachment carries the republish marker. Cheap when it doesn't."""
+    if attachment is None:
+        return False
+    raw = bytes(attachment)  # ty: ignore[invalid-argument-type]
+    if b'replay' not in raw:
+        return False
+    try:
+        decoded = codec.unpack(raw, 'msgpack')
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(decoded, dict) and decoded.get('replay') is True
 
 
 def from_sample(sample: zenoh.Sample) -> ZenohMeta:

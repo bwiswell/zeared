@@ -67,6 +67,20 @@ class SessionConfig(s.Seared):
         backoff — ``initial_backoff`` doubling up to ``max_backoff``.
         Stop after ``max_attempts`` if set, otherwise retry forever.
 
+    Reconnect knobs (0.4.0), so a config-opened session can be managed:
+      - ``auto_reconnect=True``: :func:`zeared.open` / :func:`zeared.aopen`
+        (and a factory given ``config=``) return a ``ManagedSession``, which
+        reconnects a dead session, watches the router link, re-fetches
+        retained values after a hub restart, and fires ``on_reconnect`` /
+        ``on_link_lost`` / ``on_link_restored``. Peer and client modes only.
+      - ``probe_interval``: seconds between the managed session's health and
+        link checks.
+      - ``resync_jitter`` / ``resync_concurrency``: the re-attach walk waits
+        up to ``resync_jitter`` seconds, then re-fetches on at most
+        ``resync_concurrency`` workers.
+
+    A factory keyword beats the config field when both are given.
+
     Builders (all return a new ``SessionConfig``, originals unchanged):
       - :meth:`replace` — generic field update.
       - :meth:`with_retry` — retry knobs in one call.
@@ -84,6 +98,10 @@ class SessionConfig(s.Seared):
     initial_backoff: float      = s.Float(default=0.1)
     max_backoff:     float      = s.Float(default=30.0)
     max_attempts:    int | None = s.Int(default=None)
+    auto_reconnect:     bool  = s.Bool(default=False)     # 0.4.0: return a ManagedSession
+    probe_interval:     float = s.Float(default=10.0)     # seconds between health / link checks
+    resync_jitter:      float = s.Float(default=2.0)      # re-attach walk: max delay before it
+    resync_concurrency: int   = s.Int(default=4)          # re-attach walk: max concurrent fetches
     zenoh_config_file: str | None = s.Str(default=None)   # JSON5 Zenoh config path
     zenoh_overrides:   dict       = s.Dict(default_factory=dict)
     # fmt: on
@@ -151,6 +169,10 @@ class SessionConfig(s.Seared):
         | ``INITIAL_BACKOFF`` | ``initial_backoff`` | optional; float seconds |
         | ``MAX_BACKOFF`` | ``max_backoff`` | optional; float seconds |
         | ``MAX_ATTEMPTS`` | ``max_attempts`` | optional; int |
+        | ``AUTO_RECONNECT`` | ``auto_reconnect`` | optional; ``'true'``/``'false'`` |
+        | ``PROBE_INTERVAL`` | ``probe_interval`` | optional; float seconds |
+        | ``RESYNC_JITTER`` | ``resync_jitter`` | optional; float seconds |
+        | ``RESYNC_CONCURRENCY`` | ``resync_concurrency`` | optional; int |
         | ``ZENOH_CONFIG_FILE`` | ``zenoh_config_file`` | optional; path to a JSON5 Zenoh config |
 
         ``zenoh_overrides`` is deliberately absent from the env surface —
@@ -171,6 +193,10 @@ class SessionConfig(s.Seared):
             ('INITIAL_BACKOFF', 'initial_backoff', float),
             ('MAX_BACKOFF', 'max_backoff', float),
             ('MAX_ATTEMPTS', 'max_attempts', int),
+            ('AUTO_RECONNECT', 'auto_reconnect', _parse_bool),
+            ('PROBE_INTERVAL', 'probe_interval', float),
+            ('RESYNC_JITTER', 'resync_jitter', float),
+            ('RESYNC_CONCURRENCY', 'resync_concurrency', int),
             ('ZENOH_CONFIG_FILE', 'zenoh_config_file', str),
         ):
             v = os.environ.get(f'{prefix}{env_key}')

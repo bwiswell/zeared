@@ -115,8 +115,7 @@ def resolve_raw(session: SessionLike) -> zenoh.Session:
 
     Accepts either a raw ``zenoh.Session`` or a ``ManagedSession`` wrapper.
     Used by internals that need to reach into Zenoh-only APIs (e.g.
-    ``session.zid()`` for presence wills, observer registries keyed on the
-    raw session's identity).
+    ``liveliness()`` for presence tokens and their subscribers).
     """
     # Late import — ``ManagedSession`` lives in a sibling module.
     from ._managed_session import ManagedSession

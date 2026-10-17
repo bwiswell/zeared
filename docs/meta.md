@@ -82,8 +82,8 @@ for diagnostic use.
 into a UTC `datetime.datetime`. Requires Zenoh timestamping to be
 enabled; the factories (`z.peer()` / `z.client()`) inject
 `timestamping/enabled=true` by default since 0.0.13. Returns `None` when
-no timestamp is available (synthesised wills, raw publishes against a
-session with timestamping disabled).
+no timestamp is available (raw publishes against a session with
+timestamping disabled).
 
 For users who need the raw HLC string (e.g. for cross-replay dedupe
 ordering), `meta.timestamp` carries it unmodified. `meta.issued_at` is
@@ -97,8 +97,8 @@ provenance — *how it reached this subscriber*:
 | Value | Meaning |
 |-------|---------|
 | `Origin.LIVE`   | Delivered by the live zenoh subscriber — a real publish. |
-| `Origin.REPLAY` | Delivered from a retention cache via retained-fetch (at subscribe time or after a reconnect). Cached state, not an event the subscriber witnessed. |
-| `Origin.WILL`   | Synthesised by the presence observer when a peer's liveliness token disappeared. |
+| `Origin.REPLAY` | Delivered from a retention cache via retained-fetch (at subscribe time or after a reconnect), or a publisher's republish on link restore (0.4.0; its attachment carries `{'replay': True}`). Cached state, not an event the subscriber witnessed. On the presence feed: a key already online when the subscriber (re)started. |
+| `Origin.WILL`   | On the presence feed (`on_offline`, 0.4.0): a key going offline. Before 0.4.0 it marked a will synthesised into `cb`. |
 
 The value is determined entirely by the **local delivery path** — it is
 never read from (or written to) the wire, so mixed-version fleets
@@ -112,11 +112,12 @@ def on_state(msg: TagState, meta: z.ZenohMeta):
     if meta.origin is z.Origin.REPLAY:
         seed(msg)         # initial state sync — don't act on it
     else:
-        react(msg)        # live change (or a will)
+        react(msg)        # live change
 ```
 
-Prefer this over the old `issued_at is None` heuristic for detecting
-wills — that is also true for any sample from an unstamped session.
+Presence events never reach `cb`; they arrive on `on_online` /
+`on_offline`, with `origin` `REPLAY` / `LIVE` / `WILL` (see
+[`presence.md`](presence/presence.md)).
 
 ## `from_sample(sample: zenoh.Sample) -> ZenohMeta`
 

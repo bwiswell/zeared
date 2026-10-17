@@ -1,189 +1,148 @@
 # `presence.py`
 
-Session-level Zenoh liveliness tokens + per-session Last-Will-Testament
-(LWT) machinery. A producer calls `msg.register_will()` to stage a
-payload; when the producer's session disappears (graceful close or
-crash), subscribers on `LIVELINESS = True` classes synthesise the will
-locally and dispatch it through the normal decode path.
+Presence as a Zenoh liveliness token at each contract key (0.4.0). A
+publisher declares that one concrete key of a `LIVELINESS = True` class is
+available; subscribers hear the key come online and go offline. This
+replaced the will payloads of earlier releases, which a liveliness token
+can't carry.
 
 ## Opt-in
 
 ```python
 @z.zeared
-class PeerStatus(z.Message):
-    TOPIC = 'peer/{name}/status'
-    LIVELINESS = True                 # opt in on BOTH producer and subscriber sides
-    name:  str = z.Str(required=True)
-    state: str = z.Str(required=True)
+class ServicePresence(z.Message):
+    TOPIC = 'svc/presence/{owner}/{component}/{instance}'
+    RETAINED = True                   # the typed snapshot, if you want one
+    LIVELINESS = True                 # opt in to presence
+    owner:     str  = z.Str(required=True)
+    component: str  = z.Str(required=True)
+    instance:  str  = z.Str(required=True)
+    alive:     bool = z.Bool(default=True)
 ```
 
-Classes without `LIVELINESS = True` pay zero presence overhead. Attempting
-`msg.register_will()` on a non-LIVELINESS class raises `TopicError`.
+## Publishing: `declare_presence`
 
-## Honest-synthesis semantics
+| Call | |
+|------|---|
+| `msg.declare_presence(*, session=None, topic=None)` | holds the instance's own key |
+| `Cls.declare_presence(*, session=None, topic=None, **slots)` | holds the key the slots name; every slot required |
+| `await msg.adeclare_presence(...)` / `await Cls.adeclare_presence(...)` | the same, on a worker thread |
 
-Zenoh has no broker. "The will fires" happens **inside each subscriber**
-by materialising the stashed payload when the peer's liveliness token
-disappears. Non-subscribers never observe the event.
+Each declares a Zenoh liveliness token at the concrete key, rendered by the
+same canonical render `send` uses (so a `/` in a single-segment value
+raises `TopicError`), and returns a `z.PresenceToken`:
 
-This is intentional. Pretending otherwise (faking a broker-side publication)
-would lie about the transport. MQTT migrants who expect "the broker catches
-the will and logs it" will need to rewire — anything that cares about the
-offline signal in zeared must subscribe.
+| `PresenceToken` | |
+|-----------------|---|
+| `key` | the concrete key held |
+| `active` | whether the session still holds it through this handle |
+| `undeclare()` | withdraws the token while the session lives on; idempotent |
+| `with token:` | withdraws on exit |
 
-## New zid on auto-reconnect
+- **One token per key per session.** Declaring a key the session already
+  holds returns the same `PresenceToken`, so one `undeclare()` withdraws it.
+- **The handle survives a reconnect.** It names the key, not the Zenoh
+  token; the restore walk re-declares the key on the new session, and a
+  later `undeclare()` withdraws that one.
+- **Closing, crashing or `z.release` withdraws every token** the session
+  holds; peers see the keys go offline.
+- `LIVELINESS = True` is required (`TopicError` otherwise).
 
-A `ManagedSession` (see [`_managed_session.md`](../_managed_session/_managed_session.md))
-gets a fresh Zenoh `zid` on each underlying `zenoh.open()` — this is
-how Zenoh works, not a bug. On reconnect:
+`register_will` / `aregister_will` were removed in 0.4.0. Reading either
+raises `AttributeError` with a pointer to `declare_presence`, so
+`hasattr(Cls, 'register_will')` reports them gone.
 
-1. Peers see the OLD zid's liveliness token DELETE — they synthesise our
-   wills locally (the offline event fires).
-2. We replay every registered will under the NEW zid via
-   `_SessionPresence.replay_to`.
-3. Peers see the NEW zid come online with fresh wills.
+## Subscribing: `on_online` / `on_offline`
 
-Net effect from a peer's perspective: we genuinely WERE offline for the
-reconnect window. Anyone watching for liveliness changes sees a clean
-offline → online transition. Don't try to suppress this — it's correct
-semantics.
+```python
+def online(meta: z.ZenohMeta):  ...   # meta.captures: the key's slots
+def offline(meta: z.ZenohMeta): ...
 
-## Graceful close vs crash
+ServicePresence.on_message(handle_record, on_online=online, on_offline=offline)
+```
 
-Zenoh liveliness drops on both `session.close()` and process crash. zeared
-doesn't distinguish — the will fires either way. If you need different wire
-values for graceful vs crashed shutdown, publish the graceful value
-explicitly before calling `close()`.
+| Event | Callback | `meta.origin` |
+|-------|----------|---------------|
+| a key already online when the subscriber started (or after its reconnect) | `on_online` | `Origin.REPLAY` |
+| a key coming online afterwards | `on_online` | `Origin.LIVE` |
+| a key going offline | `on_offline` | `Origin.WILL` |
 
-This is the right behaviour for our use cases: the publisher author writes
-the will payload, so "crashed offline" and "graceful offline" converge on
-the same content by design.
+- **Identity only.** A token carries no payload, so the event is a
+  `ZenohMeta` whose `captures` hold the key's template slots (coerce them
+  with `Cls.coerce_captures`).
+- **Separate feeds.** `cb` never sees presence events; the typed "up" is
+  your retained record. `on_remove` stays the tombstone feed: a deletion
+  (`unretain`) and an offline are different facts.
+- **`LIVELINESS = True` classes only** (`TopicError` otherwise). `async def`
+  callbacks are supported.
+- **How it works:** the subscriber declares a liveliness subscriber per
+  template wildcard, then queries the tokens already live (dispatched as
+  `REPLAY`). A token that appears in between is reported twice, which is
+  harmless. A session's own tokens are delivered to its own subscribers.
+- `alisten` yields typed messages only; it never yields presence events.
+
+## Semantics
+
+**Tokens aggregate by key.** To an observer that holds none itself, a key
+reads online when its first token appears and offline when its last one
+goes, from whichever sessions held them (checked on `eclipse-zenoh` 1.9.0
+and 1.10.1). A second holder therefore never causes a false offline. One
+exception: a session that holds a key *and* watches it sees the key go
+offline when another holder leaves, though it still holds it. That only
+arises when two sessions claim one identity.
+
+**Only subscribers see it.** Zenoh has no broker to archive an offline
+event; anything that needs it subscribes.
+
+**Graceful close and crash look the same.** Both withdraw the tokens.
+Publish a final record before closing if you want them to differ.
+
+**A reconnect reads as offline then online** for the keys a session holds:
+the old session's tokens went with it, and the restore walk re-declares
+them after the swap. (If the old session was still alive when the new
+token arrived, aggregation hides the flap.)
+
+**A hub restart reads as offline then online for every remote key.** When
+the link to the hub drops, Zenoh reports every token it learned through
+the hub as gone, and as back once the link returns. That's true — the
+session can't see those peers — and zeared doesn't suppress it.
+`on_link_lost` fires first, so a consumer that wants "unknown" rather than
+"down" can hold its rendering until `on_link_restored`.
+
+**ACL.** A session that holds presence needs `liveliness_token` on its
+contract keys. The `__zeared/alive/**` and `__zeared/will/**` keys of
+earlier releases are gone; the `__zeared` prefix stays reserved for
+zeared's internals.
+
+**Trust.** The token model makes availability ACL-expressible per key, not
+authenticated: until the hub enforces an ACL, anyone can declare a token
+on any key.
 
 ## Architecture
 
-### Key-expression namespace
+### `PresenceToken` (`presence.py`)
 
-```
-__zeared/alive/<zid>                  liveliness token — one per session
-__zeared/will/<zid>/<slug>            retained will envelope — one per will
-```
+The handle `declare_presence` returns. It holds the `_SessionPresence` and
+the key, never the Zenoh token, so a reconnect can swap the token under it.
 
-`<zid>` is the session's own Zenoh ID. `<slug>` is a deterministic SHA1
-prefix of `f'{cls_qualname}:{concrete_topic}'`, 16 hex chars — stable
-across re-registrations of the same will.
+### `_SessionPresence` (`_presence_session.py`)
 
-### `_WillEnvelope` — reserved wire shape
+Per-session state: `concrete key → (zenoh.LivelinessToken, PresenceToken)`,
+created on the first `declare_presence`. `declare`, `undeclare`, `holds`,
+`keys`, `replay_to(new_session)` (the reconnect walk's re-declare; handles
+stay valid) and `drop()`. The module registry is keyed on `id(session)`:
+`get_presence(session)` and `clear_presence_state(*, session=None)`.
 
-```python
-@s.seared
-class _WillEnvelope(s.Seared):
-    source_zid:      str        = s.Str(required=True)
-    target_key_expr: str        = s.Str(required=True)
-    encoding:        str        = s.Str(required=True)
-    payload:         bytes      = s.Bytes(required=True)
-    schema:          str | None = s.Str(default=None)
-```
+### The subscriber side (`subscriber/`)
 
-Serialised on `__zeared/will/<zid>/<slug>`. The envelope wire encoding
-follows `zeared.debug` symmetrically: msgpack normally, JSON when the
-debug flag is set. Publisher, queryable replies, and subscriber-side
-decode all read the chosen encoding off the sample's encoding hint, so
-the three sides always agree. The user payload *inside* the envelope
-continues to honor `cls.ENCODING` independently. Subscribers decode the
-envelope, match `target_key_expr` against their class templates, and (on
-liveliness DELETE for `<source_zid>`) synthesise a sample with the payload.
-Synthesised samples dispatch with `meta.origin = Origin.WILL` (0.2.9) —
-the reliable way for a 2-arg callback to recognise a will, replacing the
-old `issued_at is None` heuristic (which is also true for any sample from
-an unstamped session).
-
-`schema` (0.2.4) carries the registering class's `SCHEMA` value so the
-synthesised sample can be re-stamped with the attachment a live publish
-would carry (`build_attachment_schema` rebuilds it in `_SynthesizedSample`).
-Without it a schema-checking subscriber sees `None`, mismatches the class's
-value, and silently drops the will — the will-path twin of the retention
-schema-attachment bug fixed in 0.2.3. `default=None` keeps envelopes from
-pre-0.2.4 peers (which omit the key) decodable.
-
-### `_SessionPresence` — per-session state
-
-- Holds one liveliness token + one queryable + a dict of stashed will
-  envelopes plus a parallel `_PrefixIndex` trie keyed on full will keys.
-- Both the token and queryable are declared lazily on the first
-  `register_will()` call. Sessions that never register wills pay nothing.
-- The queryable serves late-joining subscribers: they issue
-  `session.get(__zeared/will/**)` at observer startup and fetch already-
-  registered wills across the network. Query-time matching uses the trie
-  rather than an O(N) iterate-and-intersect loop. See
-  [`_prefix_index.md`](../_prefix_index.md).
-
-### `_PresenceObserver` — per-session subscriber-side machinery
-
-Declared on the first `LIVELINESS = True` subscription on a session:
-
-- One liveliness subscriber on `__zeared/alive/**` with `history=True`
-  (delivers currently-alive tokens as initial PUTs).
-- One regular subscriber on `__zeared/will/**` for live will updates.
-- A background thread running the initial `session.get(__zeared/will/**)`
-  so `Subscriber._declare` stays snappy.
-- Stashes wills indexed by `peer_zid`; on liveliness DELETE for a peer,
-  fans each stashed envelope out to every interested-party dispatcher.
-- Runs a daemon GC thread that sweeps the stash every `gc_interval`
-  seconds (60s default; configurable via `z.peer(gc_interval=...)` or
-  `z.client(gc_interval=...)` — stashed on the `ManagedSession` wrapper
-  and read by `_PresenceObserver.__init__`). The sweep drops any
-  bucket whose `peer_zid` is no longer in `_alive_zids`. This guards
-  against a missed liveliness DELETE (e.g. during a brief network
-  partition) leaking the entry forever; the periodic reconciliation is
-  cheap and self-healing. The thread starts in `start()` and is
-  cancelled in `stop()`. Raw `zenoh.Session` callers fall back to the
-  module default — `ManagedSession` is the strategic path for
-  per-session tuning.
-
-### Synthesised sample shim
-
-`_SynthesizedSample` is a minimal stand-in for `zenoh.Sample` — exposes
-`key_expr`, `payload`, `kind` (= `PUT`), `encoding`, `timestamp` (None),
-`source_info` (= the peer's zid), `attachment` (None). The subscriber's
-normal `dispatch` function treats it identically to a real sample.
-
-## User API
-
-### `msg.register_will(*, session=None, topic=None)`
-
-Requires `LIVELINESS = True` on the class. Renders the target concrete
-topic the same way `send()` does (supports the restrictive `topic=`
-override for multi-template classes). Publishes the envelope retained.
-
-Re-registration with the same `(cls, concrete_topic)` overwrites — slug
-is deterministic.
-
-### `await msg.aregister_will(*, session=None, topic=None)`
-
-Async counterpart. Dispatches the sync call on a thread pool worker.
-
-### No `unregister_will` in MVP
-
-Re-register with a different payload to change the will; there's no
-explicit removal. A future API can add this when a use case surfaces.
-
-## What's NOT here (on purpose)
-
-- **Retention is NOT auto-transitioned on peer death.** Registering a will
-  does not touch the retention cache, and the two are independent: the
-  will fires, but the dead peer's retained values simply vanish with it —
-  the cache and its queryable lived in that process. A subscriber joining
-  afterwards gets *nothing* from the retained-fetch for those topics
-  (unless another live peer publishes them). See
-  [`retention.md`](../retention.md).
-- **No `Cls.on_presence(on_online, on_offline)` API.** Synthesised wills
-  flowing through `on_message` / `alisten` are the primary surface. An
-  explicit presence-change API can land later if consumers actually need
-  the distinct signal.
+`Subscriber._declare` builds the handler (`_build_presence_handler`) and its
+liveliness subscribers when `on_online` / `on_offline` are given;
+`_redeclare` rebuilds them after a reconnect, and `close()` undeclares
+them. There is no cross-session observer.
 
 ## Module helpers
 
-- `get_presence(session) -> _SessionPresence` — idempotent per-session state.
-- `get_observer(session) -> _PresenceObserver` — idempotent observer.
-- `clear_presence_state(*, session=None)` — drop state + undeclare tokens + queryables.
-- `clear_observer(*, session=None)` — stop observers.
+| Name | |
+|------|---|
+| `get_presence(session)` | the session's `_SessionPresence`, created on demand |
+| `clear_presence_state(*, session=None)` | withdraws a session's tokens (all sessions without `session=`); `z.release` calls it before closing the session |

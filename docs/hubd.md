@@ -4,8 +4,8 @@
 between nodes which can't reach each other directly — e.g. two peers behind
 NAT, both outbound-only, each connecting *out* to the hub. It relays pub/sub,
 queries, and liveliness, so everything zeared needs works through it:
-retention / queryables (which route as queries) and presence / LWT (which
-route as liveliness). The routing happens in Zenoh's Rust core; the Python
+retention / queryables (which route as queries) and presence (which
+routes as liveliness). The routing happens in Zenoh's Rust core; the Python
 main thread only holds the session open and waits for a shutdown signal.
 
 Named `hubd` (the daemon) to pair with the `zeared.hub()` factory it wraps —
