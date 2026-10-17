@@ -9,7 +9,7 @@ nodes on other versions, retained state and access rules can see.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.4.1 — unreleased
+## 0.4.1 — 2026-10-17
 
 **A failed query reply no longer holds the query open.**
 
