@@ -124,6 +124,22 @@ class TestFinaliseSessionRawSession:
         with pytest.raises(TypeError, match='requires auto_reconnect=True'):
             peer(retention_ttl=10.0)
 
+    @pytest.mark.parametrize(
+        ('factory', 'kwargs'),
+        [(peer, {}), (client, {'router': 'tcp/127.0.0.1:7447'})],
+        ids=['peer', 'client'],
+    )
+    def test_it_raises_before_anything_opens(self, monkeypatch, factory, kwargs):
+        # Until 0.4.2 the check ran after the session had opened, which leaked it.
+        import zenoh
+
+        opened: list = []
+        monkeypatch.setattr(zenoh, 'open', lambda cfg: opened.append(cfg) or object())
+        refusal = rf'^{factory.__name__}\(retention_ttl=\.\.\.\) requires auto_reconnect=True'
+        with pytest.raises(TypeError, match=refusal):
+            factory(retention_ttl=10.0, **kwargs)
+        assert opened == []
+
 
 class TestBuildConfigForPeer:
     """Pin: factory injects timestamping by default; respects user-provided config."""

@@ -64,6 +64,8 @@ lines as it lands, and the entry is dated when that version is released.
 - **A subscription that fails to declare stops its watchdog.** With `startup_grace`, the watchdog's thread starts
   when the subscription is built, and a declare that then failed (a Zenoh subscriber, or the presence watch) left it
   running, so `on_quiet` fired for a subscription that was never made. Since 0.1.0.
+- **`peer(retention_ttl=…)` or `client(retention_ttl=…)` without `auto_reconnect` raises before opening.** It raised
+  the same `TypeError` after the session had opened, and the session was never closed. Since 0.1.0.
 
 ## 0.4.1 — 2026-10-17
 

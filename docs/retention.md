@@ -178,7 +178,8 @@ Resolved per-query via `retention._resolve_retention_ttl(cls, session)`,
 so runtime mutation of either knob propagates without restart.
 
 The factory kwarg is `ManagedSession`-only — passing
-`retention_ttl=X` to `peer(auto_reconnect=False)` raises `TypeError`.
+`retention_ttl=X` to `peer(auto_reconnect=False)` raises `TypeError`,
+before any session opens (0.4.2).
 Class-level `RETENTION_TTL` is the only knob for raw sessions.
 
 ## Deduplication

@@ -87,10 +87,13 @@ raw `zenoh.Session`.
 - `_resolve_retry_knobs(config, retry, initial_backoff, max_backoff,
   max_attempts)` — layer kwargs over the config's retry knobs; shared
   by `peer` / `client` / `hub`.
+- `_check_retention_ttl(retention_ttl, *, auto_reconnect, factory_name)`
+  — before opening: reject `retention_ttl=` on a session that won't be
+  managed (no place to stash a session-level fallback). Shared by
+  `peer` / `client` (0.4.2; it ran after opening before, and leaked the
+  session).
 - `_finalise_session(raw, _open, label, *, ...)` — post-open: return
-  raw or wrap as `ManagedSession`; reject `retention_ttl=` on raw
-  sessions (no place to stash a session-level fallback). Shared by
-  `peer` / `client`.
+  raw or wrap as `ManagedSession`. Shared by `peer` / `client`.
 - `_wrap_managed(raw, open_fn, label, ...)` — instantiate
   `ManagedSession` and call `start_probe` to spawn the probe +
   reconnect worker threads.
@@ -101,4 +104,6 @@ raw `zenoh.Session`.
 raw `zenoh.Session` objects can't accept attribute assignment, so
 there's nowhere to stash a per-session TTL fallback. Either set
 `auto_reconnect=True` (so the kwarg lands on the `ManagedSession`
-wrapper) or use class-level `Cls.RETENTION_TTL`.
+wrapper) or use class-level `Cls.RETENTION_TTL`. It raises before
+anything opens (0.4.2); until then the session opened first, and the
+error leaked it.
