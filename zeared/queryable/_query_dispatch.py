@@ -80,18 +80,27 @@ def _reply_one(ctx: QueryContext, item: Any, msg_cls: type[Message], on_error: C
     ``ctx.reply`` the same way: as a *reply* failure (this item is lost,
     the rest of the stream continues), distinct from the *handler* failure
     raised by the generator itself.
+
+    ``wrapped`` is deleted before returning. Its ``__cause__``'s traceback
+    holds this frame, which holds ``wrapped`` and ``ctx``: a cycle only the
+    GC could free, and until it ran the ``zenoh.Query`` stayed open, so the
+    getter waited out its whole timeout and took a ``Timeout`` error reply
+    (fixed in 0.4.1).
     """
     try:
         ctx.reply(item)
     except Exception as exc:  # noqa: BLE001
         wrapped = QueryableError(f'{msg_cls.__name__}: query reply failed: {exc}')
         wrapped.__cause__ = exc
-        if not _safe_on_error(on_error, wrapped, msg_cls):
-            _log.warning(
-                '%s: query reply failed: %s',
-                msg_cls.__name__,
-                exc,
-            )
+        try:
+            if not _safe_on_error(on_error, wrapped, msg_cls):
+                _log.warning(
+                    '%s: query reply failed: %s',
+                    msg_cls.__name__,
+                    exc,
+                )
+        finally:
+            del wrapped
 
 
 def _reply_result(
@@ -176,12 +185,15 @@ def _build_query_dispatch(
         except Exception as exc:  # noqa: BLE001
             wrapped = QueryableError(f'{msg_cls.__name__}: failed to build query context: {exc}')
             wrapped.__cause__ = exc
-            if not _safe_on_error(on_error, wrapped, msg_cls):
-                _log.warning(
-                    '%s: failed to build query context: %s',
-                    msg_cls.__name__,
-                    exc,
-                )
+            try:
+                if not _safe_on_error(on_error, wrapped, msg_cls):
+                    _log.warning(
+                        '%s: failed to build query context: %s',
+                        msg_cls.__name__,
+                        exc,
+                    )
+            finally:
+                del wrapped  # this frame holds ``query``: the cycle ``_reply_one`` breaks
             return
 
         if is_async:

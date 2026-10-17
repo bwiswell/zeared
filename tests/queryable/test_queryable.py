@@ -7,6 +7,7 @@ retention's queryable answers a same-session retained-fetch.
 
 from __future__ import annotations
 
+import gc
 import logging
 import time
 
@@ -310,6 +311,82 @@ class TestErrorsAndConflicts:
         z.session = session
         with pytest.raises(z.TopicError):
             Ret.on_query(lambda ctx: None)
+
+
+class TestFailedReply:
+    """A reply that fails, or a context that fails to build, lets the query finish (0.4.1).
+
+    Each failure path wrapped its exception in a local whose ``__cause__``'s
+    traceback held that same frame, which held the ``zenoh.Query``: a cycle
+    only the GC could free. Until it ran the query stayed open, so a getter
+    against an idle server waited out its whole timeout, then took a
+    ``Timeout`` error reply after the good replies. The GC is off here, so
+    only breaking the cycle can end the query early.
+    """
+
+    @pytest.fixture
+    def no_gc(self):
+        gc.disable()
+        try:
+            yield
+        finally:
+            gc.enable()
+
+    @pytest.mark.parametrize('form', ['list', 'generator'])
+    def test_a_failed_reply_lets_the_query_finish(self, session, no_gc, form):
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/failed/{name}'
+            name: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        rows = [Row(name='a', v=0), Row(name='x/y', v=1), Row(name='b', v=2)]  # 'x/y' splits its key
+
+        def as_list(ctx):
+            return rows
+
+        def as_generator(ctx):
+            yield from rows
+
+        failures: list[type] = []
+        errors: list[Exception] = []
+        z.session = session
+        handler = as_list if form == 'list' else as_generator
+        with Row.on_query(handler, on_error=lambda e, raw: failures.append(type(e.__cause__))):
+            wait()
+            started = time.monotonic()
+            res = Row.query(timeout=2.0, on_error=lambda e, raw: errors.append(e))
+            elapsed = time.monotonic() - started
+
+        assert sorted(m.v for m in res) == [0, 2]
+        assert failures == [z.TopicError]
+        assert not errors, errors
+        assert elapsed < 1.0, f'the getter waited {elapsed:.2f}s for a query the server had finished'
+
+    def test_a_context_that_fails_to_build_lets_the_query_finish(self, session, no_gc, monkeypatch):
+        @z.zeared
+        class Q(z.Message):
+            TOPIC = 'q/noctx/{id}'
+            id: str = z.Str(required=True)
+
+        def cannot_build(query, msg_cls):
+            msg = 'cannot build context'
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr('zeared.queryable._query_dispatch.QueryContext', cannot_build)
+        failures: list[str] = []
+        errors: list[Exception] = []
+        z.session = session
+        with Q.on_query(lambda ctx: None, on_error=lambda e, raw: failures.append(str(e))):
+            wait()
+            started = time.monotonic()
+            res = Q.query(id='a', timeout=2.0, on_error=lambda e, raw: errors.append(e))
+            elapsed = time.monotonic() - started
+
+        assert res == []
+        assert failures == ['Q: failed to build query context: cannot build context']
+        assert not errors, errors
+        assert elapsed < 1.0, f'the getter waited {elapsed:.2f}s for a query the server had dropped'
 
 
 class TestEncodingAndSchema:
