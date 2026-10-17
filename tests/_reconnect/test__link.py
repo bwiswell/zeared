@@ -9,7 +9,7 @@ import threading
 import time
 
 from zeared._managed_session._on_reconnect_mixin import _OnReconnectMixin
-from zeared._reconnect._link import _check_link, _note_routers, _run_link_walk
+from zeared._reconnect._link import _check_link, _link_lost, _link_restored, _note_routers, _run_link_walk
 from zeared.subscriber import _subscribers, _subscribers_lock
 
 
@@ -256,3 +256,54 @@ class TestRepublishOnRestore:
             retention_registry.pop(mine, None)
             retention_registry.pop(other, None)
         assert order == ['republish', 'walk', 'restored']
+
+
+class TestOneRestorePerLoss:
+    """The probe and a reconnect can both restore the link: the first claims it, under
+    the session lock, and the signals stay paired."""
+
+    def setup_method(self):
+        _FakeSub.active = 0
+        _FakeSub.peak = 0
+
+    @staticmethod
+    def _lost() -> _FakeManaged:
+        m = _FakeManaged()
+        m.routers('r1')
+        _note_routers(m)
+        m.routers()
+        _check_link(m)
+        assert m.signals == ['lost']
+        return m
+
+    def test_a_restore_during_another_is_a_no_op(self):
+        m = self._lost()
+        sub = _FakeSub(delay=0.3)
+        _register(m, [sub])
+        try:
+            first = threading.Thread(target=_link_restored, args=(m,))
+            first.start()
+            time.sleep(0.1)  # inside the first restore's walk
+            _link_restored(m, walk=False)
+            first.join()
+        finally:
+            _unregister(m)
+        assert m.signals == ['lost', 'restored']
+        assert sub.calls == 1
+        assert m._link_state == 'up'
+
+    def test_a_loss_during_the_walk_cancels_that_restore(self):
+        m = self._lost()
+        _register(m, [_FakeSub(delay=0.3)])
+        try:
+            first = threading.Thread(target=_link_restored, args=(m,))
+            first.start()
+            time.sleep(0.1)
+            _link_lost(m)  # the session died mid-walk: a reconnect starts
+            first.join()
+            assert m.signals == ['lost']  # still the one loss, as callbacks saw it
+            assert m._link_state == 'lost'
+            _link_restored(m, walk=False)  # the reconnect's own restore
+        finally:
+            _unregister(m)
+        assert m.signals == ['lost', 'restored']

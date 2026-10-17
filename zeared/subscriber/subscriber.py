@@ -41,26 +41,52 @@ if TYPE_CHECKING:
 _log = logging.getLogger('zeared.subscriber')
 
 
+def _ignore_token(_sample: zenoh.Sample) -> None:
+    """The keepers' callback: their history is for the session, not for the handler."""
+
+
+def _undeclare_all(subs: list) -> None:
+    for sub in subs:
+        with contextlib.suppress(Exception):
+            sub.undeclare()
+
+
+def _declare_liveliness_subs(
+    raw: zenoh.Session, tpls: Any, handler: Callable[..., None], msg_cls: type, *, history: bool
+) -> list:
+    """One liveliness subscriber per template; a failure undeclares the ones made and raises ``SubscriptionError``."""
+    subs: list = []
+    try:
+        for tpl in tpls.all:
+            subs.append(raw.liveliness().declare_subscriber(tpl.wildcard, handler, history=history))  # noqa: PERF401  (partial list drives rollback below)
+    except Exception as e:
+        _undeclare_all(subs)
+        msg = f'{msg_cls.__name__}: failed to declare presence subscriber: {e}'
+        raise SubscriptionError(msg) from e
+    return subs
+
+
 def _watch_presence(raw: zenoh.Session, tpls: Any, handler: Callable[..., None], msg_cls: type) -> tuple:
     """Declare a liveliness subscriber per template wildcard, then replay the keys already online.
 
     Subscribe first, then ``get``: a token that appears in between is reported
     twice (``LIVE``, then ``REPLAY``), which is harmless since online is
-    idempotent, where the other order could miss it. ``history=True`` would
-    replay too, but can't mark which PUTs are history.
+    idempotent, where the other order could miss it.
+
+    Then a *keeper* per template: a second liveliness subscriber, declared
+    with ``history=True`` and a callback that ignores everything. In client
+    mode the router declares a token to a session only when one of its
+    subscribers asks for history, and a session withdraws, when its link
+    drops, only the tokens it was declared. Without the keepers, a key the
+    ``get`` reported would never go offline when the hub dies, though a key
+    first seen live would. The handler's own subscribers can't take
+    ``history=True`` themselves: their history PUTs can't be told from live
+    ones, and a ``get`` issued just after such a declaration comes back
+    empty, so nothing could be marked ``REPLAY``.
     """
     from ..meta import Origin
 
-    subs: list = []
-    try:
-        for tpl in tpls.all:
-            subs.append(raw.liveliness().declare_subscriber(tpl.wildcard, handler))  # noqa: PERF401  (partial list drives rollback below)
-    except Exception as e:
-        for sub in subs:
-            with contextlib.suppress(Exception):
-                sub.undeclare()
-        msg = f'{msg_cls.__name__}: failed to declare presence subscriber: {e}'
-        raise SubscriptionError(msg) from e
+    subs = _declare_liveliness_subs(raw, tpls, handler, msg_cls, history=False)
     for tpl in tpls.all:
         try:
             replies = raw.liveliness().get(tpl.wildcard)
@@ -71,7 +97,12 @@ def _watch_presence(raw: zenoh.Session, tpls: Any, handler: Callable[..., None],
             ok = reply.ok if hasattr(reply, 'ok') else None
             if ok is not None:
                 handler(ok, origin=Origin.REPLAY)
-    return tuple(subs)
+    try:
+        keepers = _declare_liveliness_subs(raw, tpls, _ignore_token, msg_cls, history=True)
+    except SubscriptionError:
+        _undeclare_all(subs)
+        raise
+    return (*subs, *keepers)
 
 
 def _start_presence(  # noqa: PLR0913, PLR0917

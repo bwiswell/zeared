@@ -97,7 +97,10 @@ a reconnect's restore too.
 subscriber on the session that replays (`RETAINED`, `retained_fetch`,
 `auto_reconnect`): `Subscriber._replay_retained`, no redeclare, replies
 delivered as `REPLAY` and dedupe-safe. Presence needs no step: tokens come
-back through the liveliness subscribers themselves.
+back through the liveliness subscribers themselves (the presence watch's
+`history=True` keeper is what makes a client session learn, and so lose
+and regain, every token the router knows; see
+[`presence.md`](../presence/presence.md#the-subscriber-side-subscriber)).
 
 - With no subscriber to replay, it returns at once — no jitter.
 - Otherwise it waits `random.uniform(0, resync_jitter)` (default 2 s,
@@ -109,10 +112,24 @@ back through the liveliness subscribers themselves.
 - `on_link_restored` fires once every task has finished; failures are
   logged.
 
-It runs on the probe thread, so walks never overlap. The reconnect walk is
-unchanged (serial, no jitter): a reconnect is a local event, not
-fleet-correlated. `_reconnect` fires `on_link_lost` before it opens a new
-raw and `on_link_restored` after `on_reconnect`'s callbacks.
+It runs on the probe thread, so two link walks never overlap. The
+reconnect walk is unchanged (serial, no jitter): a reconnect is a local
+event, not fleet-correlated. `_reconnect` fires `on_link_lost` before it
+opens a new raw and `on_link_restored` after `on_reconnect`'s callbacks.
+
+**One restore per loss.** Two paths restore the link, the probe and a
+reconnect, so:
+- the reconnect sets `_restoring` for its whole run, and the probe skips
+  its link check meanwhile. After the swap the state already reads
+  `IDLE`, and a tick that saw routers then would otherwise restore the
+  link alongside the restore walks, firing `on_link_restored` before
+  `on_reconnect`, or twice;
+- `_link_restored` claims the transition under the session lock
+  (`_link_state` goes `'lost'` → `'restoring'` → `'up'`), so a second
+  caller returns. A loss while a restore is in flight sets `'lost'`
+  again without firing `on_link_lost` (callbacks never saw the link come
+  back), and the in-flight restore then fires nothing: the loss's own
+  restore will.
 
 ## Restoration order
 

@@ -10,10 +10,12 @@ exercises a real session-close + probe-driven recovery.
 from __future__ import annotations
 
 import contextlib
+import sys
 import threading
+import time
 
 import pytest
-from conftest import _peer_session, wait
+from conftest import _peer_session, wait, wait_until
 
 import zeared as z
 from zeared._managed_session import ManagedSession, resolve_raw
@@ -1195,6 +1197,58 @@ class TestLinkSignalsAroundAReconnect:
                 m._teardown(call_close=False)
             with contextlib.suppress(Exception):
                 new_raw.close()
+
+    def test_the_probe_leaves_a_restoring_reconnect_alone(self, session, monkeypatch):
+        """After the swap the state reads IDLE while the restore still runs: the probe skips its link check."""
+        checks: list[bool] = []
+        monkeypatch.setattr(sys.modules['zeared._reconnect._reconnect'], '_check_link', lambda m: checks.append(True))
+        m = _make_managed(session, probe_interval=0.02)
+        try:
+            m._restoring = True
+            start_probe(m)
+            wait(0.2)
+            assert checks == []
+            m._restoring = False
+            wait(0.2)
+            assert checks
+        finally:
+            with contextlib.suppress(Exception):
+                m._teardown(call_close=False)
+
+    def test_a_slow_restore_still_restores_once_after_on_reconnect(self, restartable_hub, monkeypatch):
+        """End to end, with a router: a probe tick inside the restore window used to restore the
+        link itself, firing ``on_link_restored`` before ``on_reconnect`` (or twice)."""
+        reconnect_mod = sys.modules['zeared._reconnect._reconnect']
+        restore_queryables = reconnect_mod._restore_queryables
+
+        def slow_restore(managed: ManagedSession) -> None:
+            time.sleep(0.5)  # a restore with plenty to do
+            restore_queryables(managed)
+
+        monkeypatch.setattr(reconnect_mod, '_restore_queryables', slow_restore)
+
+        @z.zeared
+        class Val(z.Message):
+            TOPIC = 'reco/slowrestore/{k}'
+            RETAINED = True
+            k: str = z.Str(required=True)
+
+        hub = restartable_hub.start()
+        Val(k='a').send(session=hub)
+        client = z.client(restartable_hub.endpoint, auto_reconnect=True, probe_interval=0.05, resync_jitter=0)
+        order: list[str] = []
+        client.on_link_lost(lambda _s: order.append('lost'))
+        client.on_reconnect(lambda _s: order.append('reconnect'))
+        client.on_link_restored(lambda _s: order.append('restored'))
+        try:
+            Val.on_message(lambda m: None, session=client)
+            wait(0.3)
+            client.raw().close()  # the session dies; the probe triggers the reconnect
+            wait_until(lambda: 'restored' in order, 5)
+            wait(0.5)
+            assert order == ['lost', 'reconnect', 'restored']
+        finally:
+            z.release(session=client)
 
     def test_a_dead_session_never_restores(self, session):
         def failing_open():

@@ -69,11 +69,17 @@ def _check_link(managed: ManagedSession) -> None:
 
 
 def _link_lost(managed: ManagedSession) -> None:
-    """Mark the view stale and fire ``on_link_lost``; a no-op if already lost."""
-    if managed._link_state == 'lost':
-        return
-    managed._link_state = 'lost'
-    managed._fire('link_lost')
+    """Mark the view stale and fire ``on_link_lost``; a no-op if already lost.
+
+    A loss while a restore is in flight (``'restoring'``) cancels that
+    restore, which then fires nothing, and fires nothing itself: callbacks
+    never saw the link come back, so to them it is still the same loss, and
+    the signals stay paired.
+    """
+    with managed._lock:
+        state, managed._link_state = managed._link_state, 'lost'
+    if state == 'up':
+        managed._fire('link_lost')
 
 
 def _link_restored(managed: ManagedSession, *, walk: bool = True) -> None:
@@ -81,13 +87,24 @@ def _link_restored(managed: ManagedSession, *, walk: bool = True) -> None:
 
     The republish pushes this session's retained values out (what others
     missed from us); the walk pulls others' values in (what we missed).
+
+    The probe thread and the reconnect worker can both get here, so the
+    first claims the transition, ``'lost'`` to ``'restoring'``, under the
+    session lock, and the other returns. If the link is lost again before
+    the walk finishes, the claim is gone and this restore fires nothing; the
+    loss's own restore will.
     """
-    if managed._link_state != 'lost':
-        return
+    with managed._lock:
+        if managed._link_state != 'lost':
+            return
+        managed._link_state = 'restoring'
     _republish_retained(managed)
     if walk:
         _run_link_walk(managed)
-    managed._link_state = 'up'
+    with managed._lock:
+        if managed._link_state != 'restoring':
+            return
+        managed._link_state = 'up'
     managed._fire('link_restored')
 
 

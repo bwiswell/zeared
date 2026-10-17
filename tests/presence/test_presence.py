@@ -221,6 +221,41 @@ class TestTokensAggregateByKey:
                 sess.close()
 
 
+class TestHubLoss:
+    """In client mode every key a subscriber knows goes offline when the hub dies,
+    whether it saw the key come online or found it online when it subscribed.
+
+    The router declares a token to a client only for a subscriber that asks for
+    history, and a client withdraws, when its link drops, only the tokens it was
+    declared. Before the presence watch kept a ``history=True`` subscriber of its
+    own, a key reported by the subscribe-time replay never went offline here.
+    """
+
+    @pytest.mark.parametrize('holder', ['hub', 'client'])
+    def test_every_known_key_goes_offline(self, restartable_hub, holder):
+        status = _status_class(f'pres/hubloss/{holder}/{{name}}')
+        hub = restartable_hub.start()
+        holding = hub if holder == 'hub' else z.client(restartable_hub.endpoint)
+        watcher = z.client(restartable_hub.endpoint)
+        try:
+            status.declare_presence(name='early', session=holding)  # online before the subscriber
+            wait(0.4)
+            events = _Events()
+            status.on_message(lambda m: None, session=watcher, on_online=events.online, on_offline=events.offline)
+            wait(0.3)
+            status.declare_presence(name='late', session=holding)  # online after it
+            wait(0.4)
+            restartable_hub.stop()  # the hub dies; nothing withdraws a token first
+            wait(0.6)
+
+            assert events.items[:2] == [('online', 'early', z.Origin.REPLAY), ('online', 'late', z.Origin.LIVE)]
+            assert sorted(events.items[2:]) == [('offline', 'early', z.Origin.WILL), ('offline', 'late', z.Origin.WILL)]
+        finally:
+            z.release(session=watcher)
+            if holding is not hub:
+                z.release(session=holding)
+
+
 class TestAsyncCallbacks:
     def test_async_on_offline_is_scheduled_on_the_loop(self, connected_pair):
         session_a, session_b = connected_pair

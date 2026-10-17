@@ -10,9 +10,11 @@ publisher is the hub:
 1. Hub A boots and publishes a ``RETAINED`` + ``LIVELINESS`` status with a fresh boot
    id, and declares presence on its key.
 2. A managed client attaches (``auto_reconnect=True``) with a typed subscriber that
-   also takes ``on_online`` / ``on_offline``, a raw liveliness subscriber, transport and
-   link event listeners, an ``on_reconnect`` counter, and ``on_link_lost`` /
-   ``on_link_restored`` recorders.
+   also takes ``on_online`` / ``on_offline``, transport and link event listeners, an
+   ``on_reconnect`` counter, and ``on_link_lost`` / ``on_link_restored`` recorders.
+   Nothing else on the client subscribes to liveliness: a raw ``history=True``
+   subscriber would make the session learn A's token itself, and hide whether the
+   presence feed's own subscribers see A go offline.
 3. A closes. The client sees A's key go offline.
 4. The hub reopens on the same endpoint as B, which publishes and declares presence at
    once, while the client is still detached: the client's re-dial is slowed so this
@@ -66,7 +68,7 @@ class RestartRecord:
     events_after_restart: list[tuple[str, bool, str]] = field(default_factory=list)
     events_after_kill_b: list[tuple[str, bool, str]] = field(default_factory=list)
     presence: list[tuple[str, str]] = field(default_factory=list)  # (online/offline, origin)
-    raw_liveliness: list[tuple[str, str]] = field(default_factory=list)  # (key, PUT/DELETE)
+    presence_keys: list[str] = field(default_factory=list)  # each presence event's key
     transport_events: list[str] = field(default_factory=list)
     link_events: list[str] = field(default_factory=list)
     routers_timeline: list[tuple[str, int]] = field(default_factory=list)
@@ -75,6 +77,11 @@ class RestartRecord:
     link_signals: list[str] = field(default_factory=list)  # 'lost' / 'restored'
     fetched: list[tuple[str, bool]] = field(default_factory=list)
     published_in_window: bool = False
+
+
+def _note_presence(rec: RestartRecord, state: str, meta: z.ZenohMeta) -> None:
+    rec.presence.append((state, meta.origin.value))
+    rec.presence_keys.append(meta.key_expr)
 
 
 @pytest.fixture(scope='module')
@@ -102,17 +109,10 @@ def restart_record() -> RestartRecord:
         Status.on_message(
             lambda m, meta: rec.events.append((m.boot, m.alive, meta.origin.value)),
             session=client,
-            on_online=lambda meta: rec.presence.append(('online', meta.origin.value)),
-            on_offline=lambda meta: rec.presence.append(('offline', meta.origin.value)),
+            on_online=lambda meta: _note_presence(rec, 'online', meta),
+            on_offline=lambda meta: _note_presence(rec, 'offline', meta),
         )
         raw = client.raw()
-        handles.append(
-            raw.liveliness().declare_subscriber(
-                'restart/status/**',
-                lambda s: rec.raw_liveliness.append((str(s.key_expr), _kind(s))),
-                history=True,
-            )
-        )
         handles.append(raw.info.declare_transport_events_listener(lambda e: rec.transport_events.append(_kind(e))))
         handles.append(raw.info.declare_link_events_listener(lambda e: rec.link_events.append(_kind(e))))
 
@@ -203,6 +203,8 @@ def test_restarted_publishers_death_is_announced(restart_record):
     Flipped in 0.4.0 (plan 11 §2.1): presence is a liveliness token at the contract key,
     so there is no will stash to miss. The client sees A online (``REPLAY``, already up when
     it subscribed) and offline, then B's token appear once the link is back (``LIVE``) and go.
+    A's offline is the case the presence watch's ``history=True`` keeper exists for: the
+    client learned A's key from the replay, and without the keeper nothing reported it gone.
     """
     assert restart_record.presence == [
         ('online', 'replay'),
@@ -212,18 +214,13 @@ def test_restarted_publishers_death_is_announced(restart_record):
     ]
 
 
-def test_liveliness_reports_each_boots_token_at_the_contract_key(restart_record):
-    """The client's raw liveliness subscriber sees A's token and then B's come and go.
+def test_each_boots_token_sits_at_the_contract_key(restart_record):
+    """Every presence event, A's and B's, coming and going, names the contract key.
 
     The mechanism the presence feed is built on (0.4.0): the tokens sit on the contract
     key itself, where ``__zeared/alive/<zid>`` carried them before.
     """
-    assert restart_record.raw_liveliness == [
-        ('restart/status/n', 'PUT'),
-        ('restart/status/n', 'DELETE'),
-        ('restart/status/n', 'PUT'),
-        ('restart/status/n', 'DELETE'),
-    ]
+    assert restart_record.presence_keys == ['restart/status/n'] * 4
 
 
 def test_router_link_state_is_observable(restart_record):

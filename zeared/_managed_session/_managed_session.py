@@ -63,7 +63,7 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         '__weakref__',  # required for WeakSet membership
         '_endpoint_label',
         '_initial_backoff',
-        '_link_state',  # 'up' | 'lost' — the link signals' pairing state
+        '_link_state',  # 'up' | 'lost' | 'restoring' — the link signals' pairing state
         '_lock',
         '_max_attempts',
         '_max_backoff',
@@ -78,6 +78,7 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         '_raw',
         '_reconnect_signal',
         '_reconnect_thread',
+        '_restoring',  # a reconnect is restoring: the probe leaves the link alone
         '_resync_concurrency',  # re-attach walk: max subscribers fetching at once
         '_resync_jitter',  # re-attach walk: max random delay before it, seconds
         '_retention_ttl',  # session-wide retention TTL fallback
@@ -120,8 +121,12 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
             tuple[Callable[[ManagedSession], object], asyncio.AbstractEventLoop | None]
         ] = []
         # Link signals (0.4.0): 'lost' between an on_link_lost and its
-        # on_link_restored. ``_routers`` is what the probe saw last tick.
+        # on_link_restored, 'restoring' while one path runs the restore.
+        # ``_routers`` is what the probe saw last tick. ``_restoring`` is set
+        # for the whole of a reconnect, so the probe can't restore the link
+        # under it.
         self._link_state = 'up'
+        self._restoring = False
         self._routers: frozenset[str] = frozenset()
         # Re-attach walk knobs; factories override (plan 18 §1.4 defaults).
         self._resync_jitter = 2.0
