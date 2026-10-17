@@ -1361,24 +1361,24 @@ default vs. `marshmallow` + Zenoh on the same schema:
 <!-- bench:readme-headline -->
 | Strategy                        | pub/s | wire (B) |
 |---------------------------------|------:|---------:|
-| Zenoh + `marshmallow` (JSON)    | 3,785 | 796      |
-| `zeared` sync (msgpack, cached) | 6,699 | 533      |
+| Zenoh + `marshmallow` (JSON)    | 3,879 | 796      |
+| `zeared` sync (msgpack, cached) | 7,725 | 533      |
 <!-- /bench:readme-headline -->
 
-zeared is <!-- bench:readme-faster -->~77%<!-- /bench:readme-faster --> faster and <!-- bench:readme-smaller -->~33%<!-- /bench:readme-smaller --> smaller on the wire.
+zeared is <!-- bench:readme-faster -->~99%<!-- /bench:readme-faster --> faster and <!-- bench:readme-smaller -->~33%<!-- /bench:readme-smaller --> smaller on the wire.
 
 **"Pydantic + MQTT, or zeared?"** — the comparison people actually want, and
 one that splits into two independent questions. pydantic's compiled core
-beats pure-Python seared on serialization (<!-- bench:readme-codec -->~3.6x<!-- /bench:readme-codec -->); Zenoh beats a
-broker-mediated MQTT hop on transport (<!-- bench:readme-transport -->~2.3x<!-- /bench:readme-transport -->). Netted out at default
+beats pure-Python seared on serialization (<!-- bench:readme-codec -->~3.4x<!-- /bench:readme-codec -->); Zenoh beats a
+broker-mediated MQTT hop on transport (<!-- bench:readme-transport -->~2.2x<!-- /bench:readme-transport -->). Netted out at default
 configuration against MQTT QoS 0 <!-- bench:readme-runs -->(medians of three runs, here and below)<!-- /bench:readme-runs -->,
-**pydantic + MQTT comes out <!-- bench:readme-behind -->~1.4x<!-- /bench:readme-behind --> ahead** —
+**pydantic + MQTT comes out <!-- bench:readme-behind -->~1.5x<!-- /bench:readme-behind --> ahead** —
 the codec gap is the larger of the two, and pure Python doesn't make it back.
 
 Two things change that. Against **QoS 1** — at-least-once, what most
 production fleets actually run, and the closer analogue to Zenoh's reliable
-`put` — zeared is <!-- bench:readme-qos1 -->~2.3x<!-- /bench:readme-qos1 --> ahead. And with the optional `rusted` accelerator the
-codec gap closes and the ordering flips: <!-- bench:readme-rusted-q0 -->~1.3x<!-- /bench:readme-rusted-q0 --> against QoS 0, <!-- bench:readme-rusted-q1 -->~4.2x<!-- /bench:readme-rusted-q1 --> against
+`put` — zeared is <!-- bench:readme-qos1 -->~2.4x<!-- /bench:readme-qos1 --> ahead. And with the optional `rusted` accelerator the
+codec gap closes and the ordering flips: <!-- bench:readme-rusted-q0 -->~1.3x<!-- /bench:readme-rusted-q0 --> against QoS 0, <!-- bench:readme-rusted-q1 -->~4.6x<!-- /bench:readme-rusted-q1 --> against
 QoS 1.
 
 The full matrix (both axes isolated, sync + async variants, JSON / msgpack,

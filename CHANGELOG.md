@@ -111,6 +111,10 @@ them with what to do.
 - **Dependencies:** the dev group's `pytest` range lifts to `>=8.0,<10.0`, and the dev group installs seared's
   `yaml`, `pandas` and `polars` extras, so the tests that use them run instead of skipping. The refreshed lockfile
   resolves pytest 9.1.1, ruff 0.17.1 and ty 0.0.89. zeared's own dependencies are unchanged.
+- **The benchmarks are re-recorded** with zeared 0.4.0, seared 0.4.0 and rusted 0.4.0. seared 0.4.0's faster `dump`
+  lifts zeared's pure-Python msgpack path, which now publishes about twice as fast as marshmallow over Zenoh, so
+  rusted's gain over it narrows to 1.73× on msgpack. The async suite reads an unbounded `alisten`, as every
+  `alisten` was before 0.4.0's bound, so its numbers stay comparable with earlier records.
 
 ### Fixed
 
