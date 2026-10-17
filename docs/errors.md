@@ -7,6 +7,7 @@ Exception hierarchy. All zeared exceptions extend `ZearedError` which extends
 ZearedError
 ├── NoSessionError
 ├── TopicError
+├── KeyExprError                   # also a ValueError (0.4.2)
 ├── SessionDeadError
 ├── SubscriptionError              # declare-time, fatal to one subscription
 ├── QueryableError                 # declare-time, fatal to one queryable; serving-side on_error
@@ -23,6 +24,7 @@ ZearedError
 | `ZearedError` | — | base; not raised directly |
 | `NoSessionError` | `_SessionHandle.resolve` | no session resolvable (no kwarg, no scope, no default) |
 | `TopicError` | `Template.parse`, `Message._templates`, `Templates.resolve_publish_topic`, the publish render, the retained / presence / `on_query` entry points | a key that can't be built or used: no `TOPIC`; template syntax (bad or duplicate slot name, format spec, `**` anywhere but last, the reserved `__zeared` prefix); a `{name**}` slot not bound to a plain `z.Str`; a single-segment slot bound to `Path` or base64 `Bytes` (0.4.0); a `/` in a single-segment value on publish (0.4.0); a missing slot; a `topic=` that names no declared template, or a subscribe-only one; `retain=True`, `unretain` or `fetch_retained` without `RETAINED`; `on_query` on a `RETAINED` class; presence (`declare_presence`, `on_online` / `on_offline`) without `LIVELINESS` |
+| `KeyExprError` | `zeared.keyexpr`'s functions | a string that isn't a Zenoh key expression, with Zenoh's reason: an empty chunk, a `*` within a chunk (`read-*`, where Zenoh writes `read-$*`, with that hint). Also a `ValueError` (0.4.2) |
 | `SessionDeadError` | `ManagedSession.{put,get,delete,...}` | session is mid-reconnect or has terminally failed reconnect |
 | `SubscriptionError` | `Subscriber._declare` | underlying `zenoh.Session.declare_subscriber` (or a presence liveliness subscriber) failed at declare-time, or an `async def` callback came without a running loop |
 | `QueryableError` | `Queryable._declare`, the query dispatch | `declare_queryable` failed at declare-time, or an `async def` handler came without a running loop; handed to the serving side's `on_error` when a query's context can't be built, a reply fails, or the handler raises |

@@ -54,6 +54,7 @@ from seared import (
 )
 
 from . import _codec as codec
+from . import keyexpr
 from ._factories import client, hub, open, peer  # noqa: A004 — `open` shadows builtin intentionally
 from ._managed_session import CallbackHandle, ManagedSession, OnReconnectHandle
 from ._mode import Mode
@@ -81,6 +82,7 @@ from .effect import Effect, effect_of
 from .errors import (
     CallbackError,
     DecodeError,
+    KeyExprError,
     NoSessionError,
     QueryableError,
     QueryError,
@@ -133,6 +135,7 @@ __all__ = [
     'Enum',
     'Float',
     'Int',
+    'KeyExprError',
     'ManagedSession',
     'Message',
     'Mode',
@@ -191,6 +194,7 @@ __all__ = [
     'debug',
     'effect_of',
     'hub',
+    'keyexpr',
     'open',
     'peer',
     'published_topics',
