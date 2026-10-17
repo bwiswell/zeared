@@ -247,8 +247,8 @@ class Subscriber[M: 'Message']:
         seen_ts: dict[str, str] = {}
 
         # Schema-mismatch warn-once cache — bounded ``OrderedDict``
-        # keyed on (sender_zid, observed_schema). Cleared on close and
-        # on `_redeclare` (post-reconnect; peer zids change).
+        # keyed on (sender_zid, observed_schema). Cleared on `_redeclare`
+        # (post-reconnect; peer zids change); a closed subscriber just drops it.
         expected_schema = getattr(msg_cls, 'SCHEMA', None)
         seen_mismatches: OrderedDict[tuple, None] = OrderedDict()
 

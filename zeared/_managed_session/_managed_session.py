@@ -10,9 +10,9 @@ Primary file of the ``_managed_session`` subdir. Method clusters are
 extracted into sibling modules as stateless mixins, composed here via the
 MRO so they stay methods on ``ManagedSession``:
 
-- ``_OnReconnectMixin`` (in ``_on_reconnect_mixin.py``) — the
-  ``on_reconnect(cb)`` callback registry + ``_fire_reconnect_callbacks``
-  driver.
+- ``_OnReconnectMixin`` (in ``_on_reconnect_mixin.py``) — the three
+  callback registries (``on_reconnect``, ``on_link_lost``,
+  ``on_link_restored``) and the ``_fire`` driver.
 - ``_ZenohApiMixin`` (in ``_zenoh_api_mixin.py``) — pass-through
   delegators for ``zid`` / ``liveliness`` / ``info`` / ``put`` / ``get``
   / ``delete`` / ``declare_*``.
@@ -128,7 +128,7 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         self._link_state = 'up'
         self._restoring = False
         self._routers: frozenset[str] = frozenset()
-        # Re-attach walk knobs; factories override (plan 18 §1.4 defaults).
+        # Re-attach walk knobs, at their defaults; the factories set them.
         self._resync_jitter = 2.0
         self._resync_concurrency = 4
         # Single long-lived reconnect worker per ManagedSession.
@@ -226,13 +226,14 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
     def _note_failure(self, exc: BaseException) -> None:  # noqa: ARG002  (kept for call-site symmetry)
         """Mark the session as needing a reconnect after a failed op.
 
-        Lazy-detection hook: if a put/get/delete fails on the raw, mark the session as
-        needing a reconnect (the probe loop will pick it up on the next tick, or the
-        next call will trigger eagerly via ``_maybe_reconnect``).
+        Lazy-detection hook, called when a put/get/delete (or a cached
+        publisher, or a publisher declare) fails on the raw session. If the
+        raw session is dead (``_is_dead``), the reconnect is triggered at
+        once, so a session whose probe is off (``probe_interval=0``) still
+        recovers. A failure on a live session does nothing.
 
-        Conservative: we don't try to classify the exception. Any failure
-        on the raw session is treated as "might be dead" — the probe will
-        confirm via ``is_closed()`` / ``zid()`` and trigger the reconnect.
+        The exception isn't classified: whether the session is dead is what
+        decides.
         """
         if _is_dead(self._raw):
             from .._reconnect import _trigger_reconnect

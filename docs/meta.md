@@ -68,7 +68,8 @@ from the sample's attachment (zeared stamps it via msgpack-encoded
 
 Subscribers with their own `SCHEMA` set perform a wire-vs-local
 comparison automatically; mismatches drop the sample and route via
-`on_error` as `SchemaMismatchError`. See `docs/subscriber.md` for the
+`on_error` as `SchemaMismatchError`. See
+[`subscriber.md`](subscriber/subscriber.md#schema-check--warn-once) for the
 warn-once-per-(sender, schema) policy. Subscribers with `SCHEMA = None`
 skip the check entirely; `meta.schema` still populates from the wire
 for diagnostic use.
@@ -81,9 +82,10 @@ for diagnostic use.
 `issued_at` is parsed from the sample's HLC timestamp (`sample.timestamp`)
 into a UTC `datetime.datetime`. Requires Zenoh timestamping to be
 enabled; the factories (`z.peer()` / `z.client()`) inject
-`timestamping/enabled=true` by default since 0.0.13. Returns `None` when
-no timestamp is available (raw publishes against a session with
-timestamping disabled).
+`timestamping/enabled=true` by default since 0.0.13, and a retained send
+stamps its own put either way (0.4.0). Returns `None` when no timestamp is
+available (other publishes against a session with timestamping
+disabled).
 
 For users who need the raw HLC string (e.g. for cross-replay dedupe
 ordering), `meta.timestamp` carries it unmodified. `meta.issued_at` is
@@ -97,18 +99,20 @@ provenance — *how it reached this subscriber*:
 | Value | Meaning |
 |-------|---------|
 | `Origin.LIVE`   | Delivered by the live zenoh subscriber — a real publish. |
-| `Origin.REPLAY` | Delivered from a retention cache via retained-fetch (at subscribe time or after a reconnect), or a publisher's republish on link restore (0.4.0; its attachment carries `{'replay': True}`). Cached state, not an event the subscriber witnessed. On the presence feed: a key already online when the subscriber (re)started. |
+| `Origin.REPLAY` | Delivered from a retention cache via retained-fetch (at subscribe time, after a reconnect, or from the re-attach walk when the link to a hub comes back, 0.4.0), or a publisher's republish on link restore (0.4.0; its attachment carries `{'replay': True}`). Cached state, not an event the subscriber witnessed. On the presence feed: a key already online when the subscriber (re)started. |
 | `Origin.WILL`   | On the presence feed (`on_offline`, 0.4.0): a key going offline. Before 0.4.0 it marked a will synthesised into `cb`. |
 
-The value is determined entirely by the **local delivery path** — it is
-never read from (or written to) the wire, so mixed-version fleets
-interoperate untouched. Set by the dispatch layer; `from_sample`
-defaults it to `LIVE`.
+The value is determined by the **local delivery path**, with one
+exception that rides the wire (0.4.0): a publisher's republish writes
+`replay: true` next to `schema` in its attachment, and dispatch delivers
+a live sample carrying it as `REPLAY`. A subscriber older than 0.4.0
+ignores the key and delivers the copy as `LIVE`. Set by the dispatch
+layer; `from_sample` defaults it to `LIVE`.
 
 The canonical use is the sync-then-react pattern on `RETAINED` classes:
 
 ```python
-def on_state(msg: TagState, meta: z.ZenohMeta):
+def on_state(msg: Position, meta: z.ZenohMeta):
     if meta.origin is z.Origin.REPLAY:
         seed(msg)         # initial state sync — don't act on it
     else:

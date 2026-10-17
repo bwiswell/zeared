@@ -29,8 +29,12 @@ bench = [
 dev = [
     "deptry",
     "prek",
-    "pytest>=8.0,<9.0",
+    "pytest>=8.0,<10.0",
     "ruff",
+    # seared's own extras, so the tests that load YAML configs and send
+    # pandas / polars frames run here rather than skip. Dev only: zeared
+    # installs no extra of seared's.
+    "seared[yaml,pandas,polars]",
     "ty",
 ]
 

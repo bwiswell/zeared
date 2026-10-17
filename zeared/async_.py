@@ -24,7 +24,7 @@ from .stream import Stream, _open_channel
 
 if TYPE_CHECKING:
     import types
-    from collections.abc import AsyncIterator, Callable, Iterable
+    from collections.abc import AsyncGenerator, Callable, Iterable
 
     import zenoh
 
@@ -486,7 +486,7 @@ async def aon_query(
 
 
 @asynccontextmanager
-async def abatch() -> AsyncIterator[_BatchHandle]:
+async def abatch() -> AsyncGenerator[_BatchHandle]:
     """Async version of :func:`zeared.batch`.
 
     Shares the same contextvar-backed buffer as ``z.batch()``. An

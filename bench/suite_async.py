@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
     import zenoh
 
+    from zeared._codec import Encoding
+
 SUITE = 'async'
 
 #: Publishes between cooperative yields, so a sync publish loop inside an
@@ -34,7 +36,7 @@ _YIELD_EVERY = 500
 _ASYNC_DRAIN_S = 3.0
 
 
-def _message_class(topic: str, encoding: str) -> type[z.Message]:
+def _message_class(topic: str, encoding: Encoding) -> type[z.Message]:
     """Build a fresh message class on ``topic`` so publisher caches don't persist."""
 
     @z.zeared(accel=False)
@@ -54,15 +56,21 @@ async def _alisten_consumer(
 ) -> tuple[int, int, float, float]:
     """Run ``do_publish`` against an ``alisten`` consumer task; return the counters.
 
-    The consumer's async generator closes its subscriber in a ``finally``, so
-    cancelling the task is the teardown.
+    The consumer reads its ``z.Stream`` inside ``async with``, so cancelling
+    the task closes the stream and, with it, the subscriber.
     """
     received = 0
 
     async def consumer() -> None:
         nonlocal received
-        async for _m in msg_cls.alisten():
-            received += 1
+        # Unbounded: the suite prices the bridge, so it mustn't shed load. A
+        # default stream (``maxsize=1024``) drops its oldest message once the
+        # consumer falls that far behind, which it does over a long window,
+        # and each drop would read as a cost the bridge never paid. It also
+        # keeps the numbers comparable with releases before the bound.
+        async with msg_cls.alisten(maxsize=0) as stream:
+            async for _m in stream:
+                received += 1
 
     task = asyncio.create_task(consumer())
     await asyncio.sleep(0.15)
@@ -223,7 +231,7 @@ def run(session: zenoh.Session, duration_s: float = DEFAULT_DURATION_S) -> list[
             publish_window(baseline.STRATEGY, baseline.version(), duration_s, pub, sub, und, baseline.wire_bytes(data))
         )
 
-    combos = [
+    combos: list[tuple[str, str, Encoding, Callable[..., Run]]] = [
         ('sync send + sync on_message (json)', 'bench/async/sync_json', 'json', _sync_send_sync_sub),
         ('sync send + sync on_message (msgpack)', 'bench/async/sync_msgp', 'msgpack', _sync_send_sync_sub),
         ('asend + sync on_message (msgpack)', 'bench/async/asend_sync', 'msgpack', _asend_sync_sub),

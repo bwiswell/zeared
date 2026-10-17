@@ -37,7 +37,7 @@ See [`_session.md`](../_session.md).
 
 A TOPIC can be a plain string (`'events/alerts'`) or a format string
 (`'robot/{id}/telemetry'`). In either case, the first access parses the
-template on the class and caches three derived forms:
+template on the class and caches four derived forms:
 
 | Form | Derived | Used by |
 |------|---------|---------|
@@ -108,23 +108,74 @@ Subdirs following this shape: `message/`, `presence/`, `queryable/`,
 
 ```
 zeared/
-├── __init__.py     # public re-exports, module-class swap, session factories
-├── _codec.py       # pack/unpack dispatch on 'msgpack' / 'json'
-├── _session.py     # _SessionHandle (dual-role attribute)
-├── _template.py    # Template + Templates (canonical + extras)
-├── async_.py       # asend / alisten / abatch / apeer / aclient
-├── batch.py        # z.batch() context manager, ContextVar-backed buffer stack
-├── effect.py       # Effect (READ < WRITE < ACTION) + effect_of: the doc-only EFFECT vocabulary
-├── errors.py       # ZearedError + NoSessionError / TopicError / SubscriptionError
-├── message.py      # Message base class (sync + async methods)
-├── meta.py         # ZenohMeta seared dataclass + from_sample helper
-├── presence/       # PresenceToken + _SessionPresence: liveliness tokens at contract keys (0.4.0)
-├── publisher.py    # _PublisherCache + module-level registry
-├── queryable/      # on_query serving + query/query_one getting (request/response)
-├── retention.py    # _RetentionCache + Queryable + module-level registry
-├── stream.py       # Stream: the bounded, drop-oldest async iterator alisten / aquery_iter return
-└── subscriber.py   # Subscriber handle with arity + coroutine + presence dispatch
+├── __init__.py                        # public re-exports (seared's surface included), the module-class swap
+├── _codec.py                          # pack/unpack dispatch on 'msgpack' / 'json', MIME map
+├── _factories.py                      # peer / client / hub / open + retry, config-build and managed-wrap helpers
+├── _managed_session/                  # ManagedSession: the reconnect-aware session wrapper
+│   ├── _managed_session.py            # ManagedSession: state, raw swap, teardown
+│   ├── _callback_handle.py            # CallbackHandle, the cancel handle (OnReconnectHandle alias)
+│   ├── _helpers.py                    # resolve_raw, the dead-session check, the process-wide WeakSet
+│   ├── _on_reconnect_mixin.py         # on_reconnect / on_link_lost / on_link_restored registries + driver
+│   └── _zenoh_api_mixin.py            # zenoh.Session pass-throughs, guarded while reconnecting / dead
+├── _mode.py                           # Mode enum: PEER / CLIENT / ROUTER
+├── _module_class.py                   # _ZearedModule: turns `zeared.session = sess` into a default update
+├── _prefix_index.py                   # trie of topic segments behind retention's query matching
+├── _reconnect/                        # reconnect orchestration for ManagedSession
+│   ├── _reconnect.py                  # probe loop, reconnect worker, trigger, the reconnect itself
+│   ├── _link.py                       # router-link detection, link signals, republish, re-attach walk
+│   └── _restore.py                    # post-reopen restore walks + the cancellable backoff
+├── _release.py                        # release / release_all
+├── _session.py                        # _SessionHandle (dual-role attribute) + context-local scopes
+├── _template/                         # TOPIC format-string parsing
+│   ├── _template.py                   # Template: one parsed TOPIC
+│   └── _templates.py                  # Templates: canonical TOPIC + EXTRA_TOPICS
+├── async_.py                          # async façade: apeer / aclient / aopen, asend, alisten, aquery, abatch, ...
+├── batch.py                           # z.batch() context manager, ContextVar-backed buffer stack
+├── config.py                          # SessionConfig: the declarative connection spec
+├── doc/                               # wire-aware docs and TypeScript types for message classes
+│   ├── __main__.py                    # `python -m zeared.doc`
+│   ├── generate.py                    # doc generation over seared's pipeline + its CLI
+│   ├── introspect.py                  # MessageDoc: wire-aware introspection
+│   ├── render.py                      # Markdown rendering of a MessageDoc
+│   └── typescript.py                  # TypeScript interfaces (`python -m zeared.doc.typescript`)
+├── effect.py                          # Effect (READ < WRITE < ACTION) + effect_of: the doc-only EFFECT vocabulary
+├── errors.py                          # ZearedError and its subclasses
+├── hubd.py                            # `python -m zeared.hubd`: the relay hub daemon
+├── message/                           # Message base class, one mixin per concern
+│   ├── message.py                     # Message: class attributes, decode, mixin composition
+│   ├── _message_async.py              # asend / asend_batch / aunretain / alisten
+│   ├── _message_concrete_topic.py     # concrete_topic: instance-vs-class dispatch
+│   ├── _message_presence.py           # declare_presence / adeclare_presence
+│   ├── _message_query.py              # on_query / query / iter_query / query_one
+│   ├── _message_render.py             # canonical topic render: slot values become key segments
+│   ├── _message_send.py               # send / send_batch
+│   ├── _message_subscribe.py          # on_message / fetch_retained / published_topics
+│   ├── _message_topic.py              # template parsing + slot-binding checks, schema attachment cache
+│   └── _message_unretain.py           # unretain: instance-vs-class dispatch
+├── meta.py                            # ZenohMeta + Origin + from_sample
+├── presence/                          # liveliness tokens at contract keys (0.4.0)
+│   ├── presence.py                    # PresenceToken
+│   └── _presence_session.py           # _SessionPresence: the tokens one session holds
+├── publisher.py                       # _PublisherCache + module-level registry
+├── queryable/                         # on_query serving + query getting (request/response)
+│   ├── queryable.py                   # Queryable handle
+│   ├── _query_context.py              # QueryContext, the Zenoh-free view a handler gets
+│   ├── _query_dispatch.py             # the per-query handler closure
+│   ├── _query_get.py                  # get side: issue, decode, collect replies
+│   └── _queryable_registry.py         # registry keyed on id(session)
+├── retention.py                       # _RetentionCache + its queryables + module-level registry
+├── stream.py                          # Stream: the async iterator alisten (bounded, drop-oldest) and aquery_iter return
+├── subscriber/                        # Subscriber handle and per-session registry
+│   ├── subscriber.py                  # Subscriber: declare, redeclare, replay, close
+│   ├── _subscriber_dispatch.py        # per-sample closure: dedupe, schema check, decode, presence events
+│   ├── _subscriber_registry.py        # registry keyed on id(session)
+│   └── _subscriber_retained_fetch.py  # the retained fetch (subscribe time, reconnect, re-attach)
+└── watchdog.py                        # per-subscription freshness watchdog
 ```
+
+Each subdirectory also has an `__init__.py` that re-exports its names.
+The module pages under `docs/` follow the same layout; the `doc/`
+subpackage has one page, [`doc/doc.md`](../doc/doc.md).
 
 `msg.send()` routes through the `_PublisherCache` for the sending message's
 class by default (`PUBLISHER = True`) — long-lived `zenoh.Publisher`

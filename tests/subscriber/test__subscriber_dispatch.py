@@ -9,7 +9,7 @@ Folds in the retention-dedupe coverage that previously lived in
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import logging
 import time
 from collections import OrderedDict
@@ -224,7 +224,7 @@ class TestOriginSignal:
     """The replay-vs-live signal (0.3.0): ``meta.origin`` carries the
     sample's provenance, determined by the local delivery path — the
     live subscriber callback (LIVE), a retained-fetch reply (REPLAY),
-    or presence will synthesis (WILL)."""
+    or, on the presence feed, a key going offline (WILL)."""
 
     def test_live_sample_marked_live(self, session):
         @z.zeared
@@ -419,7 +419,7 @@ class TestDedupeSkewCeiling:
 
         class FakeTs:
             def get_time(self):
-                return datetime.datetime.fromtimestamp(epoch_seconds, tz=datetime.UTC)
+                return dt.datetime.fromtimestamp(epoch_seconds, tz=dt.UTC)
 
             def __str__(self):
                 return f'{ntp64:d}/fakezid'

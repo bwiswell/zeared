@@ -124,9 +124,11 @@ reads `cls.EFFECT`, so it works on any class, not only a `Message`.
 - **The TypeScript interface's JSDoc**: `@effect write`, after `@encoding`.
 
 Both renderings appear only when a class declares `EFFECT`. An undeclared
-class renders exactly as it did before 0.3.12, so existing
-`zeared.doc --check` and TypeScript `--check` guards stay green on
-upgrade.
+class renders exactly as it did before 0.3.12, so `EFFECT` alone doesn't
+break existing `zeared.doc --check` and TypeScript `--check` guards. The
+0.4.0 upgrade does, once: generated TypeScript writes `| null` only for
+`nullable=True` fields, and generated docs show seared 0.4.0's `None`
+defaults, so regenerate committed docs and types after upgrading.
 
 ## Validation
 

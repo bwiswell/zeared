@@ -213,7 +213,7 @@ def _reopen_and_restore(managed: ManagedSession) -> None:
     #      subscriber redeclare so a same-process publisher+subscriber
     #      pair finds a live queryable on the retained-fetch round.
     #   3. Subscribers — re-declare zenoh subs, re-fire retained fetch
-    #      (dedupe-safe), re-register presence dispatcher.
+    #      (dedupe-safe), re-declare the presence watch.
     #   4. Queryables — re-declare each user queryable (compute-serving,
     #      no replayed state) against the new raw so peer gets resolve.
     #   5. Presence — re-declare every held token on the new raw; peers

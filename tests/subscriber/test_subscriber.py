@@ -543,7 +543,7 @@ class TestIssuedAtPopulated:
     when timestamping is enabled (default since 0.0.13)."""
 
     def test_issued_at_is_recent_utc_datetime(self, session):
-        import datetime
+        import datetime as dt
 
         @z.zeared
         class M(z.Message):
@@ -566,7 +566,7 @@ class TestIssuedAtPopulated:
         # the factory, so timestamping may or may not be enabled here.
         # Pin permissively: either a recent UTC datetime, or None.
         if ts is not None:
-            now = datetime.datetime.now(tz=datetime.UTC)
+            now = dt.datetime.now(tz=dt.UTC)
             assert abs((now - ts).total_seconds()) < 60
 
 

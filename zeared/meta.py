@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import enum
 import logging
 import re
@@ -20,9 +20,12 @@ _log = logging.getLogger('zeared.meta')
 class Origin(enum.StrEnum):
     """Provenance of a dispatched sample — how it reached this subscriber.
 
-    Determined entirely by the local delivery path (never read from the
-    wire): the live ``zenoh.Subscriber`` callback, a retained-fetch
-    ``session.get`` reply, or a presence event (0.4.0).
+    Determined by the local delivery path: the live ``zenoh.Subscriber``
+    callback, a retained-fetch ``session.get`` reply (at subscribe time,
+    after a reconnect, or from the re-attach walk), or a presence event
+    (0.4.0). One signal does ride the wire: a publisher's republish after
+    its link comes back marks its attachment ``replay``, and the subscriber
+    delivers that sample as ``REPLAY`` (0.4.0).
 
     On the presence feed (``on_online`` / ``on_offline``), online arrives as
     ``REPLAY`` for a key already online when the subscriber (re)started and
@@ -30,7 +33,7 @@ class Origin(enum.StrEnum):
     """
 
     LIVE = 'live'  # delivered by the live zenoh subscriber
-    REPLAY = 'replay'  # from a retention cache, or a key already online (subscribe-time or post-reconnect)
+    REPLAY = 'replay'  # a retained value delivered again (fetch or republish), or a key already online
     WILL = 'will'  # a presence key going offline (on_offline)
 
 
@@ -64,10 +67,11 @@ class ZenohMeta(s.Seared):
     ``None`` when the sample carries no timestamp.
 
     ``origin`` is the sample's provenance — ``Origin.LIVE`` for a real
-    publish through the live subscriber, ``Origin.REPLAY`` for a
-    retained-fetch delivery (subscribe-time or post-reconnect). On the
-    presence feed it marks a key already online (``REPLAY``), coming online
-    (``LIVE``) or going offline (``WILL``). Set by the dispatch layer;
+    publish through the live subscriber, ``Origin.REPLAY`` for a retained
+    value delivered again (a retained-fetch reply at subscribe time, after
+    a reconnect or from the re-attach walk, or a publisher's republish). On
+    the presence feed it marks a key already online (``REPLAY``), coming
+    online (``LIVE``) or going offline (``WILL``). Set by the dispatch layer;
     ``from_sample`` defaults it to ``LIVE``.
     """
 
@@ -76,7 +80,7 @@ class ZenohMeta(s.Seared):
     # wire-contract table. The formatter would collapse it.
     key_expr:    str                      = s.Str(required=True)
     timestamp:   str | None               = s.Str(default=None)       # raw HLC string
-    issued_at:   datetime.datetime | None = s.DateTime(default=None)  # parsed UTC
+    issued_at:   dt.datetime | None = s.DateTime(default=None)  # parsed UTC
     encoding:    str | None               = s.Str(default=None)
     source_info: str | None               = s.Str(default=None)
     origin_zid:  str | None               = s.Str(default=None)      # HLC id half
@@ -121,7 +125,7 @@ def _ntp64_seconds(raw: str) -> float | None:
     return None
 
 
-def _parse_hlc_string(s_repr: str) -> datetime.datetime | None:
+def _parse_hlc_string(s_repr: str) -> dt.datetime | None:
     """Parse the ``<ntp64>/<id>`` string form into a UTC ``datetime``."""
     m = _HLC_RE.match(s_repr)
     if not m:
@@ -130,12 +134,12 @@ def _parse_hlc_string(s_repr: str) -> datetime.datetime | None:
     if epoch is None:
         return None
     try:
-        return datetime.datetime.fromtimestamp(epoch, tz=datetime.UTC)
+        return dt.datetime.fromtimestamp(epoch, tz=dt.UTC)
     except ValueError, OSError, OverflowError:
         return None
 
 
-def _parse_hlc(ts: object) -> datetime.datetime | None:
+def _parse_hlc(ts: object) -> dt.datetime | None:
     """Parse a Zenoh HLC sample timestamp into a UTC ``datetime``.
 
     Prefers ``zenoh.Timestamp.get_time()``, which returns an aware UTC

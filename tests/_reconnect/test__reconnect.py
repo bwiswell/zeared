@@ -324,9 +324,9 @@ class TestSubscriberRedeclared:
         which redeclare reuses — so it keeps firing after reconnect."""
 
         @z.zeared
-        class Reader(z.Message):
-            TOPIC = 'reco/rm/{reader_id}'
-            reader_id: int = z.Int(required=True)
+        class Unit(z.Message):
+            TOPIC = 'reco/rm/{unit_id}'
+            unit_id: int = z.Int(required=True)
 
         new_raw = _peer_session()
         try:
@@ -340,7 +340,7 @@ class TestSubscriberRedeclared:
                 max_attempts=None,
             )
             removed: list[dict] = []
-            sub = Reader.on_message(
+            sub = Unit.on_message(
                 lambda r: None,
                 on_remove=lambda meta: removed.append(meta.captures),
                 session=m,
@@ -362,7 +362,7 @@ class TestSubscriberRedeclared:
             wait(0.3)
             sub.close()
 
-            assert removed == [{'reader_id': '7'}]
+            assert removed == [{'unit_id': '7'}]
         finally:
             with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
@@ -413,15 +413,15 @@ class TestSubscriberRedeclared:
 
 
 # ---------------------------------------------------------------------------
-# Presence will replay
+# Presence re-declared on reconnect
 # ---------------------------------------------------------------------------
 
 
-class TestWillReplay:
-    def test_will_replayed_under_new_zid(self, session):
+class TestPresenceRedeclared:
+    def test_token_redeclared_under_new_zid(self, session):
         @z.zeared
         class Status(z.Message):
-            TOPIC = 'reco/will/{name}'
+            TOPIC = 'reco/presence/{name}'
             LIVELINESS = True
             name: str = z.Str(required=True)
             state: str = z.Str(required=True)
@@ -431,7 +431,7 @@ class TestWillReplay:
             m = ManagedSession(
                 session,
                 lambda: new_raw,
-                endpoint_label='will-replay',
+                endpoint_label='presence-redeclare',
                 probe_interval=0,
                 initial_backoff=0.001,
                 max_backoff=0.005,
@@ -454,9 +454,11 @@ class TestWillReplay:
             # caller's handle stays valid.
             assert token.active
             held = [
-                str(r.ok.key_expr) for r in new_raw.liveliness().get('reco/will/**', timeout=1.0) if r.ok is not None
+                str(r.ok.key_expr)
+                for r in new_raw.liveliness().get('reco/presence/**', timeout=1.0)
+                if r.ok is not None
             ]
-            assert held == ['reco/will/alice']
+            assert held == ['reco/presence/alice']
         finally:
             with contextlib.suppress(Exception):
                 m._teardown(call_close=False)
@@ -503,7 +505,7 @@ class TestOnReconnectHook:
                 fired.set()
 
             handle = m.on_reconnect(cb)
-            assert isinstance(handle, z.OnReconnectHandle)
+            assert isinstance(handle, z.CallbackHandle)
 
             # Replace the controlled open_fn so reconnect succeeds.
             m._open_fn = lambda: new_raw

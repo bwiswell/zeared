@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import zeared as z
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
     from zeared._managed_session import SessionLike
 
@@ -57,7 +57,7 @@ def _wait_for_port(port: int, deadline: float) -> bool:
 
 
 @contextlib.contextmanager
-def mosquitto() -> Iterator[int]:
+def mosquitto() -> Generator[int]:
     """Run a private ``mosquitto`` on a free loopback port; yield the port.
 
     Anonymous, non-persistent, loopback-only — a throwaway broker for the
@@ -88,7 +88,7 @@ def mosquitto() -> Iterator[int]:
 
 
 @contextlib.contextmanager
-def zenoh_router() -> Iterator[str]:
+def zenoh_router() -> Generator[str]:
     """Run an in-process Zenoh router; yield its ``tcp/…`` endpoint.
 
     The broker-equivalent topology: client sessions connected here exchange
@@ -108,7 +108,7 @@ def zenoh_router() -> Iterator[str]:
 
 
 @contextlib.contextmanager
-def router_clients(endpoint: str) -> Iterator[tuple[SessionLike, SessionLike]]:
+def router_clients(endpoint: str) -> Generator[tuple[SessionLike, SessionLike]]:
     """Yield ``(publisher, subscriber)`` client sessions attached to ``endpoint``."""
     pub = z.client(router=endpoint)
     sub = z.client(router=endpoint)

@@ -90,8 +90,10 @@ class TestMultiSegmentWildcard:
         idx = _PrefixIndex()
         for t in ['a/x', 'a/x/y', 'a/x/y/z']:
             idx.add(t)
-        # Per zeared/Zenoh semantics, `a/**` matches one or more trailing segments.
-        # `a` alone (zero trailing) should NOT match.
+        # The trie reads a trailing `**` as one or more segments, so `a` alone
+        # (zero trailing) doesn't match. Zenoh's own `a/**` also takes `a`;
+        # zeared's retained fetches always query a template wildcard, never
+        # a bare prefix, so they don't meet the difference.
         idx.add('a')
         result = set(idx.matching('a/**'))
         assert 'a/x' in result

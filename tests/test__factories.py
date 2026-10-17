@@ -271,8 +271,8 @@ class TestEndpointRule:
 
 
 class TestSessionKnobs:
-    """0.4.0 (plan 20 §9 Q1): the reconnect knobs layer like the retry ones —
-    an explicit keyword beats ``config=``, which beats the defaults."""
+    """0.4.0: the reconnect knobs layer like the retry ones, so a config can set
+    them: an explicit keyword beats ``config=``, which beats the defaults."""
 
     def test_defaults(self):
         assert _resolve_session_knobs(None, _MISSING, _MISSING, _MISSING, _MISSING) == (False, 10.0, 2.0, 4)

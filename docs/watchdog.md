@@ -13,7 +13,7 @@ thread calls `ping()` from the dispatch path to wake the wait.
 replay can't establish cadence from stale cached data.
 Consequence: a `startup_grace` subscriber whose only traffic was the
 subscribe-time replay correctly fires `on_quiet` when no live sample
-follows. (Pre-0.3.0, replays pinged like live samples.)
+follows. (Before 0.2.9, replays pinged like live samples.)
 
 ```python
 class _SubscriberWatchdog:

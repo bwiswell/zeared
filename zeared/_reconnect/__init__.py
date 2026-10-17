@@ -3,7 +3,9 @@
 Pattern B subdir. ``_reconnect.py`` holds the orchestration (probe loop,
 reconnect worker, trigger, ``_reconnect`` driver). ``_restore.py`` holds
 the post-reopen walks (publishers, retention, subscribers, queryables,
-presence) + the cancellable ``_open_with_backoff`` loop.
+presence) + the cancellable ``_open_with_backoff`` loop. ``_link.py`` holds
+router-link detection, the link signals, the republish and the re-attach
+walk (0.4.0).
 
 Public surface unchanged: callers continue to write
 ``from zeared._reconnect import start_probe`` (and ``_trigger_reconnect``,

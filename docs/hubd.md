@@ -36,7 +36,9 @@ python -m zeared.hubd [-l ENDPOINT ...] [-c ENDPOINT ...] \
   `z.hub(zenoh_config=...)` is taken as given, so set router mode and shared
   memory off there.
 - `--no-timestamping` — don't force on the HLC timestamping that's on by
-  default (retention dedupe needs it), with or without `--config`.
+  default, with or without `--config`. A sample's HLC timestamp is what
+  `meta.issued_at`, `meta.origin_zid` and dedupe read; retained sends
+  stamp their own puts (0.4.0), so retained values carry one either way.
 
 Stops cleanly on `SIGINT` / `SIGTERM`.
 
@@ -50,7 +52,7 @@ to embed or test the daemon without signals.
 
 ## Deploying as a systemd service
 
-The hub is a stateless daemon — the rio-* deployment model. A minimal unit:
+The hub is a stateless daemon, so it runs as a plain systemd service. A minimal unit:
 
 ```ini
 [Unit]
@@ -80,4 +82,4 @@ by design, so consumers can layer their own identity/scope policy.
 - **Single hub is a SPOF.** Run several and link them (`--connect`); nodes can
   list multiple routers.
 - **No message-layer involvement.** The hub routes opaque samples — it needs
-  no schemas / `rio-protocol` and never decodes payloads.
+  none of the mesh's message classes and never decodes payloads.

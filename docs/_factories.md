@@ -1,6 +1,6 @@
 # `_factories.py` — session-opening factories
 
-`peer()` / `client()` / `open()` plus the shared retry,
+`peer()` / `client()` / `hub()` / `open()` plus the shared retry,
 config-building, and managed-wrap helpers. Lives outside `__init__.py`
 so the package init stays a thin re-export module.
 
@@ -44,7 +44,7 @@ there are none anywhere.
 `auto_reconnect=True` returns a `ManagedSession` wrapper instead of a
 raw `zenoh.Session`.
 
-## Internal helpers (used by `peer` / `client`)
+## Internal helpers (used by `peer` / `client` / `hub`)
 
 - `_open_with_retry(open_fn, *, retry, initial_backoff, max_backoff,
   max_attempts, endpoint_label)` — exponential-backoff retry on
@@ -54,13 +54,23 @@ raw `zenoh.Session`.
   timestamping)` / `_build_config_for_client(endpoints, zenoh_config,
   *, timestamping)` — build the `zenoh.Config` for each mode. When
   `zenoh_config is None` we apply zeared's own settings
-  (`_apply_defaults`): the mode, `timestamping/enabled=true`
-  (RETAINED + DEDUPE need it) and `transport/shared_memory/enabled=false`
-  (see `config.md` → "Shared memory off"). When the user supplies a
-  config, we don't touch it (silent-respect), except to write endpoints
-  that were given. `_build_config_for_router(listen, connect,
-  zenoh_config, *, timestamping)` is the hub's; `listen=None` keeps the
-  config's own.
+  (`_apply_defaults`): the mode, `timestamping/enabled=true` unless
+  `timestamping=False` (see `config.md` → "Default `timestamping=True`
+  injection") and `transport/shared_memory/enabled=false` (see
+  `config.md` → "Shared memory off"). When handed a config, we don't
+  touch it, except to write endpoints that were given. For a
+  `zenoh_config=` kwarg that is silent-respect; a config built from
+  `zenoh_config_file` / `zenoh_overrides` arrives with zeared's settings
+  already applied by `_resolve_zenoh_config`.
+  `_build_config_for_router(listen, connect, zenoh_config, *,
+  timestamping)` is the hub's; `listen=None` keeps the config's own.
+- `_resolve_zenoh_config(config, zenoh_config)` — the config the
+  builders above are handed. A `zenoh_config=` kwarg is returned as is;
+  else, when the `SessionConfig` sets `zenoh_config_file` or
+  `zenoh_overrides`, a config built from the file, then zeared's own
+  settings (`_apply_defaults` with timestamping always on, so the
+  `timestamping=` kwarg doesn't reach it), then the overrides; else
+  `None`, and the builders build the whole config.
 - `_endpoints_set(c, key)` / `_config_endpoints(c, key)` — whether a
   config names its own `listen/endpoints` or `connect/endpoints` (an unset
   key reads back as Zenoh's default), and which.
@@ -70,7 +80,7 @@ raw `zenoh.Session`.
   daemon logs `bound`.
 - `_resolve_retry_knobs(config, retry, initial_backoff, max_backoff,
   max_attempts)` — layer kwargs over the config's retry knobs; shared
-  by `peer` / `client`.
+  by `peer` / `client` / `hub`.
 - `_finalise_session(raw, _open, label, *, ...)` — post-open: return
   raw or wrap as `ManagedSession`; reject `retention_ttl=` on raw
   sessions (no place to stash a session-level fallback). Shared by

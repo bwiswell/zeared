@@ -14,6 +14,8 @@ Method clusters extracted into mixins:
   ``adeclare_presence``; ``register_will`` / ``aregister_will`` raise a pointer).
 - ``_message_subscribe.py`` — ``_MessageSubscribeMixin`` (``on_message`` /
   ``published_topics``).
+- ``_message_query.py`` — ``_MessageQueryMixin`` (``on_query`` / ``query`` /
+  ``query_one`` / ``iter_query``).
 
 Plus ``_message_unretain.py`` for the ``_UnretainDescriptor`` + the
 shared ``_unretain_impl`` (instance-vs-class ``unretain`` dispatch),

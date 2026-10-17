@@ -498,11 +498,11 @@ class TestZenohConfigFields:
             {
                 'mode': 'client',
                 'router': 'tcp/hub:7447',
-                'zenoh_config_file': '/etc/rio-node.json5',
+                'zenoh_config_file': '/etc/myapp/zenoh.json5',
                 'zenoh_overrides': {'scouting/multicast/enabled': False},
             }
         )
-        assert cfg.zenoh_config_file == '/etc/rio-node.json5'
+        assert cfg.zenoh_config_file == '/etc/myapp/zenoh.json5'
         assert cfg.zenoh_overrides == {'scouting/multicast/enabled': False}
 
     def test_env_carries_the_file(self, monkeypatch):
@@ -512,7 +512,7 @@ class TestZenohConfigFields:
 
 
 class TestReconnectFields:
-    """0.4.0 (plan 20 §9 Q1): the reconnect knobs a config-opened session reads."""
+    """0.4.0: the reconnect knobs a config-opened session reads, so ``z.open(cfg)`` can return a managed session."""
 
     def test_defaults(self):
         cfg = z.SessionConfig(mode=z.Mode.CLIENT)

@@ -26,7 +26,7 @@ class TestIntrospectMessage:
         self.md = introspect_message(Ping)
 
     def test_topic_and_category(self):
-        assert self.md.topic == 'rio/command/ping/{source}/{reader_id}'
+        assert self.md.topic == 'fleet/command/ping/{source}/{unit_id}'
         assert self.md.category == 'command'
 
     def test_wire_metadata(self):
@@ -37,10 +37,10 @@ class TestIntrospectMessage:
         assert self.md.request is PingRequest
 
     def test_slots_flag_inherited_field(self):
-        # `source` is inherited from _CmdBase; `reader_id` is declared here.
+        # `source` is inherited from _CmdBase; `unit_id` is declared here.
         assert [(s.name, s.is_field) for s in self.md.slots] == [
             ('source', True),
-            ('reader_id', True),
+            ('unit_id', True),
         ]
 
 
@@ -78,7 +78,7 @@ class TestRenderMessage:
         assert self.md.startswith('# Ping')
         assert '`command` · schema `2`' in self.md
         assert '## Topic' in self.md
-        assert '`rio/command/ping/{source}/{reader_id}`' in self.md
+        assert '`fleet/command/ping/{source}/{unit_id}`' in self.md
         assert '| `source` | yes |' in self.md
 
     def test_wire_line_and_request_link(self):

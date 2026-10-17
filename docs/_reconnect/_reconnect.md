@@ -2,7 +2,8 @@
 
 Pattern B subdir. The probe + reconnect-worker thread pair plus the
 post-reopen restoration walks. Never imported by user code; the public
-surface is `auto_reconnect=True` on `peer()` / `client()`.
+surface is `auto_reconnect=True` on `peer()` / `client()` (or
+`SessionConfig.auto_reconnect`).
 
 ## Files
 
@@ -24,7 +25,7 @@ surface is `auto_reconnect=True` on `peer()` / `client()`.
 - `_restore.py` — post-reopen walks + the cancellable backoff:
   - `_open_with_backoff(open_fn, *, initial, cap, max_attempts, label,
     cancel)` — exponential-backoff retry with a cancel `Event`.
-  - `_ReconnectAborted` — raised by `_open_with_backoff` when the cancel
+  - `_ReconnectAbortedError` — raised by `_open_with_backoff` when the cancel
     fires (used to set `state = DEAD` cleanly during teardown).
   - `_restore_publishers(managed)` — invalidate the cached
     `zenoh.Publisher` handles on every publisher cache bound to this
@@ -45,6 +46,8 @@ Two paths feed into the same reconnect implementation:
 1. **Probe** (`_probe_loop`) — daemon thread per `ManagedSession`,
    polls `is_closed()` (or `zid()` fallback) every `probe_interval`s.
    Required for subscriber-only daemons that never call `put()`.
+   `probe_interval=0` / `None` skips the thread, and with it link
+   detection (next section).
 2. **Send-failure** (`_trigger_reconnect`) — called from
    `ManagedSession.put` / `.get` / `.delete` exception paths via
    `_note_failure`. Catches the 0–`probe_interval` gap on
@@ -54,17 +57,24 @@ Neither path sees a **lost router link**, which a hub restart causes:
 the session stays open and Zenoh re-dials by itself. The probe watches the
 link separately (next section).
 
-Both feed `_reconnect`, which:
+Both go through `_trigger_reconnect`, which CAS-es `state` IDLE →
+RECONNECTING (concurrent triggers collapse to one) and wakes the reconnect
+worker. The worker's `_reconnect`:
 
-1. CAS `state` IDLE → RECONNECTING.
-2. Open a new raw session via `open_fn` with backoff.
-3. Atomically swap the wrapper's raw reference.
-4. Walk the publisher registry and invalidate its cached handles.
-5. Walk the retention registry and redeclare queryables.
-6. Walk the subscriber registry and re-declare each.
-7. Walk the queryable registry and re-declare each.
-8. Re-declare every held presence token on the new raw.
-9. Close the old raw session quietly.
+1. `_link_lost`: marks the link lost and fires `on_link_lost` (if it was
+   up).
+2. Opens a new raw session via `open_fn` with backoff.
+3. Atomically swaps the wrapper's raw reference.
+4. Walks the publisher registry and invalidates its cached handles.
+5. Walks the retention registry and redeclares queryables.
+6. Walks the subscriber registry and re-declares each.
+7. Walks the queryable registry and re-declares each.
+8. Re-declares every held presence token on the new raw.
+9. Closes the old raw session quietly.
+10. Fires the `on_reconnect` callbacks, in registration order.
+11. `_note_routers`: takes the new raw's router set as the link baseline.
+12. `_link_restored(walk=False)`: the republish, then `on_link_restored`.
+    No re-attach walk: step 6 already re-ran the retained fetch.
 
 If step 2 exhausts `max_attempts`, set `state = DEAD` and stop the probe.
 
@@ -72,7 +82,9 @@ If step 2 exhausts `max_attempts`, set `state = DEAD` and stop the probe.
 
 `_link.py`. Each probe tick, after the dead-session check, `_check_link`
 reads `info.routers_zid()` and compares the set of router zids with the
-last tick's:
+last tick's (the probe is its only caller, so `probe_interval=0` / `None`
+means no link detection: no re-attach walk, and the republish and link
+signals run only around a reconnect):
 
 - non-empty → empty: `on_link_lost`;
 - empty → non-empty, while lost: the **republish**, the **re-attach
@@ -165,5 +177,5 @@ registered also preserves `_emitted`, the process-lifetime history behind
 
 `_open_with_backoff` blocks via `cancel.wait(backoff)` rather than
 `time.sleep` so `z.release()` can interrupt a long reconnect. The
-`_ReconnectAborted` exception unwinds cleanly into a `state = DEAD`
+`_ReconnectAbortedError` exception unwinds cleanly into a `state = DEAD`
 without polluting logs.

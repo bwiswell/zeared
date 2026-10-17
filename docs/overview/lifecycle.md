@@ -13,6 +13,7 @@ Replaces the manual dance of:
 # Equivalent (and easy to get wrong):
 for sub in my_subs:
     sub.close()
+z.clear_queryable_cache(session=my_session)
 z.clear_publisher_cache(session=my_session)
 z.clear_retention_cache(session=my_session)
 z.clear_presence_state(session=my_session)
@@ -21,19 +22,24 @@ my_session.close()
 
 ## Order
 
-1. **Close zeared subscribers on this session.** Cancels any active
+1. **Stop a `ManagedSession`'s threads.** Cancels and joins the probe
+   and the reconnect worker first, so a probe-detected death can't start
+   a reconnect mid-shutdown. Nothing to do for a raw session.
+2. **Close zeared subscribers on this session.** Cancels any active
    watchdogs, undeclares the underlying Zenoh subs and any liveliness
    subs.
-2. **`clear_publisher_cache(session=...)`.** Undeclares cached
+3. **Close user queryables on this session.** Undeclares each
+   `Cls.on_query` `zenoh.Queryable`.
+4. **`clear_publisher_cache(session=...)`.** Undeclares cached
    `zenoh.Publisher` instances.
-3. **`clear_retention_cache(session=...)`.** Undeclares the retention
+5. **`clear_retention_cache(session=...)`.** Undeclares the retention
    queryable + drops cached payloads.
-4. **`clear_presence_state(session=...)`.** Withdraws every liveliness
+6. **`clear_presence_state(session=...)`.** Withdraws every liveliness
    token the session holds. **This is the call peers see as offline** —
    the token DELETEs propagate over the live transport here.
-5. **`session.close()`.** Tears down the local Zenoh transport.
+7. **`session.close()`.** Tears down the local Zenoh transport.
 
-The order between steps 4 and 5 is the easy one to get wrong: flipping
+The order between steps 6 and 7 is the easy one to get wrong: flipping
 them tears down the transport before the DELETEs escape, and peers see
 the offline only once they notice the session is gone. The code has an
 inline comment spelling this out; the test
@@ -54,10 +60,11 @@ the invariant via a two-session `connected_pair` fixture.
 
 ## Subscriber registry
 
-`subscriber.py` carries a module-level `_subscribers: dict[id(session),
-set[Subscriber]]` that `Subscriber._declare` populates and
-`Subscriber.close` deregisters from. `z.release` walks this set and calls
-`.close()` on each.
+`subscriber/_subscriber_registry.py` carries a module-level
+`_subscribers: dict[id(session), set[Subscriber]]` that
+`Subscriber._declare` populates and `Subscriber.close` deregisters from.
+`z.release` walks this set and calls `.close()` on each. User queryables
+have the same shape in `queryable/_queryable_registry.py`.
 
 Hard references (no weakref) since `Subscriber` uses `__slots__`. Each
 subscriber explicitly deregisters on close, so the set stays accurate

@@ -76,7 +76,7 @@ def connected_pair(unused_tcp_port_factory=None):
         yield a, b
     finally:
         # Guard double-close — tests may explicitly close a session mid-run
-        # (e.g. to fire an LWT).
+        # (e.g. to take a key offline).
         for s in (a, b):
             with contextlib.suppress(Exception):
                 s.close()

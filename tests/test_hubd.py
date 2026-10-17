@@ -1,5 +1,5 @@
-"""Tests for the relay hub — ``z.hub()`` factory, router-mode config, and the
-``python -m zeared.hubd`` daemon.
+"""Tests for ``zeared/hubd.py``, the ``python -m zeared.hubd`` relay daemon, and the
+``z.hub()`` factory and router-mode config it is built on.
 
 The hub lets nodes that can't reach each other directly (e.g. both NAT-gated,
 outbound-only) communicate: each connects out to the hub, which relays
@@ -188,7 +188,7 @@ class TestHubRelaysZearedMessages:
 
         @z.zeared
         class Reading(z.Message):
-            TOPIC = 'rio/telemetry/reading/{id}'
+            TOPIC = 'fleet/telemetry/reading/{id}'
             RETAINED = True
             id: int = z.Int(required=True)
             v: int = z.Int(required=True)
@@ -216,7 +216,7 @@ class TestHubRelaysZearedMessages:
 
         @z.zeared
         class Status(z.Message):
-            TOPIC = 'rio/presence/status/{name}'
+            TOPIC = 'fleet/presence/status/{name}'
             LIVELINESS = True
             name: str = z.Str(required=True)
             state: str = z.Str(default='up')

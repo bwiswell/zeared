@@ -178,10 +178,10 @@ def batch() -> _BatchContext:
 
     Usage::
 
-        with z.batch() as b:
-            a.send()
-            b.send()
-            # b.flush()   # optional: drain now, continue collecting
+        with z.batch() as handle:
+            first.send()
+            second.send()
+            # handle.flush()   # optional: drain now, continue collecting
 
     Flat nesting: an inner ``with z.batch():`` shares the outer buffer and
     flushes only when the outer block exits. An exception escaping the

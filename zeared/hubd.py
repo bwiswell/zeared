@@ -8,7 +8,7 @@ Opens a router-mode session (see :func:`zeared.hub`) that relays pub/sub,
 queries, and liveliness between nodes which can't reach each other directly
 — e.g. two peers behind NAT, both outbound-only, each connecting *out* to
 this hub. The hub holds no zeared message state; it routes opaque samples,
-so it needs no ``rio-protocol`` / schemas. Deploy it as a systemd service on
+so it needs none of the mesh's message classes. Deploy it as a systemd service on
 a publicly-reachable host; point nodes at it with
 ``z.client(router='tcp/host:7447')``.
 

@@ -3,7 +3,7 @@ the ``_ZenohApiMixin`` (pass-through delegators for the
 ``zenoh.Session`` surface).
 
 End-to-end behaviour through ``ManagedSession`` lives in
-``test_session.py`` / ``test_reconnect.py``. This file confirms the
+``test__session.py`` / ``_reconnect/test__reconnect.py``. This file confirms the
 mixin's public surface.
 """
 

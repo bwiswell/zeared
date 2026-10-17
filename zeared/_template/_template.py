@@ -54,9 +54,10 @@ class Template:
         raw: original template string.
         field_names: ordered tuple of all capture slot names (single + multi).
         wildcard: Zenoh key expression for subscribe-side use.
-        publishable: ``False`` only if the template contains anonymous
-                     ``*`` or ``**`` segments. Named ``{name}`` and
-                     ``{name**}`` are both publishable.
+        publishable: ``False`` only if the template contains an anonymous
+                     ``**`` segment. Named ``{name}`` and ``{name**}`` are
+                     both publishable, and so is an anonymous ``*``: the
+                     key it sends on keeps the ``*``.
         _regex: compiled regex with named captures for each slot.
         _named_multi: name of the trailing ``{name**}`` slot, if any.
     """
@@ -271,9 +272,10 @@ class Template:
         Provided slots are substituted; slots that are missing (absent or
         ``None``) become ``*`` (single-segment) or ``**`` (a trailing
         ``{name**}`` slot), so ``Cls.query()`` with no key fields queries
-        the whole template wildcard and ``Cls.query(epc='E280*')`` narrows
-        to matching keys. Unlike :meth:`render`, wildcard values (a ``*``
-        the caller embeds) pass through verbatim — that is the point.
+        the whole template wildcard and ``Cls.query(robot='r-$*')`` narrows
+        to matching keys. Unlike :meth:`render`, wildcard values (a whole
+        ``*`` segment, or Zenoh's ``$*`` inside one) pass through verbatim —
+        that is the point.
 
         Subscribe-only templates (anonymous ``**``) can't be rendered from
         slots; they fall back to the plain subscribe :attr:`wildcard`.
