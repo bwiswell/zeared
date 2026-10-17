@@ -47,7 +47,8 @@ them with what to do.
   from `ZEARED_SESSION_*`, so `z.open` and `z.aopen` return a `ManagedSession` for a config that asks for one.
   Router mode refuses it.
 - **`z.Stream`**, what `alisten` and `aquery_iter` return: an async iterator with `dropped`, `maxsize`, `aclose()`
-  and `async with`, which closes its subscriber when collected after a `break`.
+  and `async with`, which closes its subscriber when collected after a `break`. `aclose()` from another task ends
+  an `async for` waiting on the stream.
 
 ### Changed
 

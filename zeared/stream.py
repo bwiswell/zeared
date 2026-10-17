@@ -142,9 +142,15 @@ class Stream[T]:
         return item
 
     async def aclose(self) -> None:
-        """Release the source. Idempotent."""
+        """Release the source, and end a consumer waiting in another task. Idempotent."""
+        if self._closed:
+            return
         self._closed = True
         self._finalizer()
+        # A consumer already waiting in ``__anext__`` waits on the queue, not
+        # on ``_closed``: the end marker wakes it. This runs on the loop
+        # thread, the only one that touches the queue.
+        self._channel.queue.put_nowait(_END)
 
     async def __aenter__(self) -> Self:
         """Enter ``async with``: the stream itself."""

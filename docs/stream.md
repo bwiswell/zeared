@@ -21,7 +21,7 @@ async with Telemetry.alisten(maxsize=1024) as stream:
 | `await anext(stream)` | the next item |
 | `dropped` | how many items a full stream has discarded, oldest first; monotonic |
 | `maxsize` | the bound, or `0` for unbounded |
-| `await stream.aclose()` | releases the source; idempotent |
+| `await stream.aclose()` | releases the source, and ends an `async for` waiting in another task; idempotent |
 | `async with stream` | closes on exit |
 
 ## The bound and the overflow policy
