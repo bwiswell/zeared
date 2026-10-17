@@ -470,9 +470,11 @@ def on_request(msg: CliRequest, meta: z.ZenohMeta):
 Anonymous trailing `**` matches one or more trailing path segments (the
 MQTT `#` counterpart). Zenoh's `**` also matches zero, so a sample on the
 bare prefix (`peer`, for `peer/**`) reaches the subscriber, matches no
-template and goes to `on_error` as a `DecodeError`. Templates with
-anonymous `**` are subscribe-only — `send()` on a non-publishable template
-raises `TopicError`. Useful as a catch-all subscriber:
+template and goes to `on_error` as a `DecodeError`. Templates with an
+anonymous wildcard are subscribe-only, and `send()` on one raises
+`TopicError`: a trailing `**`, and since 0.4.2 a `*` chunk or a `$*` in the
+literal text (`robot/*/status`, `fleet/r-$*/status`), which decode what they
+receive as Zenoh matches them. Useful as a catch-all subscriber:
 
 ```python
 @z.zeared

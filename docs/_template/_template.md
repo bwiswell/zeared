@@ -30,25 +30,30 @@ alone as a whole segment.
 
 ### Publishability
 
-A template is publishable unless it contains an anonymous `**` segment
-(`publishable = not has_anon_multi`). Both kinds of named slot are
-publishable.
+A template is publishable unless it holds an anonymous wildcard, any of
+which would put a wildcard in the key it sends on:
+- a trailing `**`;
+- a `*` chunk in its literal text (`robot/*/status`), since 0.4.2;
+- a `$*` within a literal chunk (`fleet/r-$*/status`), since 0.4.2.
 
-An anonymous `*` segment doesn't make a template subscribe-only: the
-parser treats it as literal text. `send()` puts on the key as written,
-`*` included (a wildcard key expression). On receive, the match regex
-escapes the `*`, so only that literal key decodes: the Zenoh subscriber
-on `robot/*/status` does receive a concrete `robot/r1/status`, but the
-key matches no template and the sample fails decode (`DecodeError` via
-`on_error`). To accept any segment, use a `{name}` slot (capture-only
-when it isn't a declared field).
+Both kinds of named slot are publishable. Publishing on a subscribe-only
+template, or picking one with `send(topic=…)`, raises `TopicError`.
+
+A literal `*` or `$*` matches on receive as Zenoh matches it: `*` one whole
+chunk, `$*` any run within one, none included. Until 0.4.2 the parser kept
+both as literal text. `send()` put a wildcard key, and the match regex
+escaped them, so the subscriber on `robot/*/status` received
+`robot/r1/status` but failed to decode it. A `{name}` slot still does the
+same job and keeps the value (capture-only when it isn't a declared
+field).
 
 | Template form                          | Subscribe | Publish |
 |----------------------------------------|-----------|---------|
 | `peer/{name}/status` (named single)    | ✓         | ✓       |
 | `peer/{cluster}/{host}/status`         | ✓         | ✓       |
 | `log/{service}/{tail**}` (named multi) | ✓         | ✓       |
-| `robot/*/status` (anonymous single)    | the literal `robot/*/status` key only | ✓ (on `robot/*/status`) |
+| `robot/*/status` (anonymous single)    | ✓         | ✗ (0.4.2; it sent on `robot/*/status` before) |
+| `fleet/r-$*/status` (within a chunk)   | ✓         | ✗ (0.4.2) |
 | `peer/**` (anonymous trailing multi)   | ✓         | ✗       |
 | `**` (lone anonymous multi)            | ✓         | ✗       |
 

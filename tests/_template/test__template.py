@@ -130,6 +130,47 @@ class TestMultiWildcard:
             t.render({})
 
 
+class TestLiteralWildcards:
+    """0.4.2: a ``*`` chunk or a ``$*`` in a template's literal text is a wildcard: subscribe-only, and it decodes."""
+
+    @pytest.mark.parametrize(
+        ('topic', 'key', 'captures'),
+        [
+            ('robot/*/status', 'robot/r1/status', {}),
+            ('robot/*/status/{id}', 'robot/r1/status/7', {'id': '7'}),
+            ('fleet/r-$*/status', 'fleet/r-1/status', {}),
+            ('fleet/r-$*/status', 'fleet/r-/status', {}),  # ``$*`` may match nothing
+            ('fleet/{unit}-$*/log', 'fleet/a-7/log', {'unit': 'a'}),
+        ],
+    )
+    def test_a_concrete_key_decodes(self, topic, key, captures):
+        # Until 0.4.2 the regex escaped the wildcard, so these all failed.
+        assert Template.parse(topic).match(key) == captures
+
+    @pytest.mark.parametrize(
+        ('topic', 'key'),
+        [
+            ('robot/*/status', 'robot/r1/x/status'),  # ``*`` is one chunk
+            ('fleet/r-$*/status', 'fleet/x-1/status'),
+            ('fleet/r-$*/status', 'fleet/r-1/2/status'),  # ``$*`` stays within its chunk
+        ],
+    )
+    def test_a_key_the_wildcard_doesnt_reach_doesnt(self, topic, key):
+        assert Template.parse(topic).match(key) is None
+
+    @pytest.mark.parametrize('topic', ['robot/*/status', 'robot/*/status/{id}', 'fleet/r-$*/status'])
+    def test_it_is_subscribe_only(self, topic):
+        t = Template.parse(topic)
+        assert t.publishable is False
+        with pytest.raises(TopicError, match='subscribe-only'):
+            t.render({'id': 7})
+
+    def test_it_subscribes_and_selects_with_the_wildcard_as_written(self):
+        t = Template.parse('robot/*/status/{id}')
+        assert t.wildcard == 'robot/*/status/*'
+        assert t.render_selector({'id': '7'}) == 'robot/*/status/*'
+
+
 class TestNamespaceReservation:
     """Pin: templates whose first literal segment is ``__zeared`` are
     reserved for zeared's internal keys, so a future one can't land on a
