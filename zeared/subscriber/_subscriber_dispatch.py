@@ -12,7 +12,7 @@ the same closure).
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import inspect
 import logging
 from typing import TYPE_CHECKING, Any
@@ -248,7 +248,7 @@ def _build_dispatch(  # noqa: C901, PLR0913, PLR0915
         issued = _parse_hlc(ts)
         if issued is None:
             return True
-        skew = (issued - datetime.datetime.now(datetime.UTC)).total_seconds()
+        skew = (issued - dt.datetime.now(dt.UTC)).total_seconds()
         if skew <= max_skew:
             return True
         if key_expr not in skew_warned:

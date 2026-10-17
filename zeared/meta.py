@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import enum
 import logging
 import re
@@ -76,7 +76,7 @@ class ZenohMeta(s.Seared):
     # wire-contract table. The formatter would collapse it.
     key_expr:    str                      = s.Str(required=True)
     timestamp:   str | None               = s.Str(default=None)       # raw HLC string
-    issued_at:   datetime.datetime | None = s.DateTime(default=None)  # parsed UTC
+    issued_at:   dt.datetime | None = s.DateTime(default=None)  # parsed UTC
     encoding:    str | None               = s.Str(default=None)
     source_info: str | None               = s.Str(default=None)
     origin_zid:  str | None               = s.Str(default=None)      # HLC id half
@@ -121,7 +121,7 @@ def _ntp64_seconds(raw: str) -> float | None:
     return None
 
 
-def _parse_hlc_string(s_repr: str) -> datetime.datetime | None:
+def _parse_hlc_string(s_repr: str) -> dt.datetime | None:
     """Parse the ``<ntp64>/<id>`` string form into a UTC ``datetime``."""
     m = _HLC_RE.match(s_repr)
     if not m:
@@ -130,12 +130,12 @@ def _parse_hlc_string(s_repr: str) -> datetime.datetime | None:
     if epoch is None:
         return None
     try:
-        return datetime.datetime.fromtimestamp(epoch, tz=datetime.UTC)
+        return dt.datetime.fromtimestamp(epoch, tz=dt.UTC)
     except ValueError, OSError, OverflowError:
         return None
 
 
-def _parse_hlc(ts: object) -> datetime.datetime | None:
+def _parse_hlc(ts: object) -> dt.datetime | None:
     """Parse a Zenoh HLC sample timestamp into a UTC ``datetime``.
 
     Prefers ``zenoh.Timestamp.get_time()``, which returns an aware UTC

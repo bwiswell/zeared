@@ -1436,7 +1436,13 @@ with `uv run --no-sync python -m bench --runs 3` so `uv` doesn't remove it.
 The MQTT comparison needs `mosquitto` on `PATH`; suites whose requirements
 are missing skip with a note.
 
-Tests mirror source layout exactly — one `test_*.py` per source file.
+Tests mirror the source layout: a `test_*.py` per module, in the matching
+directory (`tests/test__codec.py` for `zeared/_codec.py`,
+`tests/message/test__message_render.py` for
+`zeared/message/_message_render.py`). A few files test across modules:
+lifecycles and integrations (`tests/test_hub_restart.py`,
+`tests/queryable/test_lifecycle.py`, `tests/doc/test_wire.py`, …), which
+is where modules such as the queryable dispatch are covered.
 Integration tests spin up real Zenoh peer sessions in-process; they cover the
 full send → subscriber → decode path, two-session isolation, scoped overrides,
 the debug flag, and error handling.

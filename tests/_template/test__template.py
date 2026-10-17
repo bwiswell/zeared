@@ -131,9 +131,9 @@ class TestMultiWildcard:
 
 
 class TestNamespaceReservation:
-    """Pin: templates whose first literal segment is ``__zeared`` collide
-    with internal zeared routing (liveliness tokens, will envelopes, the
-    presence observer). Reject at parse time. Exemption: the unmodified
+    """Pin: templates whose first literal segment is ``__zeared`` are
+    reserved for zeared's internal keys, so a future one can't land on a
+    user's. Reject at parse time. Exemption: the unmodified
     anonymous catch-all forms ``**`` and ``__zeared/**`` — diagnostic
     tooling is allowed to subscribe to internal traffic explicitly.
     Named multi-segment under the prefix is NOT exempt (a structural

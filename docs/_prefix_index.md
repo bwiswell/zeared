@@ -37,7 +37,7 @@ segments, trailing `**` matches one or more.
 ## Wildcard semantics
 
 These match the regex-equivalent reference implementation in
-`tests/test_prefix_index.py::_linear_match`:
+`tests/test__prefix_index.py::_linear_match`:
 
 | Query | Equivalent regex |
 |-------|------------------|

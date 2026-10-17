@@ -1,14 +1,14 @@
 """Tests for ``zeared/message/_message_render.py`` — the canonical topic render.
 
 One renderer turns slot values into the key segments every path uses —
-send, will registration, query replies, unretain, query selectors, and the
+send, declare_presence, query replies, unretain, query selectors, and the
 public ``concrete_topic`` — so a key a publisher renders is the key a
 subscriber's capture decodes back.
 """
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import decimal
 import enum
 import uuid
@@ -46,15 +46,15 @@ _KINDS: list[tuple[str, Any, Any, str]] = [
     ('Bool', lambda: z.Bool(required=True), True, 'True'),
     ('Decimal', lambda: z.Decimal(required=True), decimal.Decimal('1.25'), '1.25'),
     ('UUID', lambda: z.UUID(required=True), uuid.UUID(int=7), '00000000-0000-0000-0000-000000000007'),
-    ('Date', lambda: z.Date(required=True), datetime.date(2026, 10, 15), '2026-10-15'),
+    ('Date', lambda: z.Date(required=True), dt.date(2026, 10, 15), '2026-10-15'),
     (
         'DateTime',
         lambda: z.DateTime(required=True),
-        datetime.datetime(2026, 10, 15, 12, 30, tzinfo=datetime.UTC),
+        dt.datetime(2026, 10, 15, 12, 30, tzinfo=dt.UTC),
         '2026-10-15T12:30:00+00:00',
     ),
-    ('Time', lambda: z.Time(required=True), datetime.time(12, 30), '12:30:00'),
-    ('TimeDelta', lambda: z.TimeDelta(required=True), datetime.timedelta(seconds=5), '5.0'),
+    ('Time', lambda: z.Time(required=True), dt.time(12, 30), '12:30:00'),
+    ('TimeDelta', lambda: z.TimeDelta(required=True), dt.timedelta(seconds=5), '5.0'),
     ('StrEnum', lambda: z.Enum(enum=_Str, required=True), _Str.NORTH, 'n'),
     ('IntEnum', lambda: z.Enum(enum=_Int, required=True), _Int.TWO, '2'),
     ('MixinEnum', lambda: z.Enum(enum=_Mixin, required=True), _Mixin.NORTH, 'n'),

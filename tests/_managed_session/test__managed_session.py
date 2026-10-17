@@ -1,8 +1,8 @@
 """Smoke tests for ``zeared/_managed_session/_managed_session.py`` —
 the ``ManagedSession`` class itself.
 
-End-to-end auto-reconnect coverage lives in ``test__reconnect.py`` and
-the existing ``test_session.py``. This file confirms the class's
+End-to-end auto-reconnect coverage lives in ``_reconnect/test__reconnect.py``
+and ``test__session.py``. This file confirms the class's
 public surface and the base lifecycle (init / state / close).
 """
 

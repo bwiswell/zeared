@@ -39,7 +39,7 @@ them directly keep their current behaviour.
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import decimal
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -62,14 +62,14 @@ if TYPE_CHECKING:
 _SCALAR_TYPES: dict[str, type] = {
     'Bool': bool,
     'Bytes': bytes,
-    'Date': datetime.date,
-    'DateTime': datetime.datetime,
+    'Date': dt.date,
+    'DateTime': dt.datetime,
     'Decimal': decimal.Decimal,
     'Float': float,
     'Int': int,
     'Str': str,
-    'Time': datetime.time,
-    'TimeDelta': datetime.timedelta,
+    'Time': dt.time,
+    'TimeDelta': dt.timedelta,
     'UUID': uuid.UUID,
 }
 

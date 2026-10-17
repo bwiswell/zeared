@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import contextlib
-import datetime
+import datetime as dt
 import random
 
 import pytest
@@ -29,11 +29,11 @@ class TestZenohMeta:
             source_info='zid-abc',
             attachment=b'extra',
             schema='1.0',
-            issued_at=datetime.datetime(
+            issued_at=dt.datetime(
                 2026,
                 1,
                 1,
-                tzinfo=datetime.UTC,
+                tzinfo=dt.UTC,
             ),
         )
         d = ZenohMeta.dump(m)
@@ -88,10 +88,10 @@ class TestParseHLC:
         ntp64 = (seconds << 32) | 0
         hlc_str = f'{ntp64:016x}/abcdef'
         result = _parse_hlc(hlc_str)
-        assert isinstance(result, datetime.datetime)
+        assert isinstance(result, dt.datetime)
         assert result.tzinfo is not None
         # Within a fractional second of expected.
-        expected = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        expected = dt.datetime(2025, 1, 1, tzinfo=dt.UTC)
         assert abs((result - expected).total_seconds()) < 1.0
 
     def test_returns_none_on_garbled(self):
@@ -213,7 +213,7 @@ class TestIssuedAtOnRealSamples:
         ntp64 = seconds << 32
         result = _parse_hlc(f'{ntp64:d}/abc')
         assert result is not None
-        assert abs((result - datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)).total_seconds()) < 1.0
+        assert abs((result - dt.datetime(2025, 1, 1, tzinfo=dt.UTC)).total_seconds()) < 1.0
 
     def test_issued_at_populated_on_a_real_sample(self, timestamped_pair):
         pub, sub = timestamped_pair
@@ -226,7 +226,7 @@ class TestIssuedAtOnRealSamples:
         seen: list = []
         Ping.on_message(lambda m, meta: seen.append(meta), session=sub)
         wait(0.3)
-        before = datetime.datetime.now(datetime.UTC)
+        before = dt.datetime.now(dt.UTC)
         Ping(v=1).send(session=pub)
         wait(0.5)
 
