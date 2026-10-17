@@ -141,6 +141,7 @@ zeared/
 ├── effect.py                          # Effect (READ < WRITE < ACTION) + effect_of: the doc-only EFFECT vocabulary
 ├── errors.py                          # ZearedError and its subclasses
 ├── hubd.py                            # `python -m zeared.hubd`: the relay hub daemon
+├── keyexpr.py                         # key expressions, matched as Zenoh matches them (0.4.2)
 ├── message/                           # Message base class, one mixin per concern
 │   ├── message.py                     # Message: class attributes, decode, mixin composition
 │   ├── _message_async.py              # asend / asend_batch / aunretain / alisten

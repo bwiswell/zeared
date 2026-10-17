@@ -65,6 +65,7 @@ class QueryContext:
             template it matched. A wildcard chunk the template can bind comes
             through as written (``{'robot': '*'}`` or ``{'robot': 'r-$*'}``);
             a key that matches no template (``fleet/**``) gives ``{}``.
+            ``zeared.keyexpr.is_concrete`` tells the two apart.
         request: the decoded request payload. When the class sets
             ``REQUEST = SomeClass`` and the query carried a payload, this is
             a decoded ``SomeClass`` instance; otherwise the raw payload

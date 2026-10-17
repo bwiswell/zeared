@@ -11,10 +11,17 @@ lines as it lands, and the entry is dated when that version is released.
 
 ## 0.4.2 — unreleased
 
-**On seared 0.4.2, with a strict `SessionConfig`.**
+**On seared 0.4.2, with a strict `SessionConfig`, and one key matcher.**
 
 ### Added
 
+- **`zeared.keyexpr`**, for code that matches or shapes keys by hand: `intersects(a, b)`, `includes(a, b)`,
+  `shape(topic)` and `is_concrete(key)`, over strings. The answers are Zenoh's own, from the `zenoh.KeyExpr` the
+  mesh routes by: `**` matches any number of chunks, none included, `$*` any run within one chunk, and input is
+  canonized. `shape` writes a `TOPIC`'s slots as wildcards, a tail slot as `*/**` since it never renders empty. An
+  access check is these in combination: `includes(rule, key)`, `intersects(rule, shape(topic))`. A string that isn't
+  a key expression raises the new `z.KeyExprError`, also a `ValueError`, with a hint for `read-*` (Zenoh writes
+  `read-$*`).
 - **`--require-docs` for `python -m zeared.doc`**, from seared 0.4.1, whose CLI zeared's runs: before writing or
   checking anything, it lists each field without a `doc=`, Message classes' included, and exits 1.
 

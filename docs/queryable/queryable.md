@@ -63,7 +63,10 @@ handlers never import Zenoh:
 `key_expr`, and a wildcard chunk binds literally, as it appears in the
 key: a query on `fleet/position/*` gives `{'robot': '*'}`, one on
 `fleet/position/r-$*` gives `{'robot': 'r-$*'}`. It is `{}` when no
-template matches the key (`fleet/**`, say).
+template matches the key (`fleet/**`, say). A handler tells a wide query
+from a narrow one with `zeared.keyexpr.is_concrete(ctx.captures['robot'])`,
+and matches its own keys against a wide one with `includes` (0.4.2; see
+[`../keyexpr.md`](../keyexpr.md)).
 
 `ctx.reply(instance)` has the same wire shape as `instance.send()`: slot
 fields stripped from the body, the instance's effective encoding, the

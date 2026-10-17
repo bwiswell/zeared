@@ -585,6 +585,28 @@ the segment and the key would match no template:
   went out on a key nobody received. The query getters' selectors don't
   check, since they embed wildcards deliberately.
 
+## Matching keys by hand (`zeared.keyexpr`)
+
+Code that matches or shapes keys itself, such as an access rule, a bridge's
+route or a gateway's grant, should ask `zeared.keyexpr` (0.4.2) rather than
+split on `/`. Its answers are Zenoh's own, from the `zenoh.KeyExpr` the mesh
+routes by, so they can't drift from what a subscriber or a getter reaches:
+
+```python
+from zeared.keyexpr import includes, intersects, is_concrete, shape
+
+includes('rio/**/rtls/**', 'rio/config/geometry/rtls/r1')   # may this rule reach this key?
+intersects(rule, shape(Reading.TOPIC))                      # could this route deliver anything allowed?
+includes(rule, shape(Reading.TOPIC))                        # does the rule cover all it can carry?
+shape('fleet/{robot}/log/{rest**}')                         # 'fleet/*/log/*/**'
+is_concrete(ctx.captures['robot'])                          # a narrow query, or a wide one?
+```
+
+`**` matches any number of chunks, none included, and `$*` any run within
+one chunk (`r-$*`). `shape` writes a tail slot as `*/**`, since it never
+renders empty. A string that isn't a key expression raises `z.KeyExprError`,
+a `ValueError`. See [`docs/keyexpr.md`](docs/keyexpr.md).
+
 ## Tagged-union payloads (`z.Union`)
 
 For control topics that carry a `{action, args}`-style envelope with
@@ -1325,6 +1347,7 @@ nothing and exits non-zero when the committed docs have drifted. See
 ZearedError
 ├── NoSessionError
 ├── TopicError
+├── KeyExprError                   # also a ValueError (0.4.2)
 ├── SessionDeadError
 ├── SubscriptionError              # declare-time, fatal to one subscription
 ├── QueryableError                 # declare-time, or serving-side on_error
@@ -1340,6 +1363,7 @@ ZearedError
 |-----------|-------------|
 | `z.NoSessionError`      | No session is resolvable (no kwarg, no scope, no default) |
 | `z.TopicError`          | `TOPIC` is missing or malformed (bad template syntax, a format spec, a non-trailing `**`), or violates the namespace reservation (`__zeared/...`); a single-segment slot is bound to `Path` or base64 `Bytes`, or a `{name**}` slot to anything but `Str`; a publish would put a `/` inside a single-segment value; a slot is missing when a key is built; a `topic=` override matches no declared template (or a subscribe-only one); `retain=True`, `unretain` or `fetch_retained` on a non-`RETAINED` class; `on_query` on a `RETAINED` class; presence calls (`declare_presence`, `on_online` / `on_offline`) on a class without `LIVELINESS` |
+| `z.KeyExprError`        | A `zeared.keyexpr` function was given a string that isn't a Zenoh key expression (an empty chunk, or `read-*` where Zenoh writes `read-$*`). Also a `ValueError` (0.4.2) |
 | `z.SessionDeadError`    | A `ManagedSession` op (`put`/`get`/`delete`/`zid`/...) is invoked while the session is `RECONNECTING` or `DEAD` |
 | `z.SubscriptionError`   | `on_message` — declaring the underlying Zenoh subscriber, or a presence feed's liveliness subscribers, failed; or an `async def` callback was given with no running event loop (fatal to that subscription) |
 | `z.SubscriberError`     | Parent for dispatch-time errors. Routed to `on_error=`; subscription continues |
