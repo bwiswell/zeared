@@ -85,6 +85,18 @@ class TestMultiSegmentFieldValidation:
 
         M._templates()
 
+    def test_a_str_subclass_passes(self):
+        # By kind (0.4.2): a subclass that checks its value is still a Str.
+        class Trimmed(z.Str):
+            pass
+
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'log/{tail**}'
+            tail: str = Trimmed(required=True)
+
+        M._templates()
+
     def test_non_str_multi_slot_rejected(self):
         with pytest.raises(z.TopicError, match=r'must bind to z\.Str'):
 
@@ -136,6 +148,34 @@ class TestSingleSegmentFieldValidation:
                 where: object = z.Path(required=True)
 
             M._templates()
+
+    @pytest.mark.parametrize(
+        ('base', 'kwargs', 'name'),
+        [(z.Path, {}, 'RelPath'), (z.Bytes, {}, 'Blob')],
+        ids=['Path', 'Bytes'],
+    )
+    def test_a_subclass_is_caught_too(self, base, kwargs, name):
+        # By kind (0.4.2): the name check let a subclass through to split a key.
+        sub = type(name, (base,), {})
+
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'dev/{where}'
+            where: object = sub(required=True, **kwargs)
+
+        with pytest.raises(z.TopicError, match=rf"single-segment slot 'where' is bound to {name}, whose string form"):
+            M._templates()
+
+    def test_a_hex_bytes_subclass_passes(self):
+        class Digest(z.Bytes):
+            pass
+
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'dev/{digest}'
+            digest: bytes = Digest(required=True, encoding='hex')
+
+        M._templates()
 
     def test_extra_topic_single_slot_is_checked_too(self):
         with pytest.raises(z.TopicError, match='single-segment slot'):

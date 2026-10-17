@@ -67,7 +67,9 @@ the segment and the key would match no template:
 - **The class check** (`_message_topic.py`, at the first `_templates()`
   call) raises `TopicError` for a single-segment slot bound to `Path`, or
   to `Bytes` in its default base64 form. `Bytes(encoding='hex')` and `Str`
-  pass, and a trailing `{name**}` slot takes a path tail.
+  pass, and a trailing `{name**}` slot takes a path tail. It goes by the
+  field's kind (`s.field_kind`, 0.4.2), so a subclass is judged as its
+  base: a `Path` subclass is refused, and a `Str` subclass takes a tail.
 - **Publish renders** (`send`, `declare_presence`, `QueryContext.reply`,
   `unretain`, `concrete_topic`) raise `TopicError` for a single-segment
   value whose rendered form contains `/`. The query getters' selectors

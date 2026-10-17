@@ -58,6 +58,18 @@ lines as it lands, and the entry is dated when that version is released.
   narrows the candidates, and `zeared.keyexpr.intersects` decides, so retention answers exactly what Zenoh routes. A
   query with two `**` (`**/a/**`) also had some values replied to more than once; each is now replied to once. Since
   0.1.0.
+- **The slot checks go by a field's kind,** `s.field_kind`, rather than its class's name. A subclass of `Str` binds
+  a `{name**}` slot, where it was refused (since 0.1.0), and a subclass of `Path`, or of `Bytes` in base64, is
+  refused on a single-segment slot, where it passed and could split the key (since 0.4.0).
+- **A subscription that fails to declare stops its watchdog.** With `startup_grace`, the watchdog's thread starts
+  when the subscription is built, and a declare that then failed (a Zenoh subscriber, or the presence watch) left it
+  running, so `on_quiet` fired for a subscription that was never made. Since 0.1.0.
+- **`peer(retention_ttl=…)` or `client(retention_ttl=…)` without `auto_reconnect` raises before opening.** It raised
+  the same `TypeError` after the session had opened, and the session was never closed. Since 0.1.0.
+- **A presence token declared on a `ManagedSession`'s raw session comes back after a reconnect.** One declared with
+  `session=managed.raw()` was matched against the new raw session, which nothing had declared on, so it stayed
+  offline; the reconnect now matches it against the session it replaced. A token declared on the managed session
+  itself was always restored. Since 0.4.0.
 
 ## 0.4.1 — 2026-10-17
 

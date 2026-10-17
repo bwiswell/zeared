@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 from conftest import _endpoint, wait
 
@@ -893,6 +895,62 @@ class TestLiteralWildcardSubscribe:
         z.session = session
         with pytest.raises(z.TopicError, match='subscribe-only'):
             Wide(id=1).send()
+
+
+class TestDeclareRollback:
+    """0.4.2: a declare that fails partway stops the watchdog it started.
+
+    With ``startup_grace``, the watchdog's thread starts when it's built, so a
+    rollback that left it running fired ``on_quiet`` for a subscription that
+    never existed.
+    """
+
+    @staticmethod
+    def _quiet_after_a_failed_declare(message_cls, session):
+        events: list[str] = []
+        z.session = session
+        with pytest.raises(Exception, match='refused'):
+            message_cls.on_message(
+                lambda m: None,
+                expected_interval=10.0,
+                on_quiet=lambda: events.append('quiet'),
+                startup_grace=0.05,
+            )
+        time.sleep(0.25)  # well past the grace
+        return events
+
+    def test_a_failed_presence_watch_stops_the_watchdog(self, session, monkeypatch):
+        import zeared.subscriber.subscriber as subscriber_mod
+
+        def refuse(*args, **kwargs):
+            msg = 'presence refused'
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(subscriber_mod, '_start_presence', refuse)
+
+        @z.zeared
+        class Watched(z.Message):
+            TOPIC = 'rollback/presence/{id}'
+            id: int = z.Int(required=True)
+
+        assert self._quiet_after_a_failed_declare(Watched, session) == []
+
+    def test_a_failed_subscriber_declare_stops_the_watchdog(self, session, monkeypatch):
+        import zeared.subscriber.subscriber as subscriber_mod
+
+        class Refusing:
+            def declare_subscriber(self, *args, **kwargs):
+                msg = 'declare refused'
+                raise RuntimeError(msg)
+
+        monkeypatch.setattr(subscriber_mod, 'resolve_raw', lambda session: Refusing())
+
+        @z.zeared
+        class Watched(z.Message):
+            TOPIC = 'rollback/declare/{id}'
+            id: int = z.Int(required=True)
+
+        assert self._quiet_after_a_failed_declare(Watched, session) == []
 
 
 class TestMultiTopic:

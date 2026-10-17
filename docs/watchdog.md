@@ -42,6 +42,10 @@ The loop spawns at construction time. If no message arrives within
 Right answer for "tell me if I haven't heard anything within N seconds
 of subscribing" — daemon liveness checks at startup.
 
+Because the thread starts with the watchdog, a subscription whose declare
+fails cancels it as it rolls back (0.4.2). Until then a failed declare left
+it running, and `on_quiet` fired for a subscription that never existed.
+
 ## Threading model
 
 - The watchdog thread is a `daemon=True` thread named `zeared-watchdog`.

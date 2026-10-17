@@ -364,6 +364,25 @@ def _resolve_session_knobs(
     return bool(ar), pi, float(rj), int(rc)
 
 
+def _check_retention_ttl(retention_ttl: float | None, *, auto_reconnect: bool, factory_name: str) -> None:
+    """Refuse ``retention_ttl`` without ``auto_reconnect``, before anything opens (0.4.2).
+
+    A raw Zenoh session has nowhere to keep a per-session TTL. Until 0.4.2 the
+    check ran after the session had opened, and the session leaked.
+
+    Raises:
+        TypeError: If ``retention_ttl`` is set on a session that won't be managed.
+    """
+    if retention_ttl is not None and not auto_reconnect:
+        msg = (
+            f'{factory_name}(retention_ttl=...) requires auto_reconnect=True; '
+            'raw zenoh sessions have nowhere to stash a per-session '
+            'TTL fallback. Either set auto_reconnect=True or use '
+            'class-level Cls.RETENTION_TTL.'
+        )
+        raise TypeError(msg)
+
+
 def _finalise_session(  # noqa: PLR0913
     raw: zenoh.Session,
     _open: Callable[[], zenoh.Session],
@@ -375,23 +394,15 @@ def _finalise_session(  # noqa: PLR0913
     initial_b: float,
     max_b: float,
     max_a: int | None,
-    factory_name: str,
     resync_jitter: float = 2.0,
     resync_concurrency: int = 4,
 ) -> zenoh.Session | ManagedSession:
-    """Post-open: return raw or wrap as ManagedSession; reject ``retention_ttl`` on raw sessions.
+    """Post-open: return raw or wrap as ManagedSession.
 
-    Shared by ``peer`` / ``client``.
+    Shared by ``peer`` / ``client``, which check ``retention_ttl`` against
+    ``auto_reconnect`` before opening (:func:`_check_retention_ttl`).
     """
     if not auto_reconnect:
-        if retention_ttl is not None:
-            msg = (
-                f'{factory_name}(retention_ttl=...) requires auto_reconnect=True; '
-                'raw zenoh sessions have nowhere to stash a per-session '
-                'TTL fallback. Either set auto_reconnect=True or use '
-                'class-level Cls.RETENTION_TTL.'
-            )
-            raise TypeError(msg)
         return raw
     managed = _wrap_managed(
         raw,
@@ -458,6 +469,7 @@ def peer(  # noqa: PLR0913
         resync_jitter,
         resync_concurrency,
     )
+    _check_retention_ttl(retention_ttl, auto_reconnect=auto_reconnect, factory_name='peer')
 
     if connect is not None:
         base_connect = connect
@@ -495,7 +507,6 @@ def peer(  # noqa: PLR0913
         initial_b=initial_b,
         max_b=max_b,
         max_a=max_a,
-        factory_name='peer',
         resync_jitter=resync_jitter,
         resync_concurrency=resync_concurrency,
     )
@@ -547,6 +558,7 @@ def client(  # noqa: PLR0913
         resync_jitter,
         resync_concurrency,
     )
+    _check_retention_ttl(retention_ttl, auto_reconnect=auto_reconnect, factory_name='client')
 
     if router is not None:
         endpoints = [router] if isinstance(router, str) else list(router)
@@ -592,7 +604,6 @@ def client(  # noqa: PLR0913
         initial_b=initial_b,
         max_b=max_b,
         max_a=max_a,
-        factory_name='client',
         resync_jitter=resync_jitter,
         resync_concurrency=resync_concurrency,
     )

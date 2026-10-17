@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from seared import FieldKind, field_kind
+
 from .. import _codec as codec
 from .._template import Templates
 from ..errors import TopicError
@@ -112,8 +114,9 @@ class _MessageTopicMixin:
             f = spec_by_attr.get(name)
             if f is None:
                 continue  # capture-only — lands on meta.captures as a str
+            # By kind, so a ``Str`` subclass passes (0.4.2); the name still says which class.
             cls_name = type(f).__name__
-            ok = (cls_name == 'Str') and not getattr(f, 'many', False) and not getattr(f, 'keyed', False)
+            ok = field_kind(f) is FieldKind.STR and not getattr(f, 'many', False) and not getattr(f, 'keyed', False)
             if not ok:
                 msg = (
                     f'{cls.__name__}: multi-segment field {name!r} must bind '
@@ -127,15 +130,16 @@ class _MessageTopicMixin:
             f = spec_by_attr.get(name)
             if f is None:
                 continue
-            kind = type(f).__name__
-            if kind == 'Path':
+            # By kind, so a ``Path`` or ``Bytes`` subclass is caught too (0.4.2).
+            kind = field_kind(f)
+            if kind is FieldKind.PATH:
                 hint = 'bind it to z.Str, or use a trailing {' + name + '**} slot for a path tail'
-            elif kind == 'Bytes' and getattr(f, 'encoding', 'base64') != 'hex':
+            elif kind is FieldKind.BYTES and getattr(f, 'encoding', 'base64') != 'hex':
                 hint = "use z.Bytes(encoding='hex'), whose string form is segment-safe"
             else:
                 continue
             msg = (
-                f'{cls.__name__}: single-segment slot {name!r} is bound to {kind}, whose string form '
+                f'{cls.__name__}: single-segment slot {name!r} is bound to {type(f).__name__}, whose string form '
                 f"can contain '/' and split the key; {hint}"
             )
             raise TopicError(msg)
