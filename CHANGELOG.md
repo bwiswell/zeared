@@ -47,7 +47,8 @@ them with what to do.
   from `ZEARED_SESSION_*`, so `z.open` and `z.aopen` return a `ManagedSession` for a config that asks for one.
   Router mode refuses it.
 - **`z.Stream`**, what `alisten` and `aquery_iter` return: an async iterator with `dropped`, `maxsize`, `aclose()`
-  and `async with`, which closes its subscriber when collected after a `break`.
+  and `async with`, which closes its subscriber when collected after a `break`. `aclose()` from another task ends
+  an `async for` waiting on the stream.
 
 ### Changed
 
@@ -91,6 +92,27 @@ them with what to do.
 - `z.open` is typed `zenoh.Session | ManagedSession`, and `OnReconnectHandle` is an alias of `CallbackHandle`.
 - The README's presence and auto-reconnect sections are rewritten, and so is the presence doc; `docs/stream.md`
   covers `z.Stream`.
+
+### Fixed
+
+- **`z.apeer` and `z.aclient` layer explicit keyword arguments over `config=`**, as `z.peer` and `z.client` do.
+  Given a `config=`, `apeer` dropped `connect`, `listen`, `zenoh_config`, `retry` and the backoff settings, and
+  `aclient` all of those but `router`, without a word.
+- **The schema-mismatch warning names each sender.** It was keyed on `sample.source_info`, which Zenoh leaves unset
+  on an ordinary put, so every sender shared one entry and only the first misaligned publisher ever reached
+  `on_error`. It is keyed on the zid in the sample's timestamp; a sample with no timestamp has no sender to name.
+- **A queryable's `on_error` that raises is logged, and the getter still gets its error reply.** It escaped into
+  Zenoh's callback, and when a handler had failed it also skipped the `reply_err`, so the getter took a cut-off
+  stream for the whole answer.
+- **A failed send keeps `published_topics()`.** Every send failure dropped the publisher cache from its registry,
+  and with it the history of what the class had emitted on that session; it now only undeclares the cached
+  publishers, as a reconnect does.
+- **The first send on a new topic reports a dead managed session.** A failed publisher declare raised a plain
+  `ZearedError` and told the session nothing, so lazy reconnect detection didn't fire; it now does, and raises
+  `SessionDeadError` while the session is down. A tombstone, direct or batched, raises `SessionDeadError` in the
+  reconnect window too, where it rewrapped the session's own one in a plain `ZearedError`.
+- **A watchdog with no `on_active` fires `on_quiet` for every quiet spell.** Only `on_active` ended a spell, so
+  without one the first never ended and `on_quiet` never fired again.
 
 ### Removed
 

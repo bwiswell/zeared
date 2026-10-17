@@ -96,6 +96,23 @@ class TestClosing:
 
         assert asyncio.run(main()) == [1]
 
+    def test_aclose_from_another_task_ends_a_waiting_consumer(self):
+        async def main():
+            stream, closes = _stream()
+            got: list[int] = []
+
+            async def consume() -> None:
+                got.extend([item async for item in stream])
+
+            consumer = asyncio.create_task(consume())
+            stream._channel.feed(1)
+            await _drain_callbacks()  # the consumer has taken 1 and waits for more
+            await stream.aclose()
+            await asyncio.wait_for(consumer, timeout=1.0)
+            return got, closes
+
+        assert asyncio.run(main()) == ([1], [1])
+
     def test_async_with_closes(self):
         async def main():
             stream, closes = _stream()

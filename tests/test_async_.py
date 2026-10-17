@@ -306,6 +306,55 @@ class TestApeerAclient:
 
         asyncio.run(main())
 
+    @staticmethod
+    def _recording(monkeypatch, name: str) -> dict:
+        """Swap ``z.<name>`` for a recorder that opens a plain peer, whatever it was asked."""
+        seen: dict = {}
+        real_peer = z.peer
+
+        def fake(*args, **kwargs):
+            seen.update(kwargs, args=args)
+            return real_peer()
+
+        monkeypatch.setattr(z, name, fake)
+        return seen
+
+    def test_apeer_layers_explicit_kwargs_over_config(self, monkeypatch):
+        """With ``config=``, ``apeer`` used to drop ``connect``, ``listen``, ``zenoh_config`` and the retry knobs."""
+        import zenoh
+
+        seen = self._recording(monkeypatch, 'peer')
+        cfg = z.SessionConfig(mode=z.Mode.PEER)
+        zc = zenoh.Config()
+
+        async def main():
+            async with z.apeer(config=cfg, connect=['tcp/127.0.0.1:1'], zenoh_config=zc, retry=True, max_attempts=3):
+                pass
+
+        asyncio.run(main())
+        assert seen['config'] is cfg
+        assert seen['connect'] == ['tcp/127.0.0.1:1']
+        assert seen['zenoh_config'] is zc
+        assert (seen['retry'], seen['max_attempts']) == (True, 3)
+        assert 'initial_backoff' not in seen  # not given: the config's applies
+
+    def test_aclient_layers_explicit_kwargs_over_config(self, monkeypatch):
+        import zenoh
+
+        seen = self._recording(monkeypatch, 'client')
+        cfg = z.SessionConfig(mode=z.Mode.CLIENT, router='tcp/127.0.0.1:1')
+        zc = zenoh.Config()
+
+        async def main():
+            async with z.aclient(config=cfg, zenoh_config=zc, retry=True, max_backoff=1.0):
+                pass
+
+        asyncio.run(main())
+        assert seen['config'] is cfg
+        assert seen['zenoh_config'] is zc
+        assert (seen['retry'], seen['max_backoff']) == (True, 1.0)
+        assert 'max_attempts' not in seen
+
     def test_aopen_async_with(self):
         async def main():
             cfg = z.SessionConfig(mode=z.Mode.PEER)

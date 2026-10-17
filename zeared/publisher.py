@@ -40,8 +40,11 @@ class _PublisherCache:
     """Cache of ``zenoh.Publisher`` keyed by concrete topic, scoped to a single ``(Message subclass, session)`` pair.
 
     When the cache is full, ``put()`` falls back to ``session.put`` and emits
-    a one-time ``warnings.warn``. A send against a closed session drops the
-    offending entry and raises ``ZearedError``.
+    a one-time ``warnings.warn``. A failed send undeclares every cached
+    publisher (``invalidate``), reports the failure to a managed session, and
+    raises ``SessionDeadError`` while that session is down, ``ZearedError``
+    otherwise. The cache stays registered, so ``published_topics()`` keeps
+    what it emitted.
     """
 
     __slots__ = ('_cap', '_cls', '_emitted', '_pubs', '_session', '_warned')
@@ -111,9 +114,11 @@ class _PublisherCache:
         try:
             pub = resolve_raw(self._session).declare_publisher(concrete_topic, encoding=mime)
         except Exception as e:
-            self.drop()
+            # Declared on the raw session, so the wrapper never saw it fail.
+            self.invalidate()
+            self._note_session_failure(e)
             msg = f'{self._cls.__name__}: failed to declare publisher on {concrete_topic!r}: {e}'
-            raise ZearedError(msg) from e
+            raise send_error(self._session, msg, e) from e
         self._pubs[concrete_topic] = pub
         self._pub_put(concrete_topic, pub, raw, attachment, timestamp)
 
@@ -131,9 +136,9 @@ class _PublisherCache:
             # every optional keyword it declares.
             self._session.put(topic, raw, encoding=mime, attachment=attachment, timestamp=timestamp)
         except Exception as e:
-            self.drop()
+            self.invalidate()
             msg = f'{self._cls.__name__}: session.put failed on {topic!r}: {e}'
-            raise self._send_failure(msg, e) from e
+            raise send_error(self._session, msg, e) from e
 
     def _pub_put(
         self,
@@ -147,28 +152,10 @@ class _PublisherCache:
             pub.put(raw, attachment=attachment, timestamp=timestamp)
         except Exception as e:
             # Most likely the session closed out from under us.
-            self._pubs.pop(topic, None)
-            self.drop()
+            self.invalidate()
             self._note_session_failure(e)
             msg = f'{self._cls.__name__}: cached publisher put failed on {topic!r} (session likely closed): {e}'
-            raise self._send_failure(msg, e) from e
-
-    def _send_failure(self, msg: str, exc: Exception) -> ZearedError:
-        """The error a failed send raises: ``SessionDeadError`` when the managed session is down.
-
-        Shared by both send paths so they can't drift. On the uncached path,
-        ``ManagedSession.put``'s guard raises ``SessionDeadError`` itself while
-        the session is ``RECONNECTING`` / ``DEAD``. On the cached path,
-        ``_note_session_failure`` has just CASed a dying session into
-        ``RECONNECTING`` synchronously, so the state read is current. Either
-        way the specific error lets the documented retry/queue handler catch
-        it; ``SessionDeadError`` subclasses ``ZearedError``, so generic
-        handlers are unaffected. A raw ``zenoh.Session`` has no state to
-        consult and gets a plain ``ZearedError``.
-        """
-        if isinstance(exc, SessionDeadError) or getattr(self._session, 'state', None) in ('RECONNECTING', 'DEAD'):
-            return SessionDeadError(msg)
-        return ZearedError(msg)
+            raise send_error(self._session, msg, e) from e
 
     def _note_session_failure(self, exc: Exception) -> None:
         """Report a send failure to the session so lazy reconnect detection fires.
@@ -208,13 +195,39 @@ class _PublisherCache:
                 pub.undeclare()
 
     def drop(self) -> None:
-        """Undeclare all cached publishers and remove from the registry."""
+        """Undeclare all cached publishers and remove from the registry.
+
+        Not for a failed send, which invalidates instead: dropping would
+        discard ``_emitted`` and truncate ``published_topics()``. The cache
+        holds its session, so a dead one's ``id`` can't be reused under it;
+        ``z.release`` / ``clear_publisher_cache`` remove it.
+        """
         self.invalidate()
         _registry.pop((self._cls, id(self._session)), None)
 
 
+def send_error(session: SessionLike, msg: str, exc: Exception) -> ZearedError:
+    """The error a failed send or tombstone raises: ``SessionDeadError`` while the managed session is down.
+
+    Shared by every send path, cached, uncached, declare and delete, so they
+    can't drift. ``ManagedSession.put`` / ``delete`` raise ``SessionDeadError``
+    themselves while the session is ``RECONNECTING`` / ``DEAD``; on the paths
+    that bypass the wrapper, ``_note_session_failure`` has just CASed a dying
+    session into ``RECONNECTING`` synchronously, so the state read is current.
+    Either way the specific error lets the documented retry/queue handler
+    catch it; ``SessionDeadError`` subclasses ``ZearedError``, so generic
+    handlers are unaffected. A raw ``zenoh.Session`` has no state to consult
+    and gets a plain ``ZearedError``.
+    """
+    if isinstance(exc, SessionDeadError) or getattr(session, 'state', None) in ('RECONNECTING', 'DEAD'):
+        return SessionDeadError(msg)
+    return ZearedError(msg)
+
+
 # Module-level registry. Keyed on ``(cls, id(session))`` since Zenoh sessions
-# don't support weakrefs. Stale entries are detected and dropped on failure.
+# don't support weakrefs; each cache holds its session, so an ``id`` can't be
+# reused while its entry exists. A failed send invalidates an entry, and
+# ``z.release`` / ``clear_publisher_cache`` remove it.
 _registry: dict[tuple[type, int], _PublisherCache] = {}
 _registry_lock = threading.Lock()
 

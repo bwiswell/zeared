@@ -107,10 +107,10 @@ def apeer(  # noqa: PLR0913
     listen: list[str] | None = None,
     config: SessionConfig | None = None,
     zenoh_config: zenoh.Config | None = None,
-    retry: bool = False,
-    initial_backoff: float = 0.1,
-    max_backoff: float = 30.0,
-    max_attempts: int | None = None,
+    retry: object = _MISSING,
+    initial_backoff: object = _MISSING,
+    max_backoff: object = _MISSING,
+    max_attempts: object = _MISSING,
     auto_reconnect: object = _MISSING,
     probe_interval: object = _MISSING,
     timestamping: bool = True,
@@ -123,31 +123,30 @@ def apeer(  # noqa: PLR0913
     Returns an async context manager — use as
     ``async with z.apeer(...) as sess: ...``. The ``await z.apeer()``
     form from ≤0.0.14 is removed (pre-0.1.0 break).
+
+    Takes :func:`zeared.peer`'s arguments and hands every one given to it,
+    so explicit kwargs layer over ``config=`` exactly as they do there.
     """
     from . import peer
 
     kwargs: dict = {
+        'connect': connect,
+        'listen': listen,
+        'config': config,
+        'zenoh_config': zenoh_config,
         'timestamping': timestamping,
         'retention_ttl': retention_ttl,
         **_given(
+            retry=retry,
+            initial_backoff=initial_backoff,
+            max_backoff=max_backoff,
+            max_attempts=max_attempts,
             auto_reconnect=auto_reconnect,
             probe_interval=probe_interval,
             resync_jitter=resync_jitter,
             resync_concurrency=resync_concurrency,
         ),
     }
-    if config is not None:
-        kwargs['config'] = config
-    else:
-        kwargs.update(
-            connect=connect,
-            listen=listen,
-            zenoh_config=zenoh_config,
-            retry=retry,
-            initial_backoff=initial_backoff,
-            max_backoff=max_backoff,
-            max_attempts=max_attempts,
-        )
     return _AsyncSessionContextManager(peer, kwargs)
 
 
@@ -156,10 +155,10 @@ def aclient(  # noqa: PLR0913
     *,
     config: SessionConfig | None = None,
     zenoh_config: zenoh.Config | None = None,
-    retry: bool = False,
-    initial_backoff: float = 0.1,
-    max_backoff: float = 30.0,
-    max_attempts: int | None = None,
+    retry: object = _MISSING,
+    initial_backoff: object = _MISSING,
+    max_backoff: object = _MISSING,
+    max_attempts: object = _MISSING,
     auto_reconnect: object = _MISSING,
     probe_interval: object = _MISSING,
     timestamping: bool = True,
@@ -167,31 +166,26 @@ def aclient(  # noqa: PLR0913
     resync_jitter: object = _MISSING,
     resync_concurrency: object = _MISSING,
 ) -> _AsyncSessionContextManager:
-    """Async-context-managed client session. See :func:`apeer`."""
+    """Async-context-managed client session, taking :func:`zeared.client`'s arguments. See :func:`apeer`."""
     from . import client
 
     kwargs: dict = {
+        'router': router,
+        'config': config,
+        'zenoh_config': zenoh_config,
         'timestamping': timestamping,
         'retention_ttl': retention_ttl,
         **_given(
+            retry=retry,
+            initial_backoff=initial_backoff,
+            max_backoff=max_backoff,
+            max_attempts=max_attempts,
             auto_reconnect=auto_reconnect,
             probe_interval=probe_interval,
             resync_jitter=resync_jitter,
             resync_concurrency=resync_concurrency,
         ),
     }
-    if router is not None:
-        kwargs['router'] = router
-    if config is not None:
-        kwargs['config'] = config
-    else:
-        kwargs.update(
-            zenoh_config=zenoh_config,
-            retry=retry,
-            initial_backoff=initial_backoff,
-            max_backoff=max_backoff,
-            max_attempts=max_attempts,
-        )
     return _AsyncSessionContextManager(client, kwargs)
 
 

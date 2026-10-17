@@ -7,6 +7,7 @@ retention's queryable answers a same-session retained-fetch.
 
 from __future__ import annotations
 
+import logging
 import time
 
 import pytest
@@ -182,6 +183,38 @@ class TestGeneratorHandler:
         # ...and the getter is told the stream was truncated, rather than
         # believing [0, 1] was a complete answer.
         assert any(isinstance(e, z.QueryError) and 'boom mid-stream' in str(e) for e in got), got
+
+    def test_a_raising_on_error_still_sends_the_error_reply(self, session, caplog):
+        """Regression: the serving ``on_error`` was called unguarded, so one that raised
+        escaped into Zenoh's callback and skipped the ``reply_err``: the getter took the
+        cut-off stream for the whole answer."""
+
+        @z.zeared
+        class Row(z.Message):
+            TOPIC = 'q/badonerror/{id}'
+            id: str = z.Str(required=True)
+            v: int = z.Int(required=True)
+
+        def handler(ctx):
+            yield Row(id=ctx.captures['id'], v=0)
+            msg = 'boom mid-stream'
+            raise RuntimeError(msg)
+
+        def on_error(exc, raw):
+            msg = 'on_error broke too'
+            raise ValueError(msg)
+
+        got: list[Exception] = []
+        z.session = session
+        with caplog.at_level(logging.ERROR, logger='zeared.queryable'), Row.on_query(handler, on_error=on_error):
+            wait()
+            res = Row.query(id='k', timeout=1.0, on_error=lambda e, raw: got.append(e))
+
+        assert [m.v for m in res] == [0]
+        assert any(isinstance(e, z.QueryError) and 'boom mid-stream' in str(e) for e in got), got
+        logged = [r for r in caplog.records if 'on_error callback itself raised' in r.getMessage()]
+        assert logged
+        assert 'boom mid-stream' in logged[0].getMessage()
 
 
 class TestParamsAndRequest:

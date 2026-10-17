@@ -11,9 +11,10 @@ Optimistic semantics: the worker thread does not start until the first
 real message arrives. A subscriber that never receives a message will
 never fire ``on_quiet`` — useful when a producer is genuinely absent.
 
-Callback-thread caveat: ``on_quiet`` and ``on_active`` fire on the
-watchdog thread, NOT on the Zenoh delivery thread. Code that mutates
-shared state from these callbacks must handle that.
+Callback-thread caveat: ``on_quiet`` fires on the watchdog thread, and
+``on_active`` on the Zenoh delivery thread, inside the ping of the message
+that ended the quiet. Code that mutates shared state from these callbacks
+must handle both.
 
 Async callback caveat: when ``on_quiet`` / ``on_active`` is an ``async def``
 function and no event loop is running on the thread that constructs the
@@ -157,12 +158,16 @@ class _SubscriberWatchdog:
         self._msg_seen = True
         # Setting the event wakes the wait() so the loop reads as "active".
         self._ping.set()
-        if self._quiet and self._on_active is not None:
+        # Leave quiet whether or not anyone listens for it: with no
+        # ``on_active`` the flag stayed set, and the edge-triggered
+        # ``on_quiet`` never fired again.
+        if self._quiet:
             self._quiet = False
-            try:
-                self._on_active()
-            except Exception:  # noqa: BLE001
-                _log.exception('watchdog on_active raised')
+            if self._on_active is not None:
+                try:
+                    self._on_active()
+                except Exception:  # noqa: BLE001
+                    _log.exception('watchdog on_active raised')
 
     def cancel(self) -> None:
         """Stop the watchdog. Idempotent. Safe to call from any thread."""
