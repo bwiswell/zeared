@@ -210,12 +210,13 @@ without a matching field are capture-only (see `meta.captures`).
 
 ## Subscribe-only wildcards (`**`)
 
-Any template whose trailing path segment is an *anonymous* `**` is
-**subscribe-only**: it matches one or more concrete segments on receive
-but can't be rendered for publish. `send()` on a non-publishable
-canonical — or `send(topic='robot/**')` picking a subscribe-only extra —
-raises `TopicError`. A named `{name**}` slot is publishable, and so is an
-anonymous `*` segment (see
+Any template holding an *anonymous* wildcard is **subscribe-only**: a
+trailing `**`, and since 0.4.2 a `*` chunk or a `$*` in its literal text
+(`robot/*/status`, `fleet/r-$*/status`). It matches concrete keys on
+receive, as Zenoh does, but can't be rendered for publish. `send()` on a
+non-publishable canonical, or `send(topic='robot/**')` picking a
+subscribe-only extra, raises `TopicError`. A named `{name**}` slot is
+publishable (see
 [`_template.md`](../_template/_template.md#publishability)).
 
 ```python
