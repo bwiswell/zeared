@@ -1,6 +1,6 @@
 [project]
 name = "zeared"
-version = "0.3.13"
+version = "0.4.0"
 description = "A seared-flavored wrapper around Zenoh"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -39,11 +39,10 @@ dev = [
 ]
 
 [tool.uv.sources]
-# While seared 0.4.0 is in development there is no tag yet, so this follows
-# its `version/0.4.0` branch, with the lock pinning a commit. uv doesn't check
-# the range above against a git source; it moves to `tag = "v0.4.0"` in the
-# commit that bumps zeared to 0.4.0.
-seared = { git = "https://github.com/bwiswell/seared", branch = "version/0.4.0" }
+# uv doesn't check the range above against a git source, so the tag is what
+# pins seared. Moving to a new seared release means moving the tag, then
+# `uv lock --upgrade-package seared`.
+seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.0" }
 
 [build-system]
 requires = ["hatchling"]

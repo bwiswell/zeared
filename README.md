@@ -39,37 +39,37 @@ once, get publish, subscribe, and topic routing for free.
 
 ## Setup
 
-Each release is tagged `v<version>` on GitHub (the first is `v0.3.13`).
-Install one by its tag:
+Each release is tagged `v<version>` on GitHub (the first is `v0.3.13`; the
+latest is `v0.4.0`). Install one by its tag:
 
 ```sh
 # uv
-uv add git+https://github.com/bwiswell/zeared --tag v0.3.13
+uv add git+https://github.com/bwiswell/zeared --tag v0.4.0
 
 # pip
-pip install git+https://github.com/bwiswell/zeared.git@v0.3.13
+pip install git+https://github.com/bwiswell/zeared.git@v0.4.0
 ```
 
 `uv add` records the tag as the dependency's source:
 
 ```toml
 [tool.uv.sources]
-zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.3.13" }
+zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.0" }
 ```
 
 **The tag is the pin.** uv doesn't check a version specifier such as
-`zeared>=0.3,<0.4` against a git source: it takes whatever the source points
+`zeared>=0.4,<0.5` against a git source: it takes whatever the source points
 at, and a source without a tag points at the tip of `master`. Moving to a new
 release means moving the tag. What changed in each release, and what may
 break on the way, is in [`CHANGELOG.md`](CHANGELOG.md).
 
-**zeared pins `seared` the same way,** to `v0.3.4`. A project that declares
+**zeared pins `seared` the same way,** to `v0.4.0`. A project that declares
 no `seared` source of its own gets zeared's. One that declares its own must
 pin the same tag, or uv refuses to resolve, reporting conflicting URLs for
 `seared`:
 
 ```toml
-seared = { git = "https://github.com/bwiswell/seared", tag = "v0.3.4" }
+seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.0" }
 ```
 
 Requires Python ≥ 3.14. Pulls in
@@ -1361,24 +1361,24 @@ default vs. `marshmallow` + Zenoh on the same schema:
 <!-- bench:readme-headline -->
 | Strategy                        | pub/s | wire (B) |
 |---------------------------------|------:|---------:|
-| Zenoh + `marshmallow` (JSON)    | 3,785 | 796      |
-| `zeared` sync (msgpack, cached) | 6,699 | 533      |
+| Zenoh + `marshmallow` (JSON)    | 3,879 | 796      |
+| `zeared` sync (msgpack, cached) | 7,725 | 533      |
 <!-- /bench:readme-headline -->
 
-zeared is <!-- bench:readme-faster -->~77%<!-- /bench:readme-faster --> faster and <!-- bench:readme-smaller -->~33%<!-- /bench:readme-smaller --> smaller on the wire.
+zeared is <!-- bench:readme-faster -->~99%<!-- /bench:readme-faster --> faster and <!-- bench:readme-smaller -->~33%<!-- /bench:readme-smaller --> smaller on the wire.
 
 **"Pydantic + MQTT, or zeared?"** — the comparison people actually want, and
 one that splits into two independent questions. pydantic's compiled core
-beats pure-Python seared on serialization (<!-- bench:readme-codec -->~3.6x<!-- /bench:readme-codec -->); Zenoh beats a
-broker-mediated MQTT hop on transport (<!-- bench:readme-transport -->~2.3x<!-- /bench:readme-transport -->). Netted out at default
+beats pure-Python seared on serialization (<!-- bench:readme-codec -->~3.4x<!-- /bench:readme-codec -->); Zenoh beats a
+broker-mediated MQTT hop on transport (<!-- bench:readme-transport -->~2.2x<!-- /bench:readme-transport -->). Netted out at default
 configuration against MQTT QoS 0 <!-- bench:readme-runs -->(medians of three runs, here and below)<!-- /bench:readme-runs -->,
-**pydantic + MQTT comes out <!-- bench:readme-behind -->~1.4x<!-- /bench:readme-behind --> ahead** —
+**pydantic + MQTT comes out <!-- bench:readme-behind -->~1.5x<!-- /bench:readme-behind --> ahead** —
 the codec gap is the larger of the two, and pure Python doesn't make it back.
 
 Two things change that. Against **QoS 1** — at-least-once, what most
 production fleets actually run, and the closer analogue to Zenoh's reliable
-`put` — zeared is <!-- bench:readme-qos1 -->~2.3x<!-- /bench:readme-qos1 --> ahead. And with the optional `rusted` accelerator the
-codec gap closes and the ordering flips: <!-- bench:readme-rusted-q0 -->~1.3x<!-- /bench:readme-rusted-q0 --> against QoS 0, <!-- bench:readme-rusted-q1 -->~4.2x<!-- /bench:readme-rusted-q1 --> against
+`put` — zeared is <!-- bench:readme-qos1 -->~2.4x<!-- /bench:readme-qos1 --> ahead. And with the optional `rusted` accelerator the
+codec gap closes and the ordering flips: <!-- bench:readme-rusted-q0 -->~1.3x<!-- /bench:readme-rusted-q0 --> against QoS 0, <!-- bench:readme-rusted-q1 -->~4.6x<!-- /bench:readme-rusted-q1 --> against
 QoS 1.
 
 The full matrix (both axes isolated, sync + async variants, JSON / msgpack,
