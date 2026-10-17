@@ -58,6 +58,9 @@ lines as it lands, and the entry is dated when that version is released.
   narrows the candidates, and `zeared.keyexpr.intersects` decides, so retention answers exactly what Zenoh routes. A
   query with two `**` (`**/a/**`) also had some values replied to more than once; each is now replied to once. Since
   0.1.0.
+- **The slot checks go by a field's kind,** `s.field_kind`, rather than its class's name. A subclass of `Str` binds
+  a `{name**}` slot, where it was refused (since 0.1.0), and a subclass of `Path`, or of `Bytes` in base64, is
+  refused on a single-segment slot, where it passed and could split the key (since 0.4.0).
 
 ## 0.4.1 — 2026-10-17
 

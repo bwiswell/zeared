@@ -580,7 +580,9 @@ the segment and the key would match no template:
 - **At first use,** a single-segment slot bound to `Path`, or to `Bytes` in
   its default base64 form, raises `TopicError`. Use
   `z.Bytes(encoding='hex')` for bytes in a key, and a `z.Str` slot (or a
-  trailing `{name**}` slot) for a path.
+  trailing `{name**}` slot) for a path. The check goes by the field's kind
+  (`s.field_kind`, 0.4.2), so a subclass of `Path` is caught, and a
+  subclass of `Str` passes as a tail.
 - **When a key is built to send on,** by `send`, `declare_presence`,
   `ctx.reply`, `unretain` or `concrete_topic`, a single-segment value whose
   rendered form contains `/` raises `TopicError`. Before 0.4.0 the message
@@ -1367,7 +1369,7 @@ ZearedError
 | Exception | Raised when |
 |-----------|-------------|
 | `z.NoSessionError`      | No session is resolvable (no kwarg, no scope, no default) |
-| `z.TopicError`          | `TOPIC` is missing or malformed (bad template syntax, a format spec, a non-trailing `**`), or violates the namespace reservation (`__zeared/...`); a single-segment slot is bound to `Path` or base64 `Bytes`, or a `{name**}` slot to anything but `Str`; a publish would put a `/` inside a single-segment value; a slot is missing when a key is built; a `topic=` override matches no declared template (or a subscribe-only one); `retain=True`, `unretain` or `fetch_retained` on a non-`RETAINED` class; `on_query` on a `RETAINED` class; presence calls (`declare_presence`, `on_online` / `on_offline`) on a class without `LIVELINESS` |
+| `z.TopicError`          | `TOPIC` is missing or malformed (bad template syntax, a format spec, a non-trailing `**`), or violates the namespace reservation (`__zeared/...`); a single-segment slot is bound to `Path` or base64 `Bytes`, or a `{name**}` slot to anything but `Str` (each by kind, subclasses included, 0.4.2); a publish would put a `/` inside a single-segment value; a slot is missing when a key is built; a `topic=` override matches no declared template (or a subscribe-only one); `retain=True`, `unretain` or `fetch_retained` on a non-`RETAINED` class; `on_query` on a `RETAINED` class; presence calls (`declare_presence`, `on_online` / `on_offline`) on a class without `LIVELINESS` |
 | `z.KeyExprError`        | A `zeared.keyexpr` function was given a string that isn't a Zenoh key expression (an empty chunk, or `read-*` where Zenoh writes `read-$*`). Also a `ValueError` (0.4.2) |
 | `z.SessionDeadError`    | A `ManagedSession` op (`put`/`get`/`delete`/`zid`/...) is invoked while the session is `RECONNECTING` or `DEAD` |
 | `z.SubscriptionError`   | `on_message` — declaring the underlying Zenoh subscriber, or a presence feed's liveliness subscribers, failed; or an `async def` callback was given with no running event loop (fatal to that subscription) |
