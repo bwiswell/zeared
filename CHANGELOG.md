@@ -27,7 +27,8 @@ them with what to do.
 - **`on_message(on_online=, on_offline=)`**, the presence feed. Each event is an identity-only `ZenohMeta` whose
   `captures` hold the key's slots, with `origin` `REPLAY` for a key already online when the subscriber started,
   `LIVE` for one coming online later, and `WILL` for one going offline. Tokens aggregate by key, so a key goes
-  offline when its last token goes.
+  offline when its last token goes. In client mode every key the subscriber knows also goes offline when the link
+  to the hub drops, and comes back with it, including one it found online when it subscribed.
 - **Link signals.** `ManagedSession.on_link_lost(cb)` fires when the session's view of the mesh goes stale (its
   router link drops, or the session dies) and `on_link_restored(cb)` when it is whole again. They pair up, and don't
   care about the cause. Both, and `on_reconnect`, return a `z.CallbackHandle`.

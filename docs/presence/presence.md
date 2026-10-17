@@ -102,12 +102,16 @@ the old session's tokens went with it, and the restore walk re-declares
 them after the swap. (If the old session was still alive when the new
 token arrived, aggregation hides the flap.)
 
-**A hub restart reads as offline then online for every remote key.** When
-the link to the hub drops, Zenoh reports every token it learned through
-the hub as gone, and as back once the link returns. That's true — the
-session can't see those peers — and zeared doesn't suppress it.
-`on_link_lost` fires first, so a consumer that wants "unknown" rather than
-"down" can hold its rendering until `on_link_restored`.
+**A hub restart reads as offline then online for every remote key**,
+whether the subscriber saw the key come online or found it online when it
+subscribed. When the link to the hub drops, Zenoh reports every token the
+session learned through the hub as gone, and as back once the link
+returns. That's true (the session can't see those peers), and zeared
+doesn't suppress it. The offline events arrive as the link drops, and
+`on_link_lost` at the probe's next tick, up to `probe_interval` later, so
+a consumer that wants "unknown" rather than "down" holds offline events
+that long, then renders "unknown" from `on_link_lost` until
+`on_link_restored`.
 
 **ACL.** A session that holds presence needs `liveliness_token` on its
 contract keys. The `__zeared/alive/**` and `__zeared/will/**` keys of
@@ -139,6 +143,18 @@ stay valid) and `drop()`. The module registry is keyed on `id(session)`:
 liveliness subscribers when `on_online` / `on_offline` are given;
 `_redeclare` rebuilds them after a reconnect, and `close()` undeclares
 them. There is no cross-session observer.
+
+`_watch_presence` declares, per template, a liveliness subscriber that
+reports to the handler, then runs the replay `get`, then declares a
+*keeper*: a second liveliness subscriber with `history=True`, whose
+callback ignores everything. In client mode the router declares a token
+to a session only when one of its subscribers asks for history, and a
+session withdraws, when its link drops, only the tokens it was declared;
+the keeper is what makes a key found by the replay go offline when the hub
+dies. The reporting subscriber can't take `history=True` itself: its
+history PUTs couldn't be told from live ones, and a `get` issued just
+after such a declaration comes back empty, so nothing could be marked
+`REPLAY`.
 
 ## Module helpers
 

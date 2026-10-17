@@ -97,7 +97,10 @@ a reconnect's restore too.
 subscriber on the session that replays (`RETAINED`, `retained_fetch`,
 `auto_reconnect`): `Subscriber._replay_retained`, no redeclare, replies
 delivered as `REPLAY` and dedupe-safe. Presence needs no step: tokens come
-back through the liveliness subscribers themselves.
+back through the liveliness subscribers themselves (the presence watch's
+`history=True` keeper is what makes a client session learn, and so lose
+and regain, every token the router knows; see
+[`presence.md`](../presence/presence.md#the-subscriber-side-subscriber)).
 
 - With no subscriber to replay, it returns at once — no jitter.
 - Otherwise it waits `random.uniform(0, resync_jitter)` (default 2 s,

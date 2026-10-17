@@ -109,8 +109,10 @@ keys watch the contract keys' liveliness instead.
   A `cb`-only subscriber silently stops seeing offline.
 - `alisten` never yields presence events; move presence consumers to
   `on_message`.
-- A reconnect, or a hub restart, reads as offline then online. Use
-  `on_link_lost` / `on_link_restored` to tell "unknown" from "down".
+- A reconnect, or a hub restart, reads as offline then online. To tell
+  "unknown" from "down", use `on_link_lost` / `on_link_restored`, holding
+  offline events up to one `probe_interval`: they arrive as the link
+  drops, and `on_link_lost` at the next probe tick.
 - `z.clear_observer` and the `gc_interval=` factory keyword are removed. A
   test fixture that resets zeared's state drops the `clear_observer()` call
   (or guards it with `hasattr(z, 'clear_observer')` to run on both 0.3.x
@@ -645,8 +647,11 @@ PeerStatus.on_message(handle_status, on_online=online, on_offline=offline)
 - **A reconnect, or a hub restart, reads as offline then online.** The old
   session's tokens go before the new one's are declared; and when a link
   to the hub drops, Zenoh reports every token it learned through the hub
-  as gone until the link returns. `on_link_lost` fires first, so a consumer
-  can show "unknown" rather than "down" until `on_link_restored`.
+  as gone until the link returns, including the keys a subscriber found
+  online when it subscribed. The offline events come as the link drops and
+  `on_link_lost` up to one `probe_interval` later, so a consumer that wants
+  "unknown" rather than "down" holds offline events that long, then shows
+  "unknown" until `on_link_restored`.
 - **ACL:** grant `liveliness_token` on the contract keys a session holds.
   The `__zeared/alive/**` and `__zeared/will/**` keys of earlier releases
   are gone.
