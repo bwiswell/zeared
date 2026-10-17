@@ -11,12 +11,26 @@ lines as it lands, and the entry is dated when that version is released.
 
 ## 0.4.0 — unreleased
 
-**The changelog ships with the repository.**
+**seared 0.4.0, TypeScript `| null` only where the wire can carry one, and the changelog in the repository.**
 
 ### Added
 
 - **`CHANGELOG.md`**, this file: every release from 0.1.0 on, newest first. It is kept in the repository and grows
   with each change as it merges, where it had been reconstructed after each release.
+
+### Changed
+
+- **Breaking:** generated TypeScript writes `| null` only for `nullable=True` fields, the only kind whose wire value
+  may be `null`; an ordinary optional field is `opt?: T`, and a nullable required one `req: T | null`. Generated
+  docs show seared 0.4.0's `None` defaults and nullable notes. Regenerate committed docs and types.
+- **Wire change:** under msgpack, the default encoding, a `Bytes` slot inside a `z.Tuple` field is written as raw
+  bytes, as a top-level `Bytes` field is, where it was base64 text. This comes from seared 0.4.0. `Bytes` reads
+  either form, so nodes on 0.3.x and 0.4.0 still read each other's payloads; the JSON wire is unchanged.
+- The README gains *Upgrading to 0.4.0*, which lists each break with who it reaches and what to do.
+- **Dependencies:** seared follows its `version/0.4.0` branch (`>=0.4.0,<0.5.0`), with the lockfile pinning a
+  commit, until seared 0.4.0 is tagged. seared 0.4.0 reads a wire `null` on a field that isn't nullable as absent,
+  refuses lossy numeric coercion (a fractional float into an `Int`, a `2` into a `Bool`), prefixes validation errors
+  with their location and renames `Union(default=)` to `fallback=`; see its changelog.
 
 ## 0.3.13 — 2026-10-16
 
