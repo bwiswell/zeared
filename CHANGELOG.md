@@ -31,7 +31,9 @@ them with what to do.
   to the hub drops, and comes back with it, including one it found online when it subscribed.
 - **Link signals.** `ManagedSession.on_link_lost(cb)` fires when the session's view of the mesh goes stale (its
   router link drops, or the session dies) and `on_link_restored(cb)` when it is whole again. They pair up, and don't
-  care about the cause. Both, and `on_reconnect`, return a `z.CallbackHandle`.
+  care about the cause: whichever of the probe and a reconnect restores the link, it is restored once, and a
+  reconnect's `on_link_restored` comes after its `on_reconnect`. Both, and `on_reconnect`, return a
+  `z.CallbackHandle`.
 - **The re-attach walk.** When a managed session's router link comes back, or its router is replaced between two
   probe ticks, it re-runs the retained fetch for every retained subscriber, so a value published while the link was
   down is delivered as `REPLAY`; then it fires `on_link_restored`. It waits up to `resync_jitter` seconds first

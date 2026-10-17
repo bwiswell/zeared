@@ -105,6 +105,10 @@ def _probe_loop(managed: ManagedSession) -> None:
             if _is_dead(managed._raw):
                 _trigger_reconnect(managed)
                 continue
+            if managed._restoring:
+                # The swap has set IDLE, but the reconnect is still restoring,
+                # and it fires the link signals itself when it's done.
+                continue
             _check_link(managed)
         except Exception:  # noqa: BLE001
             _log.exception('zeared probe loop iteration raised — continuing')
@@ -156,8 +160,21 @@ def _trigger_reconnect(managed: ManagedSession) -> None:
 def _reconnect(managed: ManagedSession) -> None:
     """Open a fresh raw session with backoff; atomically swap; restore subscribers + presence.
 
-    Sets state = DEAD on terminal failure.
+    Sets state = DEAD on terminal failure. ``_restoring`` stays set
+    throughout: after the swap the state reads ``IDLE`` while the restore
+    walks still run, and a probe tick that saw routers then would restore the
+    link alongside them, firing ``on_link_restored`` before ``on_reconnect``
+    and fetching twice.
     """
+    managed._restoring = True
+    try:
+        _reopen_and_restore(managed)
+    finally:
+        managed._restoring = False
+
+
+def _reopen_and_restore(managed: ManagedSession) -> None:
+    """The reconnect proper: everything ``_reconnect`` does, under its flag."""
     label = managed._endpoint_label
     # The session was found dead: this session's view of the mesh is stale.
     _link_lost(managed)
