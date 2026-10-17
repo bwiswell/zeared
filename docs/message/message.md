@@ -172,6 +172,17 @@ class PeerStatus(z.Message):
   required (timestamping is auto-enabled by `z.peer()` / `z.client()`
   since 0.0.13).
 
+### Unknown keys stay tolerated
+
+A Message ignores a payload key it doesn't declare, which is what lets a
+subscriber read a publisher one version ahead that has added a field. Since
+0.4.2 a class can refuse them instead (seared's `unknown=`, which
+`@z.zeared(unknown='raise')` takes), but on the wire that costs the
+tolerance: every sample from a newer publisher fails to decode, and goes
+to `on_error` as a `DecodeError`. Leave it for a closed system that wants
+exactly that. To check one payload without refusing it, as for input from
+a person or an agent, call `s.unknown_keys(Cls, data)`.
+
 ## Multiple topics per class
 
 Declare `EXTRA_TOPICS` to subscribe to a union of templates with one

@@ -1061,6 +1061,12 @@ aren't read from the environment. zeared builds the session's config from
 the file, then applies its mode, timestamping and shared memory off, then
 the overrides.
 
+A key `SessionConfig` doesn't declare is refused (0.4.2): `load`, `loads`
+and the `from_*` readers raise one `ValidationError` naming every unknown
+key, so `auto_reconect = true` in a `[zenoh]` table fails at load instead of
+quietly leaving reconnect off. The `zenoh_overrides` paths aren't checked.
+See [`docs/config.md`](docs/config.md#unknown-keys-are-refused-042).
+
 ## NAT traversal: the relay hub
 
 Two nodes that can't reach each other directly — e.g. both behind NAT,

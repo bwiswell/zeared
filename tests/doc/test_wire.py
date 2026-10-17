@@ -9,6 +9,7 @@ from zeared.doc import (
     document,
     introspect_message,
     is_message_class,
+    main,
     render_message,
 )
 
@@ -116,3 +117,12 @@ class TestBuildDocsDispatch:
     def test_message_is_wire_aware_plain_is_not(self):
         assert '## Topic' in self.docs['Ping.md']
         assert '## Topic' not in self.docs['PingRequest.md']
+
+
+class TestRequireDocs:
+    def test_the_cli_fails_on_a_message_field_without_a_doc(self, tmp_path, capsys):
+        # seared 0.4.1's flag, which zeared's CLI runs: it checks every
+        # class, Messages included, before writing anything.
+        assert main(['doc.wire_models', '-o', str(tmp_path), '--require-docs']) == 1
+        assert '  doc.wire_models.Ping.source\n' in capsys.readouterr().err
+        assert not list(tmp_path.iterdir())
