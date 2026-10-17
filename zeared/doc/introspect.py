@@ -10,23 +10,24 @@ the zeared-specific wire metadata.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any, TypeGuard
 
-from seared.doc import SchemaDoc
+from seared.doc import SchemaDoc, is_seared_class
 from seared.doc import introspect as _seared_introspect
 
+from .._template import Template
 from ..effect import Effect, effect_of
 from ..message import Message
-
-_SLOT = re.compile(r'\{(\w+)\}')
 
 
 @dataclass(frozen=True, slots=True)
 class SlotDoc:
     name: str
     is_field: bool  # also a declared payload field (surfaced on receive)
+    # A trailing ``{name**}`` slot, one segment or more (0.4.2). Appended with
+    # a default, so positional construction keeps working.
+    multi: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,28 +48,43 @@ class MessageDoc:
 
 
 def is_message_class(obj: Any) -> TypeGuard[type[Message]]:
-    """True for a concrete ``@zeared`` Message subclass (not the base)."""
-    return (
-        isinstance(obj, type)
-        and issubclass(obj, Message)
-        and obj is not Message
-        and bool(getattr(obj, '__seared_fields__', ()))
-    )
+    """True for a Message class that ``@zeared`` built (not the base).
+
+    Asked as seared's ``is_seared_class`` asks it (0.4.2): a decorated Message
+    counts whether or not it has fields, and a subclass of one that isn't
+    decorated itself doesn't. Until then a Message with no fields got a plain
+    page, with no topic, and an undecorated subclass got a Message page.
+    """
+    return isinstance(obj, type) and issubclass(obj, Message) and obj is not Message and is_seared_class(obj)
+
+
+def _slots(topics: list[str], field_attrs: set[str]) -> tuple[SlotDoc, ...]:
+    """Every slot of every topic, each once, in the order they first appear.
+
+    Read with zeared's own template parser, so ``{name**}`` is found, as the
+    regex used until 0.4.2 never did.
+    """
+    slots: dict[str, SlotDoc] = {}
+    for topic in topics:
+        for name in Template.parse(topic).field_names:
+            if name not in slots:
+                multi = '{' + name + '**}' in topic
+                slots[name] = SlotDoc(name=name, is_field=name in field_attrs, multi=multi)
+    return tuple(slots.values())
 
 
 def introspect_message(cls: type[Message]) -> MessageDoc:
     """Introspect ``cls`` into a :class:`MessageDoc`."""
     schema = _seared_introspect(cls)
     topic = getattr(cls, 'TOPIC', '') or ''
-    field_attrs = {f.attr for f in schema.fields}
-    # ``dict.fromkeys`` drops a repeated slot and keeps the topic's order.
-    slots = tuple(SlotDoc(name=n, is_field=n in field_attrs) for n in dict.fromkeys(_SLOT.findall(topic)))
+    extra_topics = tuple(getattr(cls, 'EXTRA_TOPICS', ()) or ())
+    slots = _slots([t for t in (topic, *extra_topics) if t], {f.attr for f in schema.fields})
     parts = topic.split('/')
     category = parts[1] if len(parts) > 1 and '{' not in parts[1] else None
     return MessageDoc(
         schema=schema,
         topic=topic,
-        extra_topics=tuple(getattr(cls, 'EXTRA_TOPICS', ()) or ()),
+        extra_topics=extra_topics,
         slots=slots,
         category=category,
         schema_version=getattr(cls, 'SCHEMA', None),

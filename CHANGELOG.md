@@ -70,6 +70,15 @@ lines as it lands, and the entry is dated when that version is released.
   `session=managed.raw()` was matched against the new raw session, which nothing had declared on, so it stayed
   offline; the reconnect now matches it against the session it replaced. A token declared on the managed session
   itself was always restored. Since 0.4.0.
+- **Generated docs find every Message and every slot.** `is_message_class` asks whether `@zeared` built the class,
+  as seared's `is_seared_class` does: a Message with no fields gets its wire-aware page, with its topic, where it
+  got a plain one, and an undecorated subclass of a Message no longer counts. A Message page's slot table lists
+  every topic's slots, a trailing `{name**}` marked as a tail, where it listed only the canonical topic's `{name}`
+  slots, and several topics are a list, where they ran into one paragraph. `SlotDoc` gains `multi`. Since 0.2.5.
+- **Generated TypeScript declares a class with no fields.** A `Union` variant with no fields was named in the
+  union's type but never declared, so the module didn't type-check. Since 0.2.6.
+- **`python -m zeared.doc.typescript` runs without a `RuntimeWarning`.** `zeared.doc` imported the module it runs,
+  so runpy found it already loaded; the TypeScript names are now re-exported lazily. Since 0.2.6.
 
 ## 0.4.1 — 2026-10-17
 
