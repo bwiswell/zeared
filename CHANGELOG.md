@@ -111,6 +111,8 @@ them with what to do.
   `ZearedError` and told the session nothing, so lazy reconnect detection didn't fire; it now does, and raises
   `SessionDeadError` while the session is down. A tombstone, direct or batched, raises `SessionDeadError` in the
   reconnect window too, where it rewrapped the session's own one in a plain `ZearedError`.
+- **A watchdog with no `on_active` fires `on_quiet` for every quiet spell.** Only `on_active` ended a spell, so
+  without one the first never ended and `on_quiet` never fired again.
 
 ### Removed
 

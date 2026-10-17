@@ -45,7 +45,12 @@ of subscribing" — daemon liveness checks at startup.
 ## Threading model
 
 - The watchdog thread is a `daemon=True` thread named `zeared-watchdog`.
-- Callbacks (`on_quiet`, `on_active`) fire on the watchdog thread.
+- `on_quiet` fires on the watchdog thread; `on_active` fires on the Zenoh
+  delivery thread, inside the ping of the message that ended the quiet.
+- Each quiet spell fires `on_quiet` once, and the next message ends it,
+  whether or not an `on_active` is set. (Before 0.4.0, without an
+  `on_active` the first quiet spell never ended, and `on_quiet` never
+  fired again.)
 - User code that mutates shared state from these callbacks is responsible
   for its own locking.
 - `cancel()` is idempotent and safe from any thread.

@@ -60,6 +60,27 @@ class TestSubscriberWatchdogPrimitive:
         wd.cancel()
         assert events == ['quiet', 'active']
 
+    def test_quiet_fires_again_after_a_resume_without_on_active(self):
+        """Regression: only ``on_active`` cleared the quiet flag, so without one the
+        first quiet spell never ended and ``on_quiet`` never fired again."""
+        from zeared.watchdog import _SubscriberWatchdog
+
+        quiet: list[int] = []
+        wd = _SubscriberWatchdog(
+            interval=0.05,
+            on_quiet=lambda: quiet.append(1),
+            on_active=None,
+        )
+        try:
+            wd.ping()
+            time.sleep(0.15)
+            assert quiet == [1]
+            wd.ping()  # traffic resumes
+            time.sleep(0.15)
+            assert quiet == [1, 1]
+        finally:
+            wd.cancel()
+
     def test_cancel_suppresses_pending_quiet(self):
         from zeared.watchdog import _SubscriberWatchdog
 
