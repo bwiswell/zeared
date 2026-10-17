@@ -1048,10 +1048,13 @@ backoff, `auto_reconnect`, `probe_interval`, ...), the kwargs win
 (per-call overrides over a shared base spec); a kwarg left out defers to
 `config=`. A raw `zenoh_config=<zenoh.Config>` is the escape hatch below
 both, and it *replaces* the config zeared would build rather than layering
-on it: zeared sets none of its own settings on it (not the mode,
-timestamping, or shared memory off), writes only the endpoints you pass,
-and ignores a `SessionConfig`'s `zenoh_config_file` / `zenoh_overrides`.
-Set what you need in it yourself.
+on it: zeared sets none of its own settings on it (not timestamping, or
+shared memory off), writes only the endpoints you pass, and ignores a
+`SessionConfig`'s `zenoh_config_file` / `zenoh_overrides`. Set what you need
+in it yourself. Its mode is the one exception (0.4.2): the factory's name is
+a promise, so a config without a mode opens what the factory opens, and one
+naming another mode (`client(zenoh_config=…)` given a peer's) raises
+`ValueError` before anything opens.
 
 `SessionConfig` ships with immutable-style builders for composable
 tweaks — each returns a new instance:

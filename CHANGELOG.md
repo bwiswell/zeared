@@ -39,6 +39,10 @@ lines as it lands, and the entry is dated when that version is released.
   on the right wildcard, but its match escaped the wildcard, so every sample failed to decode, and a `send()` put
   the wildcard in its key, which Zenoh delivered to every subscriber it intersected. `send()`, `concrete_topic` and
   the other publish paths now raise `TopicError` for it.
+- **Breaking:** a raw `zenoh_config=` opens the mode its factory names. One that sets no mode gets the factory's,
+  where it opened Zenoh's default, a peer, from `client()` or `hub()`, and one that names another mode raises
+  `ValueError` before anything opens, naming the factory that would open it. The rest of a raw config is still taken
+  as given, and a `SessionConfig`'s `zenoh_overrides` may still set the mode.
 - **Dependencies:** seared `>=0.4.2,<0.5.0`, pinned to `tag = "v0.4.2"`. seared 0.4.1 adds `unknown=`, which a
   Message class can now take, though on the wire it costs reading a newer publisher (`docs/message/message.md`);
   0.4.2 adds `s.field_kind` and `seared.doc.json_schema`. Neither changes what `load` or `dump` does; see its
