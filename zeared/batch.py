@@ -83,10 +83,10 @@ def _flush(buffer: list[BufferedSend]) -> None:
             try:
                 sess.delete(topic)
             except Exception as e:
-                from .errors import ZearedError
+                from .publisher import send_error
 
                 msg = f'{cls.__name__}: session.delete failed on {topic!r}: {e}'
-                raise ZearedError(msg) from e
+                raise send_error(sess, msg, e) from e
             continue
         timestamp = None
         if retain_mode == 'retain':

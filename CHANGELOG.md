@@ -104,6 +104,13 @@ them with what to do.
 - **A queryable's `on_error` that raises is logged, and the getter still gets its error reply.** It escaped into
   Zenoh's callback, and when a handler had failed it also skipped the `reply_err`, so the getter took a cut-off
   stream for the whole answer.
+- **A failed send keeps `published_topics()`.** Every send failure dropped the publisher cache from its registry,
+  and with it the history of what the class had emitted on that session; it now only undeclares the cached
+  publishers, as a reconnect does.
+- **The first send on a new topic reports a dead managed session.** A failed publisher declare raised a plain
+  `ZearedError` and told the session nothing, so lazy reconnect detection didn't fire; it now does, and raises
+  `SessionDeadError` while the session is down. A tombstone, direct or batched, raises `SessionDeadError` in the
+  reconnect window too, where it rewrapped the session's own one in a plain `ZearedError`.
 
 ### Removed
 

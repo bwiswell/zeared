@@ -78,3 +78,44 @@ class TestDescriptorDispatch:
         R(n=2).send()
         # Class form: pass key fields as kwargs.
         R.unretain(n=2)
+
+
+class TestTombstoneDuringReconnect:
+    """A tombstone raises ``SessionDeadError`` while the managed session is down, as a
+    send does. The ``SessionDeadError`` ``ManagedSession.delete`` raises used to be
+    rewrapped in a plain ``ZearedError``, which the retry handler can't catch."""
+
+    @pytest.mark.parametrize('batched', [False, True], ids=['direct', 'batched'])
+    def test_raises_session_dead_error(self, batched):
+        from conftest import _peer_session
+
+        from zeared._managed_session import ManagedSession
+        from zeared.errors import SessionDeadError
+
+        @z.zeared
+        class M(z.Message):
+            TOPIC = 'unretain/dead/{k}'
+            RETAINED = True
+            k: str = z.Str(required=True)
+
+        raw = _peer_session()
+        m = ManagedSession(
+            raw,
+            lambda: raw,
+            endpoint_label='tomb-dead',
+            probe_interval=0,
+            initial_backoff=0.001,
+            max_backoff=0.005,
+            max_attempts=None,
+        )
+        try:
+            M(k='a').send(session=m)
+            m._set_state('RECONNECTING')
+            with pytest.raises(SessionDeadError):
+                if batched:
+                    with z.batch():
+                        M.unretain(k='a', session=m)
+                else:
+                    M.unretain(k='a', session=m)
+        finally:
+            m._teardown(call_close=True)

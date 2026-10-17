@@ -70,7 +70,8 @@ def _unretain_impl(
     import zeared as z
 
     from ..batch import current_buffer
-    from ..errors import TopicError, ZearedError
+    from ..errors import TopicError
+    from ..publisher import send_error
     from ..retention import get_retention_cache
     from ._message_render import _render_publish_key
 
@@ -115,4 +116,4 @@ def _unretain_impl(
         sess.delete(concrete_topic)
     except Exception as e:
         msg = f'{cls.__name__}: session.delete failed on {concrete_topic!r}: {e}'
-        raise ZearedError(msg) from e
+        raise send_error(sess, msg, e) from e
