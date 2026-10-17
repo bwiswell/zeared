@@ -40,21 +40,21 @@ once, get publish, subscribe, and topic routing for free.
 ## Setup
 
 Each release is tagged `v<version>` on GitHub (the first is `v0.3.13`; the
-latest is `v0.4.0`). Install one by its tag:
+latest is `v0.4.1`). Install one by its tag:
 
 ```sh
 # uv
-uv add git+https://github.com/bwiswell/zeared --tag v0.4.0
+uv add git+https://github.com/bwiswell/zeared --tag v0.4.1
 
 # pip
-pip install git+https://github.com/bwiswell/zeared.git@v0.4.0
+pip install git+https://github.com/bwiswell/zeared.git@v0.4.1
 ```
 
 `uv add` records the tag as the dependency's source:
 
 ```toml
 [tool.uv.sources]
-zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.0" }
+zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.1" }
 ```
 
 **The tag is the pin.** uv doesn't check a version specifier such as
@@ -170,7 +170,7 @@ zeared's generated TypeScript writes `| null` only for `nullable=True`
 fields, and generated docs show `None` defaults: regenerate committed docs
 (`python -m zeared.doc … -o docs`) and types.
 
-**10. Pins.** Move both together: `zeared` to `tag = "v0.4.0"` and `seared` to
+**10. Pins.** Move both together: `zeared` to `tag = "v0.4.1"` and `seared` to
 `tag = "v0.4.0"`. uv reports conflicting URLs until the seared pin matches
 zeared's.
 

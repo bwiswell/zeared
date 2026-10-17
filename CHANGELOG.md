@@ -9,6 +9,20 @@ nodes on other versions, retained state and access rules can see.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.4.1 — 2026-10-17
+
+**A failed query reply no longer holds the query open.**
+
+### Fixed
+
+- **A reply that fails lets its query finish.** When a queryable's reply couldn't be sent (a slot value with a `/`,
+  a value `dump` refuses, a key Zenoh rejects), the rest of the answer still went out, but the query stayed open
+  until the garbage collector next ran in the serving process. Against an idle server the getter waited out its
+  whole timeout, then received a `Timeout` error reply after the good replies; a busier one held it until its next
+  collection. The error zeared wraps for `on_error` held the frame that held the query, a cycle only the collector
+  could free; it is now released as soon as `on_error` or the warning is done. A query whose context fails to build
+  ended the same way, and is fixed the same way. Since 0.2.0.
+
 ## 0.4.0 — 2026-10-17
 
 **Presence and retained state survive a restart.** Presence is a Zenoh liveliness token at each contract key, a
