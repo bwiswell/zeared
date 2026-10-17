@@ -162,14 +162,15 @@ def restart_record() -> RestartRecord:
 def test_on_reconnect_does_not_fire_on_a_hub_restart(restart_record):
     """The client's own session never closed, so it was never swapped: no ``on_reconnect``.
 
-    Unchanged in 0.4.0 (decision 1.2): ``on_reconnect`` keeps its narrow meaning.
+    Unchanged in 0.4.0: ``on_reconnect`` keeps its narrow meaning, the session was
+    swapped, and the link signals cover the rest.
     """
     assert restart_record.reconnects == 0
     assert set(restart_record.states) == {'IDLE'}
 
 
 def test_link_signals_pair_across_the_restart(restart_record):
-    """0.4.0 (plan 11 §2.2): the link signals cover what ``on_reconnect`` doesn't.
+    """0.4.0: the link signals cover what ``on_reconnect`` doesn't.
 
     Lost when A went, restored once the client re-attached to B (after the walk), lost
     again when B went.
@@ -180,7 +181,7 @@ def test_link_signals_pair_across_the_restart(restart_record):
 def test_retained_value_published_in_the_window_is_delivered(restart_record):
     """B's boot status, published while the client was detached, reaches the subscriber.
 
-    Flipped in 0.4.0 (plan 11 §2.2): the re-attach walk re-fetches it, delivered as
+    Flipped in 0.4.0: the re-attach walk re-fetches it, delivered as
     ``REPLAY`` before ``on_link_restored`` fires. (A's offline no longer reaches ``cb`` as
     a typed will: presence has its own callbacks.)
     """
@@ -200,7 +201,7 @@ def test_fetch_retained_recovers_it(restart_record):
 def test_restarted_publishers_death_is_announced(restart_record):
     """B declared presence while the client was detached, and its death is still announced.
 
-    Flipped in 0.4.0 (plan 11 §2.1): presence is a liveliness token at the contract key,
+    Flipped in 0.4.0: presence is a liveliness token at the contract key,
     so there is no will stash to miss. The client sees A online (``REPLAY``, already up when
     it subscribed) and offline, then B's token appear once the link is back (``LIVE``) and go.
     A's offline is the case the presence watch's ``history=True`` keeper exists for: the
@@ -226,9 +227,9 @@ def test_each_boots_token_sits_at_the_contract_key(restart_record):
 def test_router_link_state_is_observable(restart_record):
     """The router link's loss and return are visible, by polling and as pushed events.
 
-    Stays true. It pins the inputs plan 11 §2.2's detection can use: ``routers_zid()``
-    (which doc 10 planned to poll) and the transport / link event listeners (present from
-    ``eclipse-zenoh`` 1.9.0, zeared's floor).
+    Stays true. It pins the inputs link detection can use: ``routers_zid()``, which the
+    probe polls, and the transport / link event listeners (present from ``eclipse-zenoh``
+    1.9.0, zeared's floor).
     """
     rec = restart_record
     assert rec.routers_timeline == [

@@ -20,18 +20,18 @@ queryable key and the source of reply captures; its seared fields are the
 
 ```python
 @z.zeared
-class TagState(z.Message):
-    TOPIC = 'rio/state/tag/{epc}'
-    epc: str          = z.Str(required=True)   # ← key capture
+class Position(z.Message):
+    TOPIC = 'fleet/position/{robot}'
+    robot: str        = z.Str(required=True)   # ← key capture
     x: float          = z.Float(required=True) # ─┐ response body
-    y: float          = z.Float(required=True)  #─┘
+    y: float          = z.Float(required=True) # ─┘
 
-def handler(ctx: z.QueryContext) -> TagState | list[TagState] | None:
-    epc = ctx.captures['epc']
-    x, y = lookup(epc)
-    return TagState(epc=epc, x=x, y=y)
+def handler(ctx: z.QueryContext) -> Position | list[Position] | None:
+    robot = ctx.captures['robot']
+    x, y = locate(robot)
+    return Position(robot=robot, x=x, y=y)
 
-qbl = TagState.on_query(handler)   # z.Queryable; .close() / context manager
+qbl = Position.on_query(handler)   # z.Queryable; .close() / context manager
 ```
 
 The handler receives a `QueryContext` and may either **return** a message
@@ -102,16 +102,17 @@ resolves, then its return value is replied.
 
 ```python
 # Concrete — one key.
-states = TagState.query(epc='E280 1234', timeout=2.0)
+positions = Position.query(robot='r-17', timeout=2.0)
 
 # Wildcard — omitted slots widen to '*', so this asks the whole template.
-all_states = TagState.query(timeout=2.0)
+everywhere = Position.query(timeout=2.0)
 
-# Partial wildcard — embed '*' in a value.
-some = TagState.query(epc='E280*', timeout=2.0)
+# Part of a segment — Zenoh's '$*' inside a value. A bare '*' must be a
+# whole segment: 'r-*' is a Zenoh error.
+some = Position.query(robot='r-$*', timeout=2.0)
 
 # First reply (or None).
-one = TagState.query_one(epc='E280 1234', timeout=2.0)
+one = Position.query_one(robot='r-17', timeout=2.0)
 ```
 
 `query()` blocks up to `timeout`. It returns only successfully decoded OK
@@ -133,18 +134,18 @@ Set `REQUEST = SomeClass` on the class to send a typed request body:
 
 ```python
 @z.zeared
-class LocReq(z.Message):
-    TOPIC = 'rio/req/loc'      # unused for routing; carried as payload
-    algo: str = z.Str(default='trilat')
+class LocateReq(z.Message):
+    TOPIC = 'fleet/req/locate'  # unused for routing; carried as payload
+    method: str = z.Str(default='odometry')
 
 @z.zeared
-class TagState(z.Message):
-    TOPIC = 'rio/state/tag/{epc}'
-    REQUEST = LocReq
+class Position(z.Message):
+    TOPIC = 'fleet/position/{robot}'
+    REQUEST = LocateReq
     ...
 
-TagState.query(epc='E280*', request=LocReq(algo='ml'))
-# handler sees ctx.request == LocReq(algo='ml')
+Position.query(robot='r-$*', request=LocateReq(method='lidar'))
+# handler sees ctx.request == LocateReq(method='lidar')
 ```
 
 Without `REQUEST`, `ctx.request` is the raw payload bytes (or `None`). Use
@@ -167,8 +168,8 @@ and read by `z.effect_of` for policy layers. See [`effect.md`](../effect.md).
 
 ```python
 @z.zeared
-class TagState(z.Message):
-    TOPIC  = 'rio/state/tag/{epc}'
+class Position(z.Message):
+    TOPIC  = 'fleet/position/{robot}'
     EFFECT = z.Effect.READ
     ...
 ```

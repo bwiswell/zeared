@@ -2,10 +2,9 @@
 
 A publisher holds a key with ``declare_presence``; subscribers hear about it on
 ``on_message(on_online=…, on_offline=…)``. Each test runs real in-process
-Zenoh sessions. The rows of plan 11 §5 that concern presence are here:
-a handle's ``undeclare()`` fires offline for that key only, with the session
-alive; and offline reaches ``on_offline`` with ``origin=WILL``, distinct from a
-tombstone.
+Zenoh sessions. Among them: a handle's ``undeclare()`` fires offline for that
+key only, with the session alive; and offline reaches ``on_offline`` with
+``origin=WILL``, distinct from a tombstone.
 """
 
 from __future__ import annotations
@@ -86,7 +85,7 @@ class TestOnlineAndOffline:
         assert events.items == [('online', 'bob', z.Origin.LIVE), ('offline', 'bob', z.Origin.WILL)]
 
     def test_undeclare_withdraws_one_key_while_the_session_lives(self, connected_pair):
-        """Plan 11 §5: a proxy drops one device's availability and stays up."""
+        """A proxy holding several devices' keys drops one and stays up itself."""
         session_a, session_b = connected_pair
         status = _status_class('pres/proxy/{name}')
         dev1 = status.declare_presence(name='dev1', session=session_a)
@@ -133,7 +132,7 @@ class TestOnlineAndOffline:
 
 
 class TestOfflineIsNotATombstone:
-    """Plan 11 §5: offline and a deletion arrive on different callbacks."""
+    """Offline and a deletion arrive on different callbacks: one is presence, the other retained state."""
 
     def test_feeds_stay_separate(self, connected_pair):
         session_a, session_b = connected_pair

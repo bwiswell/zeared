@@ -1,4 +1,4 @@
-"""Router-link detection and the re-attach walk (0.4.0, doc 10).
+"""Router-link detection and the re-attach walk (0.4.0).
 
 A hub restart drops a client session's router link without killing the
 session, so the reconnect path never runs, and retained values published

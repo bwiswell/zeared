@@ -45,7 +45,7 @@ class FlatA(z.Zeared):
 class Spectrum(z.Message):
     """Every field kind, for the TS mapping."""
 
-    TOPIC = 'rio/telemetry/spectrum/{id}'
+    TOPIC = 'fleet/telemetry/spectrum/{id}'
     SCHEMA = '3'
 
     # scalars + optionality

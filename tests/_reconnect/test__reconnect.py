@@ -324,9 +324,9 @@ class TestSubscriberRedeclared:
         which redeclare reuses — so it keeps firing after reconnect."""
 
         @z.zeared
-        class Reader(z.Message):
-            TOPIC = 'reco/rm/{reader_id}'
-            reader_id: int = z.Int(required=True)
+        class Unit(z.Message):
+            TOPIC = 'reco/rm/{unit_id}'
+            unit_id: int = z.Int(required=True)
 
         new_raw = _peer_session()
         try:
@@ -340,7 +340,7 @@ class TestSubscriberRedeclared:
                 max_attempts=None,
             )
             removed: list[dict] = []
-            sub = Reader.on_message(
+            sub = Unit.on_message(
                 lambda r: None,
                 on_remove=lambda meta: removed.append(meta.captures),
                 session=m,
@@ -362,7 +362,7 @@ class TestSubscriberRedeclared:
             wait(0.3)
             sub.close()
 
-            assert removed == [{'reader_id': '7'}]
+            assert removed == [{'unit_id': '7'}]
         finally:
             with contextlib.suppress(Exception):
                 m._teardown(call_close=False)

@@ -345,8 +345,8 @@ close the removal gap:
 # 1. on_remove: low-latency incremental removals. Fires on each DELETE with
 #    a ZenohMeta whose captures identify the removed key (raw strings).
 def gone(meta: z.ZenohMeta) -> None:
-    reader_id = Telemetry.coerce_captures(meta.captures)['id']   # typed
-    desired.discard(reader_id)
+    robot_id = Telemetry.coerce_captures(meta.captures)['id']   # typed
+    desired.discard(robot_id)
 
 Telemetry.on_message(add_or_update, on_remove=gone)
 
@@ -374,24 +374,24 @@ answer on demand.
 
 ```python
 @z.zeared
-class TagState(z.Message):
-    TOPIC = 'rio/state/tag/{epc}'
-    epc: str   = z.Str(required=True)   # key capture
+class Position(z.Message):
+    TOPIC = 'fleet/position/{robot}'
+    robot: str = z.Str(required=True)   # key capture
     x: float   = z.Float(required=True) # ─┐ reply body
-    y: float   = z.Float(required=True)  #─┘
+    y: float   = z.Float(required=True) # ─┘
 
 # --- serving side ---
-def handler(ctx: z.QueryContext) -> TagState | list[TagState] | None:
-    epc = ctx.captures['epc']          # ctx.params / ctx.request also available
-    x, y = lookup(epc)
-    return TagState(epc=epc, x=x, y=y)  # or ctx.reply(...) explicitly
+def handler(ctx: z.QueryContext) -> Position | list[Position] | None:
+    robot = ctx.captures['robot']       # ctx.params / ctx.request also available
+    x, y = locate(robot)
+    return Position(robot=robot, x=x, y=y)  # or ctx.reply(...) explicitly
 
-qbl = TagState.on_query(handler)        # z.Queryable — .close() / context manager
+qbl = Position.on_query(handler)        # z.Queryable — .close() / context manager
 
 # --- getting side ---
-one  = TagState.query_one(epc='E280 1234', timeout=2.0)  # first reply or None
-many = TagState.query(epc='E280*', timeout=2.0)          # wildcard fan-out
-all_ = TagState.query(timeout=2.0)                        # omitted slots → '*'
+one  = Position.query_one(robot='r-17', timeout=2.0)  # first reply or None
+some = Position.query(robot='r-$*', timeout=2.0)      # every robot whose id starts 'r-'
+all_ = Position.query(timeout=2.0)                     # omitted slots → '*'
 ```
 
 The handler either **returns** an instance / iterable / `None`, or replies
@@ -404,7 +404,7 @@ Rules:
 
 - `query()` blocks up to `timeout` and returns only successfully decoded OK replies. Error replies (`reply_err`) and decode failures route to `on_error=` (else log), each surfaced as a `z.QueryError`.
 - `query()` defaults to **no consolidation** — a query is a fan-out and each queryable may reply more than once; Zenoh's default consolidation would collapse same-key replies. Pass `consolidation=` to opt into dedup.
-- Omitted key slots widen to `*` (whole-template wildcard); embed `*` in a value for a partial wildcard. `params=` appends `?k=v`; `REQUEST = SomeClass` + `request=` sends a typed request payload.
+- Omitted key slots widen to `*`, and so does a value of `'*'`. To match part of one segment, put Zenoh's `$*` in the value (`robot='r-$*'`); a bare `*` must be a whole segment, and `'r-*'` is a Zenoh error. `params=` appends `?k=v`; `REQUEST = SomeClass` + `request=` sends a typed request payload.
 - `async def` handlers: register via `z.aon_query(Cls, handler)`; the query stays live until the coroutine resolves. Async getters: `z.aquery` / `z.aquery_one` / `z.aquery_iter` — generic in the message class since 0.3.5, so they return `list[Cls]` / `Cls | None` / `AsyncIterator[Cls]` and callers need no `cast`.
 - **Streaming getters (0.3.4).** `Cls.iter_query(...)` and `z.aquery_iter(...)` yield each reply as it lands instead of collecting the window; `query` is `list()` over the same path. Pair with a generator handler for a query that is O(1) on both ends. `timeout` is the total duration and starts when the getter is *called*, not when iteration begins; `on_error` fires as you consume, so an iterator nobody iterates reports nothing.
 - **`query_one` short-circuits (0.3.4).** It returns at the first decoded reply rather than waiting out `timeout`. Consequence: `on_error` sees only failures arriving before that first good reply — use `query()` for the complete error picture.
@@ -506,8 +506,8 @@ selectors, and `concrete_topic` — renders slots the same way (0.3.8):
   (`2026-10-15T12:30:00+00:00`), a `TimeDelta` its seconds (`'5.0'`).
 - **This applies to values of the field's own type.** Any other value
   renders as `str(value)`: strings pass through verbatim, so a selector
-  wildcard (`Cls.query(epc='E280*')`) or an already-rendered value
-  (`Cls.unretain(reader_id='7')`) keeps working. The type check is exact, so
+  wildcard (`Cls.query(robot='r-$*')`) or an already-rendered value
+  (`Cls.unretain(id='7')`) keeps working. The type check is exact, so
   a `bool` isn't an `int`.
 - **A slot field with a `data_key`** renders from its attribute and decodes
   back under its wire key; the slot is stripped from the payload by that
@@ -1010,7 +1010,7 @@ python -m zeared.hubd \
 ```
 
 The daemon is stateless and holds no zeared message state — it routes opaque
-samples, so it needs no schemas or `rio-protocol`. It stops cleanly on
+samples, so it needs none of your message classes installed. It stops cleanly on
 SIGINT/SIGTERM.
 
 Notes and limits:
@@ -1164,20 +1164,19 @@ is yours to build; the generated types describe the JSON shape a bridge hands
 the browser after decoding a zeared message.
 
 ```sh
-python -m zeared.doc.typescript rio_protocol -o rio-types.ts
-python -m zeared.doc.typescript rio_protocol -o rio-types.ts --check   # CI guard
+python -m zeared.doc.typescript fleet_messages -o fleet-types.ts
+python -m zeared.doc.typescript fleet_messages -o fleet-types.ts --check   # CI guard
 ```
 
 ```ts
 // Generated: one interface per message + referenced payloads, enums as unions.
-export interface RawRead {
-  source: string;
-  reader_id: number;
-  beam_id?: number;        // optional (has a default)
-  epc: string;
-  tid?: string;            // optional (`str | None`): absent when None
-  rf_phase: number | null; // nullable=True: present, may be null
-  rssi: number;
+export interface Telemetry {
+  robot: string;
+  seq: number;
+  battery?: number;        // optional (has a default)
+  note?: string;           // optional (`str | None`): absent when None
+  heading: number | null;  // nullable=True: present, may be null
+  x: number;
   // …
 }
 ```
@@ -1193,7 +1192,7 @@ seconds (`number`); frames/ndarrays are `unknown` — decode them in your bridge
 Each message interface carries its wire contract as JSDoc: `@topic`,
 `@extraTopic`, `@schemaVersion`, `@encoding`, and `@effect` when the class
 declares `EFFECT`. Also available programmatically:
-`from zeared.doc import generate_ts; generate_ts('rio_protocol')` returns the
+`from zeared.doc import generate_ts; generate_ts('fleet_messages')` returns the
 `.ts` source as a string.
 
 A downstream package can give a custom field its own TypeScript spelling: subclass a
@@ -1369,7 +1368,7 @@ prod_sub  = Telemetry.on_message(prod_cb)                 # class default (dedup
 - **Retention dedupe is timestamp-dependent.** Dedupe needs HLC timestamps on samples; without them it's a no-op pass-through. Zeared's factory injects `timestamping/enabled=true` into the built `zenoh.Config` by default (0.0.13), so most callers don't need to think about this — opt out via `z.peer(timestamping=False)` or by managing your own `zenoh_config=`. If you supply `zenoh_config=`, you're in charge: enable timestamping yourself or set `DEDUPE = False` on the subscriber class. A sample with no timestamp always passes through dedupe.
 - **Retention TTL is lazy.** `RETENTION_TTL = N` opts into time-based expiration of cached entries, but expiration is only checked when a subscriber issues a retained-fetch (`_handle_query`) — topics that nobody ever queries may keep stale entries in memory. Acceptable for typical use; no background sweeper.
 - **Retry only on `zenoh.open()` raise (without auto-reconnect).** Vanilla `z.peer()` / `z.client()` retry only on the initial open. With `auto_reconnect=True`, mid-flight session deaths are detected and rebuilt; without it, a session dying silently means the next send fails.
-- **`{name**}` and anonymous `**` are trailing-only.** Non-trailing multi-segment forms (`a/**/c`, `peer/{cluster**}/{host}/status`) remain backlog items.
+- **`{name**}` and anonymous `**` are trailing-only.** Non-trailing multi-segment forms (`a/**/c`, `peer/{cluster**}/{host}/status`) aren't supported.
 - **A single-segment slot can't hold a `/`.** A slot bound to `Path`, or to base64 `Bytes`, raises `TopicError` at first use, and a value containing `/` raises when a key is built to send on (0.4.0). Use `Bytes(encoding='hex')` or a `Str` slot, or a trailing `{name**}` slot for a path tail.
 - **`alisten` drops, it doesn't block.** Its `Stream` is bounded (`maxsize=1024` by default; `0` is unbounded). A full stream drops its oldest message, counts it on `stream.dropped` and logs the first drop; there's no backpressure (0.4.0).
 - **Format specs rejected in templates.** `{x:03d}` / `{x!r}` / `{x**:fmt}` raise `TopicError`. Plain `{name}` and `{name**}` are the only slot syntaxes.
@@ -1430,9 +1429,17 @@ uv sync --extra bench
 uv run python -m bench --runs 3      # how the committed artifact is recorded
 ```
 
-The accelerated rows need `rusted`, which zeared declares nowhere: install it
-for the run with `uv pip install ../rusted` (a sibling checkout), and record
-with `uv run --no-sync python -m bench --runs 3` so `uv` doesn't remove it.
+The accelerated rows need [`rusted`](https://github.com/bwiswell/rusted),
+which zeared declares nowhere. It isn't on a package index, so install a
+wheel built from it for the run, after any `uv sync` (a sync removes what the
+lockfile doesn't name), and record with `--no-sync` so `uv` leaves it in
+place:
+
+```sh
+uv pip install path/to/rusted-*.whl
+uv run --no-sync python -m bench --runs 3
+```
+
 The MQTT comparison needs `mosquitto` on `PATH`; suites whose requirements
 are missing skip with a note.
 

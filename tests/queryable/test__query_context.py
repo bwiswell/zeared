@@ -44,11 +44,11 @@ class TestRenderSelector:
     def test_embedded_wildcard_passes_through(self):
         @z.zeared
         class Q(z.Message):
-            TOPIC = 'q/sel3/{epc}'
-            epc: str = z.Str(required=True)
+            TOPIC = 'q/sel3/{robot}'
+            robot: str = z.Str(required=True)
 
         tpl = Q._templates().canonical
-        assert tpl.render_selector({'epc': 'E280*'}) == 'q/sel3/E280*'
+        assert tpl.render_selector({'robot': 'r-$*'}) == 'q/sel3/r-$*'
 
     def test_static_topic(self):
         @z.zeared

@@ -164,7 +164,7 @@ class _MessageSubscribeMixin:
         ``on_remove`` (and ``meta.captures`` generally) hands back template
         slots as raw strings. This runs each slot that maps to a declared
         seared field through that field's ``deserialize`` — so a
-        ``{reader_id}`` slot bound to ``z.Int`` comes back as ``int`` — and
+        ``{unit}`` slot bound to ``z.Int`` comes back as ``int`` — and
         passes capture-only slots (no matching field) through unchanged.
         Handy for keying removal-reconcile on typed identity.
 

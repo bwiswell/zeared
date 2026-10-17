@@ -50,7 +50,7 @@ to embed or test the daemon without signals.
 
 ## Deploying as a systemd service
 
-The hub is a stateless daemon — the rio-* deployment model. A minimal unit:
+The hub is a stateless daemon, so it runs as a plain systemd service. A minimal unit:
 
 ```ini
 [Unit]
@@ -80,4 +80,4 @@ by design, so consumers can layer their own identity/scope policy.
 - **Single hub is a SPOF.** Run several and link them (`--connect`); nodes can
   list multiple routers.
 - **No message-layer involvement.** The hub routes opaque samples — it needs
-  no schemas / `rio-protocol` and never decodes payloads.
+  none of the mesh's message classes and never decodes payloads.

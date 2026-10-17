@@ -21,15 +21,15 @@ class PingRequest(z.Zeared):
 
 @z.zeared
 class Ping(_CmdBase):
-    """:class:`Ping` a reader (a queryable)."""
+    """:class:`Ping` a unit (a queryable)."""
 
-    TOPIC = 'rio/command/ping/{source}/{reader_id}'
+    TOPIC = 'fleet/command/ping/{source}/{unit_id}'
     SCHEMA = '2'
     RETAINED = False
     DEDUPE = True
     REQUEST = PingRequest
 
-    reader_id: int = z.Int(required=True)
+    unit_id: int = z.Int(required=True)
     note: str | None = z.Str(default=None, doc='free-text note')
 
 

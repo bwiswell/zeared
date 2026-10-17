@@ -51,10 +51,10 @@ Peer and client modes only; router mode with it raises `ValueError`.
 `probe_interval` paces the health and link checks; `resync_jitter` and
 `resync_concurrency` shape the re-attach walk (see
 [`_reconnect.md`](_reconnect/_reconnect.md)). A factory keyword beats the
-field when both are given. In TOML:
+field when both are given. In a TOML file read with
+`SessionConfig.from_toml(path)`, at the top level:
 
 ```toml
-[zenoh]
 mode = "client"
 router = "tls/hub.example:7447"
 auto_reconnect = true
@@ -150,10 +150,9 @@ Anything zeared doesn't model — TLS/mTLS, access control, scouting,
 transport limits — comes from these two fields:
 
 ```toml
-[zenoh]
 mode = "client"
 router = "tcp/hub.local:7447"
-zenoh_config_file = "/etc/rio-node.json5"          # certs, ACL
+zenoh_config_file = "/etc/myapp/zenoh.json5"       # certs, ACL
 zenoh_overrides = { "scouting/multicast/enabled" = false }
 ```
 

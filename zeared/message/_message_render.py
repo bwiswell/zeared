@@ -16,7 +16,7 @@ The rule for one slot value:
   ``serialize`` gets no ``format=`` hint, so a key is the same whatever the
   class's ``ENCODING``. The check is exact, so a ``bool`` is not an ``int``.
 - **Anything else renders as** ``str(value)``, exactly as before. Strings
-  pass through verbatim, so selector wildcards (``epc='E280*'``) and
+  pass through verbatim, so selector wildcards (``robot='r-$*'``) and
   pre-rendered values keep working, and nothing here raises on a value the
   old render accepted.
 - **A slot with no declared field** (capture-only) renders as

@@ -79,7 +79,7 @@ class TestEmit:
             assert f'export interface {name} {{' in self.ts
 
     def test_message_jsdoc_wire_contract(self):
-        assert '@topic rio/telemetry/spectrum/{id}' in self.ts
+        assert '@topic fleet/telemetry/spectrum/{id}' in self.ts
         assert '@schemaVersion 3' in self.ts
         assert '@encoding msgpack' in self.ts
 

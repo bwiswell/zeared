@@ -632,7 +632,7 @@ class TestBoundedAlisten:
 
 class TestAopenManaged:
     def test_aopen_yields_a_managed_session_and_releases_it(self):
-        """0.4.0 (plan 20 §9 Q1): ``SessionConfig.auto_reconnect`` reaches ``aopen``."""
+        """0.4.0: ``SessionConfig.auto_reconnect`` reaches ``aopen``, as it does ``open``."""
         cfg = z.SessionConfig(mode=z.Mode.PEER, auto_reconnect=True, probe_interval=0)
 
         async def main():

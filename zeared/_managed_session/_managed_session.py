@@ -128,7 +128,7 @@ class ManagedSession(_OnReconnectMixin, _ZenohApiMixin):
         self._link_state = 'up'
         self._restoring = False
         self._routers: frozenset[str] = frozenset()
-        # Re-attach walk knobs; factories override (plan 18 §1.4 defaults).
+        # Re-attach walk knobs, at their defaults; the factories set them.
         self._resync_jitter = 2.0
         self._resync_concurrency = 4
         # Single long-lived reconnect worker per ManagedSession.

@@ -108,7 +108,7 @@ defaults it to `LIVE`.
 The canonical use is the sync-then-react pattern on `RETAINED` classes:
 
 ```python
-def on_state(msg: TagState, meta: z.ZenohMeta):
+def on_state(msg: Position, meta: z.ZenohMeta):
     if meta.origin is z.Origin.REPLAY:
         seed(msg)         # initial state sync — don't act on it
     else:

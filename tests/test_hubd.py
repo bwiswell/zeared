@@ -188,7 +188,7 @@ class TestHubRelaysZearedMessages:
 
         @z.zeared
         class Reading(z.Message):
-            TOPIC = 'rio/telemetry/reading/{id}'
+            TOPIC = 'fleet/telemetry/reading/{id}'
             RETAINED = True
             id: int = z.Int(required=True)
             v: int = z.Int(required=True)
@@ -216,7 +216,7 @@ class TestHubRelaysZearedMessages:
 
         @z.zeared
         class Status(z.Message):
-            TOPIC = 'rio/presence/status/{name}'
+            TOPIC = 'fleet/presence/status/{name}'
             LIVELINESS = True
             name: str = z.Str(required=True)
             state: str = z.Str(default='up')

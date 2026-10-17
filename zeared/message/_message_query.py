@@ -100,8 +100,9 @@ class _MessageQueryMixin:
 
         ``key_fields`` fill the canonical template's slots; omitted slots
         widen to wildcards (``query()`` with none asks the whole template
-        wildcard, ``query(id='42')`` narrows). Embed ``*`` in a value for
-        a partial wildcard (``query(epc='E280*')``).
+        wildcard, ``query(id='42')`` narrows). Put Zenoh's ``$*`` in a value
+        to match part of a segment (``query(robot='r-$*')``); a bare ``*``
+        must be a whole segment.
 
         ``params`` is appended to the selector as ``?k=v&…``. ``request``
         (a ``REQUEST``-class instance) is sent as the query payload.
