@@ -132,6 +132,20 @@ def _start_presence(  # noqa: PLR0913, PLR0917
 M = TypeVar('M', bound='Message')
 
 
+def _roll_back(zenoh_subs: list, watchdog: Any) -> None:
+    """Undo a declare that failed partway: undeclare what it declared, and stop its watchdog.
+
+    A watchdog with ``startup_grace`` starts its thread when it's built, so a
+    rollback that left it running fired ``on_quiet`` for a subscription that
+    never existed (until 0.4.2).
+    """
+    for sub in zenoh_subs:
+        with contextlib.suppress(Exception):
+            sub.undeclare()
+    if watchdog is not None:
+        watchdog.cancel()
+
+
 class Subscriber[M: 'Message']:
     """Zeared subscription handle.
 
@@ -276,9 +290,7 @@ class Subscriber[M: 'Message']:
             for tpl in tpls.all:
                 zenoh_subs.append(raw.declare_subscriber(tpl.wildcard, dispatch))  # noqa: PERF401  (partial list drives rollback below)
         except Exception as e:
-            for sub in zenoh_subs:
-                with contextlib.suppress(Exception):
-                    sub.undeclare()
+            _roll_back(zenoh_subs, watchdog)
             msg = f'{msg_cls.__name__}: failed to declare subscriber: {e}'
             raise SubscriptionError(msg) from e
 
@@ -296,9 +308,7 @@ class Subscriber[M: 'Message']:
         try:
             presence_handler, presence_subs = _start_presence(raw, tpls, msg_cls, on_online, on_offline, on_error)
         except Exception:
-            for zsub in zenoh_subs:
-                with contextlib.suppress(Exception):
-                    zsub.undeclare()
+            _roll_back(zenoh_subs, watchdog)
             raise
 
         sub_handle = cls(

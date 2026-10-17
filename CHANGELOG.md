@@ -61,6 +61,9 @@ lines as it lands, and the entry is dated when that version is released.
 - **The slot checks go by a field's kind,** `s.field_kind`, rather than its class's name. A subclass of `Str` binds
   a `{name**}` slot, where it was refused (since 0.1.0), and a subclass of `Path`, or of `Bytes` in base64, is
   refused on a single-segment slot, where it passed and could split the key (since 0.4.0).
+- **A subscription that fails to declare stops its watchdog.** With `startup_grace`, the watchdog's thread starts
+  when the subscription is built, and a declare that then failed (a Zenoh subscriber, or the presence watch) left it
+  running, so `on_quiet` fired for a subscription that was never made. Since 0.1.0.
 
 ## 0.4.1 — 2026-10-17
 
