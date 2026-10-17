@@ -52,7 +52,9 @@ class Spectrum(z.Message):
     id: int = z.Int(required=True)  # required
     name: str = z.Str(required=True)
     count: int = z.Int(default=0)  # optional, non-null
-    ratio: float | None = z.Float(default=None)  # nullable
+    ratio: float | None = z.Float(default=None)  # optional: absent when None
+    note: str | None = z.Str(default=None, nullable=True)  # nullable, optional
+    stamp: int | None = z.Int(required=True, nullable=True)  # nullable, required
     flag: bool = z.Bool(default=True)
     blob: bytes = z.Bytes(required=True)  # base64 → string
     price: object = z.Decimal(as_number=True, required=True)  # number

@@ -85,6 +85,21 @@ adding `zeared` as a direct git reference may require enabling
 allow-direct-references = true
 ```
 
+## Upgrading to 0.4.0
+
+Every change below is listed with who it reaches and what to do.
+The full list is in [`CHANGELOG.md`](CHANGELOG.md).
+
+**1. seared 0.4.0.** A wire `null` on a field that isn't `nullable=True`
+reads as absent; a strict `Int` refuses a fractional float, and a strict
+`Bool` an int other than `0` or `1`; `ValidationError` messages gain a
+`Cls.path:` prefix; `Union(default=)` is `Union(fallback=)`; seared's
+`missing=` is gone. See seared's changelog. On the msgpack wire a `Bytes`
+slot inside a `z.Tuple` is now raw bytes; 0.3.x nodes still read it.
+zeared's generated TypeScript writes `| null` only for `nullable=True`
+fields, and generated docs show `None` defaults: regenerate committed docs
+(`python -m zeared.doc … -o docs`) and types.
+
 ## Quick start
 
 ```python
@@ -723,8 +738,8 @@ class Report(z.Message):
 
 `Decimal` round-trips losslessly via string; `Path` normalises to POSIX
 on the wire; `PandasFrame` / `PolarsFrame` use the records form
-(`[{col: val}, ...]`). `Union(default=Variant)` from seared 0.1.9
-gives graceful fallback for unknown tags. See seared's docs.
+(`[{col: val}, ...]`). `Union(fallback=Variant)` (named `default=` before
+seared 0.4.0) gives graceful fallback for unknown tags. See seared's docs.
 
 ## Multiple topics per class
 
@@ -1057,7 +1072,8 @@ export interface RawRead {
   reader_id: number;
   beam_id?: number;        // optional (has a default)
   epc: string;
-  tid?: string | null;     // nullable (declared `str | None`)
+  tid?: string;            // optional (`str | None`): absent when None
+  rf_phase: number | null; // nullable=True: present, may be null
   rssi: number;
   // …
 }
@@ -1067,7 +1083,8 @@ Mapping: scalars → `number`/`string`/`boolean`; `Enum` → literal unions
 (`0 | 1`, `"fast" | "slow"`); `many` → `T[]`; `keyed` → `Record<string, T>`;
 `z.T(Nested)` → an interface reference; `z.Union` → a discriminated union;
 `z.Tuple` → a TS tuple. Keys are **wire keys** (`data_key` when set). `required`
-→ no `?`; a default → `?`; `X | None` → `?: T | null`. `dump=False` fields are
+→ no `?`; a default → `?`; `nullable=True` → `| null` (an ordinary `X | None`
+field is optional, absent when `None`, never `null`). `dump=False` fields are
 omitted. `Bytes` is base64 (`string`) on the JSON wire, and `TimeDelta` is its
 seconds (`number`); frames/ndarrays are `unknown` — decode them in your bridge.
 Each message interface carries its wire contract as JSDoc: `@topic`,

@@ -55,7 +55,9 @@ class TestEmit:
     def test_optionality_and_nullability(self):
         assert '  id: number;' in self.ts  # required
         assert '  count?: number;' in self.ts  # optional, non-null default
-        assert '  ratio?: number | null;' in self.ts  # nullable
+        assert '  ratio?: number;' in self.ts  # optional `X | None`: absent, never null
+        assert '  note?: string | null;' in self.ts  # nullable=True, optional
+        assert '  stamp: number | null;' in self.ts  # nullable=True, required
 
     def test_enum_aliases_emitted(self):
         assert 'export type Band = 0 | 1;' in self.ts
@@ -99,7 +101,7 @@ class TestRequestClosure:
         ts = generate('doc.wire_models')
         # `source` is inherited from the private base and is a template slot.
         assert '  source: string;' in ts
-        assert '  note?: string | null;' in ts
+        assert '  note?: string;' in ts
 
     def test_private_base_excluded(self):
         ts = generate('doc.wire_models')
@@ -176,28 +178,27 @@ class TestCustomFieldTypes:
         out = emit([Uses])
         assert out.count('export type Branded = string') == 1  # the prelude, once
         assert out.index('export type Branded') < out.index('export interface Uses')
-        assert '  ref?: Branded | null;' in out
+        assert '  ref?: Branded;' in out
         assert '  other: Branded;' in out
 
 
-class TestDefaultRead:
-    """Pin (0.3.8): nullability reads ``f.default``, with ``missing`` only as
-    a fallback, so a defaulted optional field stays non-nullable once seared
-    0.4.0 removes the ``missing`` slot."""
+class TestNullable:
+    """Pin (0.4.0): ``| null`` reads ``f.nullable`` and nothing else."""
 
-    def test_default_without_missing_slot_is_not_nullable(self):
+    def test_optional_none_default_is_not_nullable(self):
         from types import SimpleNamespace
 
         from zeared.doc.typescript import _member
 
-        # Shaped like a seared 0.4.0 field: a default, and no ``missing``.
-        f = SimpleNamespace(required=False, default=5, default_factory=None, doc=None)
+        f = SimpleNamespace(required=False, default=None, default_factory=None, nullable=False, doc=None)
         assert _member('n', 'n', f) == ['  n?: unknown;']
 
-    def test_no_default_is_nullable(self):
+    def test_nullable_optional_and_required(self):
         from types import SimpleNamespace
 
         from zeared.doc.typescript import _member
 
-        f = SimpleNamespace(required=False, default=None, default_factory=None, doc=None)
-        assert _member('n', 'n', f) == ['  n?: unknown | null;']
+        opt = SimpleNamespace(required=False, default=None, default_factory=None, nullable=True, doc=None)
+        req = SimpleNamespace(required=True, default=None, default_factory=None, nullable=True, doc=None)
+        assert _member('n', 'n', opt) == ['  n?: unknown | null;']
+        assert _member('n', 'n', req) == ['  n: unknown | null;']
