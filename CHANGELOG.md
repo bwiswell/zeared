@@ -9,6 +9,16 @@ nodes on other versions, retained state and access rules can see.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.4.3 — unreleased
+
+**On seared 0.4.3, where type hints resolve again.**
+
+### Changed
+
+- **Dependencies:** seared `>=0.4.3,<0.5.0`, pinned to `tag = "v0.4.3"`. seared 0.4.3 imports at runtime the types
+  its base's and its fields' annotations name, so `typing.get_type_hints()` works on seared classes again; nothing
+  that loads or dumps changes. See its changelog.
+
 ## 0.4.2 — 2026-10-17
 
 **On seared 0.4.2, with a strict `SessionConfig` and one key matcher.** `zeared.keyexpr` answers key questions as
