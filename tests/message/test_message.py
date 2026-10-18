@@ -218,16 +218,12 @@ class TestEffectIsDocOnly:
         """``Effect`` is imported at runtime, so ``Message``'s own annotations evaluate (``EFFECT`` among them)."""
         assert 'EFFECT' in annotationlib.get_annotations(z.Message, format=annotationlib.Format.VALUE)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=NameError,
-        reason=(
-            'seared 0.4.1+: the Seared base annotates __seared_load__ with Callable, imported only for '
-            "type checking, so get_type_hints fails on every subclass. seared's to fix; this passes then"
-        ),
-    )
     def test_annotation_resolves_on_subclasses(self):
-        """``get_type_hints`` works on every subclass: zeared's annotations and seared's base both resolve."""
+        """``get_type_hints`` works on every subclass: zeared's annotations and seared's base both resolve.
+
+        On seared 0.4.1 and 0.4.2 the base's annotations didn't, and this was a
+        strict xfail through zeared 0.4.2; seared 0.4.3 fixed them.
+        """
 
         @z.zeared
         class Hinted(z.Message):
