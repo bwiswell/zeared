@@ -59,6 +59,34 @@ class TestSessionConfigSeared:
         assert cfg.mode is z.Mode.PEER
 
 
+class TestUnknownKeys:
+    """0.4.2: a key ``SessionConfig`` doesn't declare is refused, not dropped."""
+
+    def test_a_misspelt_key_is_refused_with_every_other(self):
+        with pytest.raises(z.ValidationError, match=r'^SessionConfig\.auto_reconect: unknown key \(1 more: retyr\)$'):
+            SessionConfig.load({'mode': 'peer', 'auto_reconect': True, 'retyr': True})
+
+    def test_every_reader_refuses_one(self, tmp_path):
+        toml = tmp_path / 'session.toml'
+        toml.write_text('mode = "client"\nrouter = "tcp/hub:7447"\nroutr = "tcp/typo:7447"\n')
+        with pytest.raises(z.ValidationError, match='routr: unknown key'):
+            SessionConfig.from_toml(str(toml))
+        with pytest.raises(z.ValidationError, match='routr: unknown key'):
+            SessionConfig.loads('{"mode": "client", "routr": "tcp/typo:7447"}')
+
+    def test_override_paths_are_zenohs_not_fields(self):
+        cfg = SessionConfig.load({'mode': 'peer', 'zenoh_overrides': {'scouting/multicast/enabled': False}})
+        assert cfg.zenoh_overrides == {'scouting/multicast/enabled': False}
+
+    def test_a_call_can_still_ignore_them(self):
+        assert SessionConfig.load({'mode': 'peer', 'extra': 1}, unknown='ignore').mode is Mode.PEER
+
+    def test_from_env_reads_only_the_variables_it_knows(self, monkeypatch):
+        monkeypatch.setenv('ZEARED_SESSION_MODE', 'peer')
+        monkeypatch.setenv('ZEARED_SESSION_AUTO_RECONECT', 'true')  # not one of them, so never read
+        assert SessionConfig.from_env().auto_reconnect is False
+
+
 class TestBuilders:
     def test_replace_updates_fields_returns_new_instance(self):
         cfg = z.SessionConfig(mode=z.Mode.CLIENT, router='tcp/a:7447')

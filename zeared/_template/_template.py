@@ -33,6 +33,9 @@ _RESERVED_PREFIX = '__zeared'
 # ``name`` is a Python-style identifier. Anchored with ``$`` so non-trailing
 # occurrences fall through to the body parser (which then rejects them).
 _NAMED_MULTI_TRAILING_RE = re.compile(r'\{([a-zA-Z_][a-zA-Z0-9_]*)\*\*\}$')
+# Zenoh's wildcards inside a template's literal text: ``$*`` within a chunk, a
+# lone ``*`` for a whole one. Zenoh allows ``*`` nowhere else.
+_LITERAL_WILDCARD_RE = re.compile(r'(\$\*|\*)')
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +49,8 @@ class Template:
                        caller supplies the rendered tail verbatim.
       - ``**``       — anonymous trailing multi-segment wildcard;
                        subscribe-only.
+      - ``*`` / ``$*`` in literal text — Zenoh's one-chunk and within-a-chunk
+                       wildcards; subscribe-only (0.4.2).
 
     Anonymous non-trailing ``**`` and named non-trailing multi-segment
     (``{name**}/literal``) are both rejected at parse time.
@@ -54,10 +59,11 @@ class Template:
         raw: original template string.
         field_names: ordered tuple of all capture slot names (single + multi).
         wildcard: Zenoh key expression for subscribe-side use.
-        publishable: ``False`` only if the template contains an anonymous
-                     ``**`` segment. Named ``{name}`` and ``{name**}`` are
-                     both publishable, and so is an anonymous ``*``: the
-                     key it sends on keeps the ``*``.
+        publishable: ``False`` if the template contains an anonymous
+                     wildcard: a trailing ``**``, or (0.4.2) a ``*`` chunk or
+                     a ``$*`` in its literal text, any of which would put a
+                     wildcard in the key it sends on. Named ``{name}`` and
+                     ``{name**}`` are publishable.
         _regex: compiled regex with named captures for each slot.
         _named_multi: name of the trailing ``{name**}`` slot, if any.
     """
@@ -147,9 +153,10 @@ class Template:
                 raise TopicError(msg)
 
         has_multi_marker = has_anon_multi or (named_multi is not None)
-        # Anonymous ``**`` makes the template subscribe-only. Named
-        # ``{name**}`` is publish-capable.
-        publishable = not has_anon_multi
+        # An anonymous wildcard makes the template subscribe-only: a trailing
+        # ``**``, or a ``*`` / ``$*`` in its literal text (0.4.2), where a send
+        # used to put the wildcard in its key. Named ``{name**}`` is publish-capable.
+        publishable = not has_anon_multi and not any('*' in lit for lit in literals)
 
         wildcard = cls._render_wildcard(literals, single_fields, has_multi_marker)
         regex = cls._build_regex(literals, single_fields, has_anon_multi, named_multi)
@@ -223,7 +230,7 @@ class Template:
     ) -> re.Pattern:
         parts: list[str] = []
         for i, lit in enumerate(literals):
-            parts.append(re.escape(lit))
+            parts.append(_literal_pattern(lit))
             if i < len(single_fields):
                 parts.append(f'(?P<{single_fields[i]}>[^/]+)')
         body = ''.join(parts)
@@ -305,3 +312,21 @@ class Template:
         if m is None:
             return None
         return m.groupdict()
+
+
+def _literal_pattern(literal: str) -> str:
+    """A template's literal text as a regex: itself, with Zenoh's wildcards matching as Zenoh's do.
+
+    ``$*`` is any run within one chunk (none included) and a lone ``*`` one
+    whole chunk. Until 0.4.2 both were escaped, so a concrete key never
+    matched them and every sample failed to decode.
+    """
+    out = []
+    for piece in _LITERAL_WILDCARD_RE.split(literal):
+        if piece == '$*':
+            out.append('[^/]*')
+        elif piece == '*':
+            out.append('[^/]+')
+        elif piece:
+            out.append(re.escape(piece))
+    return ''.join(out)

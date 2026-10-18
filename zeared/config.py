@@ -38,7 +38,7 @@ def _parse_bool(value: str) -> bool:
     raise ValueError(msg)
 
 
-@s.seared
+@s.seared(unknown='raise')
 class SessionConfig(s.Seared):
     """Connection spec. Pass to :func:`zeared.open` or to a factory.
 
@@ -80,6 +80,12 @@ class SessionConfig(s.Seared):
         ``resync_concurrency`` workers.
 
     A factory keyword beats the config field when both are given.
+
+    A key it doesn't declare is refused (0.4.2): ``load``, ``loads`` and the
+    ``from_*`` readers raise a ``ValidationError`` naming every unknown key,
+    so ``auto_reconect = true`` fails where it used to leave reconnect off.
+    ``zenoh_overrides`` keys are Zenoh's config paths, not fields, so they
+    aren't checked. ``from_env`` reads only the variables it knows.
 
     Builders (all return a new ``SessionConfig``, originals unchanged):
       - :meth:`replace` — generic field update.

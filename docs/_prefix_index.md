@@ -15,7 +15,7 @@ rate grow.
 
 A trie of path segments turns this into O(query depth × matches): a
 concrete query is one walk down the trie, a `*` fans out only across the
-direct children, and a trailing `**` enumerates the subtree.
+direct children, and a `**` enumerates the subtree.
 
 ## Surface
 
@@ -28,33 +28,31 @@ class _PrefixIndex:
 ```
 
 `add` and `remove` operate on **concrete** topics (no wildcards).
-`matching` accepts a query key that may carry single-segment `*` and
-multi-segment `**` wildcards — single-segment `*` matches one path
-segment (no slash crossing), `**` inside the query matches zero or more
-segments, trailing `**` matches one or more.
+`matching` yields each cached topic the query key intersects, once, as
+Zenoh decides it: `*` is one chunk, `**` any number of chunks (none
+included), and `$*` any run within one chunk.
 
-## Wildcard semantics
+## How it decides (0.4.2)
 
-What `matching` returns, as an equivalent regex:
+The walk only narrows. It may collect a topic the query doesn't reach,
+but never misses one that it does:
+- a chunk holding `$*` walks every child, as `*` does;
+- `**` takes zero chunks here, or one or more below.
 
-| Query | Equivalent regex |
-|-------|------------------|
-| `a/b/c`     | `^a/b/c$`         |
-| `a/*/c`     | `^a/[^/]+/c$`     |
-| `a/**`      | `^a/.+$` (one or more trailing) |
-| `a/**/c`    | `^a(/.+)?/c$` (zero or more inside: `a/c`, `a/b/c`, `a/b/x/c`) |
+Each candidate is then confirmed with
+[`zeared.keyexpr.intersects`](keyexpr.md), Zenoh's own answer, so the
+index returns exactly what a linear scan with `intersects` would.
+`tests/test__prefix_index.py` pins that parity across a randomised corpus
+of queries, with `*`, `$*` and `**` anywhere in them.
 
-For concrete, `*` and trailing-`**` queries the output is identical to
-the regex reference `tests/test__prefix_index.py::_linear_match`, pinned
-by parity tests across a randomised topic-and-query corpus. The corpus
-never puts `**` inside a query (zeared's own selectors only end in one),
-and the reference's `.*?` there wouldn't match `a/c`;
-`test_starstar_inside_pattern` pins the trie's zero-or-more behaviour
-instead.
+Until 0.4.2 the walk was the answer, and it differed from Zenoh twice:
+- **A `$*` chunk was looked up literally,** so it matched nothing:
+  `Status.query(robot='r-$*')` got no retained values.
+- **A trailing `**` needed at least one chunk,** so a getter on `a/**` missed
+  a value retained at `a`.
 
-A trailing `**` here needs at least one segment, where Zenoh's own `**`
-also matches none (`a/**` intersects `a`), so a query `a/**` doesn't
-return a cached topic that is exactly `a`.
+A query with two `**` could also yield a topic more than once, and
+retention replied once per yield.
 
 ## Implementation notes
 

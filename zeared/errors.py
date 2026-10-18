@@ -21,6 +21,15 @@ class TopicError(ZearedError):
     """
 
 
+class KeyExprError(ZearedError, ValueError):
+    """Raised by ``zeared.keyexpr`` for a string that isn't a Zenoh key expression (0.4.2).
+
+    The message is Zenoh's reason (``read-*``: ``*`` may only be preceded by
+    ``/`` or ``$``), with a hint where one helps. A ``ValueError`` too, so
+    code that checks its own rules' syntax catches it as one.
+    """
+
+
 class SubscriberError(ZearedError):
     """Parent for errors raised inside ``Subscriber`` dispatch / fetch paths.
 

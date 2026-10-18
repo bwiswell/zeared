@@ -40,21 +40,21 @@ once, get publish, subscribe, and topic routing for free.
 ## Setup
 
 Each release is tagged `v<version>` on GitHub (the first is `v0.3.13`; the
-latest is `v0.4.1`). Install one by its tag:
+latest is `v0.4.2`). Install one by its tag:
 
 ```sh
 # uv
-uv add git+https://github.com/bwiswell/zeared --tag v0.4.1
+uv add git+https://github.com/bwiswell/zeared --tag v0.4.2
 
 # pip
-pip install git+https://github.com/bwiswell/zeared.git@v0.4.1
+pip install git+https://github.com/bwiswell/zeared.git@v0.4.2
 ```
 
 `uv add` records the tag as the dependency's source:
 
 ```toml
 [tool.uv.sources]
-zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.1" }
+zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.2" }
 ```
 
 **The tag is the pin.** uv doesn't check a version specifier such as
@@ -63,13 +63,13 @@ at, and a source without a tag points at the tip of `master`. Moving to a new
 release means moving the tag. What changed in each release, and what may
 break on the way, is in [`CHANGELOG.md`](CHANGELOG.md).
 
-**zeared pins `seared` the same way,** to `v0.4.0`. A project that declares
+**zeared pins `seared` the same way,** to `v0.4.2`. A project that declares
 no `seared` source of its own gets zeared's. One that declares its own must
 pin the same tag, or uv refuses to resolve, reporting conflicting URLs for
 `seared`:
 
 ```toml
-seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.0" }
+seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.2" }
 ```
 
 Requires Python ≥ 3.14. Pulls in
@@ -170,8 +170,8 @@ zeared's generated TypeScript writes `| null` only for `nullable=True`
 fields, and generated docs show `None` defaults: regenerate committed docs
 (`python -m zeared.doc … -o docs`) and types.
 
-**10. Pins.** Move both together: `zeared` to `tag = "v0.4.1"` and `seared` to
-`tag = "v0.4.0"`. uv reports conflicting URLs until the seared pin matches
+**10. Pins.** Move both together: `zeared` to `tag = "v0.4.2"` and `seared` to
+`tag = "v0.4.2"`. uv reports conflicting URLs until the seared pin matches
 zeared's.
 
 ## Quick start
@@ -470,9 +470,11 @@ def on_request(msg: CliRequest, meta: z.ZenohMeta):
 Anonymous trailing `**` matches one or more trailing path segments (the
 MQTT `#` counterpart). Zenoh's `**` also matches zero, so a sample on the
 bare prefix (`peer`, for `peer/**`) reaches the subscriber, matches no
-template and goes to `on_error` as a `DecodeError`. Templates with
-anonymous `**` are subscribe-only — `send()` on a non-publishable template
-raises `TopicError`. Useful as a catch-all subscriber:
+template and goes to `on_error` as a `DecodeError`. Templates with an
+anonymous wildcard are subscribe-only, and `send()` on one raises
+`TopicError`: a trailing `**`, and since 0.4.2 a `*` chunk or a `$*` in the
+literal text (`robot/*/status`, `fleet/r-$*/status`), which decode what they
+receive as Zenoh matches them. Useful as a catch-all subscriber:
 
 ```python
 @z.zeared
@@ -578,12 +580,36 @@ the segment and the key would match no template:
 - **At first use,** a single-segment slot bound to `Path`, or to `Bytes` in
   its default base64 form, raises `TopicError`. Use
   `z.Bytes(encoding='hex')` for bytes in a key, and a `z.Str` slot (or a
-  trailing `{name**}` slot) for a path.
+  trailing `{name**}` slot) for a path. The check goes by the field's kind
+  (`s.field_kind`, 0.4.2), so a subclass of `Path` is caught, and a
+  subclass of `Str` passes as a tail.
 - **When a key is built to send on,** by `send`, `declare_presence`,
   `ctx.reply`, `unretain` or `concrete_topic`, a single-segment value whose
   rendered form contains `/` raises `TopicError`. Before 0.4.0 the message
   went out on a key nobody received. The query getters' selectors don't
   check, since they embed wildcards deliberately.
+
+## Matching keys by hand (`zeared.keyexpr`)
+
+Code that matches or shapes keys itself, such as an access rule, a bridge's
+route or a gateway's grant, should ask `zeared.keyexpr` (0.4.2) rather than
+split on `/`. Its answers are Zenoh's own, from the `zenoh.KeyExpr` the mesh
+routes by, so they can't drift from what a subscriber or a getter reaches:
+
+```python
+from zeared.keyexpr import includes, intersects, is_concrete, shape
+
+includes('rio/**/rtls/**', 'rio/config/geometry/rtls/r1')   # may this rule reach this key?
+intersects(rule, shape(Reading.TOPIC))                      # could this route deliver anything allowed?
+includes(rule, shape(Reading.TOPIC))                        # does the rule cover all it can carry?
+shape('fleet/{robot}/log/{rest**}')                         # 'fleet/*/log/*/**'
+is_concrete(ctx.captures['robot'])                          # a narrow query, or a wide one?
+```
+
+`**` matches any number of chunks, none included, and `$*` any run within
+one chunk (`r-$*`). `shape` writes a tail slot as `*/**`, since it never
+renders empty. A string that isn't a key expression raises `z.KeyExprError`,
+a `ValueError`. See [`docs/keyexpr.md`](docs/keyexpr.md).
 
 ## Tagged-union payloads (`z.Union`)
 
@@ -1024,10 +1050,13 @@ backoff, `auto_reconnect`, `probe_interval`, ...), the kwargs win
 (per-call overrides over a shared base spec); a kwarg left out defers to
 `config=`. A raw `zenoh_config=<zenoh.Config>` is the escape hatch below
 both, and it *replaces* the config zeared would build rather than layering
-on it: zeared sets none of its own settings on it (not the mode,
-timestamping, or shared memory off), writes only the endpoints you pass,
-and ignores a `SessionConfig`'s `zenoh_config_file` / `zenoh_overrides`.
-Set what you need in it yourself.
+on it: zeared sets none of its own settings on it (not timestamping, or
+shared memory off), writes only the endpoints you pass, and ignores a
+`SessionConfig`'s `zenoh_config_file` / `zenoh_overrides`. Set what you need
+in it yourself. Its mode is the one exception (0.4.2): the factory's name is
+a promise, so a config without a mode opens what the factory opens, and one
+naming another mode (`client(zenoh_config=…)` given a peer's) raises
+`ValueError` before anything opens.
 
 `SessionConfig` ships with immutable-style builders for composable
 tweaks — each returns a new instance:
@@ -1060,6 +1089,12 @@ paths to values (`{'scouting/multicast/enabled': False}`); the overrides
 aren't read from the environment. zeared builds the session's config from
 the file, then applies its mode, timestamping and shared memory off, then
 the overrides.
+
+A key `SessionConfig` doesn't declare is refused (0.4.2): `load`, `loads`
+and the `from_*` readers raise one `ValidationError` naming every unknown
+key, so `auto_reconect = true` in a `[zenoh]` table fails at load instead of
+quietly leaving reconnect off. The `zenoh_overrides` paths aren't checked.
+See [`docs/config.md`](docs/config.md#unknown-keys-are-refused-042).
 
 ## NAT traversal: the relay hub
 
@@ -1319,6 +1354,7 @@ nothing and exits non-zero when the committed docs have drifted. See
 ZearedError
 ├── NoSessionError
 ├── TopicError
+├── KeyExprError                   # also a ValueError (0.4.2)
 ├── SessionDeadError
 ├── SubscriptionError              # declare-time, fatal to one subscription
 ├── QueryableError                 # declare-time, or serving-side on_error
@@ -1333,7 +1369,8 @@ ZearedError
 | Exception | Raised when |
 |-----------|-------------|
 | `z.NoSessionError`      | No session is resolvable (no kwarg, no scope, no default) |
-| `z.TopicError`          | `TOPIC` is missing or malformed (bad template syntax, a format spec, a non-trailing `**`), or violates the namespace reservation (`__zeared/...`); a single-segment slot is bound to `Path` or base64 `Bytes`, or a `{name**}` slot to anything but `Str`; a publish would put a `/` inside a single-segment value; a slot is missing when a key is built; a `topic=` override matches no declared template (or a subscribe-only one); `retain=True`, `unretain` or `fetch_retained` on a non-`RETAINED` class; `on_query` on a `RETAINED` class; presence calls (`declare_presence`, `on_online` / `on_offline`) on a class without `LIVELINESS` |
+| `z.TopicError`          | `TOPIC` is missing or malformed (bad template syntax, a format spec, a non-trailing `**`), or violates the namespace reservation (`__zeared/...`); a single-segment slot is bound to `Path` or base64 `Bytes`, or a `{name**}` slot to anything but `Str` (each by kind, subclasses included, 0.4.2); a publish would put a `/` inside a single-segment value; a slot is missing when a key is built; a `topic=` override matches no declared template (or a subscribe-only one); `retain=True`, `unretain` or `fetch_retained` on a non-`RETAINED` class; `on_query` on a `RETAINED` class; presence calls (`declare_presence`, `on_online` / `on_offline`) on a class without `LIVELINESS` |
+| `z.KeyExprError`        | A `zeared.keyexpr` function was given a string that isn't a Zenoh key expression (an empty chunk, or `read-*` where Zenoh writes `read-$*`). Also a `ValueError` (0.4.2) |
 | `z.SessionDeadError`    | A `ManagedSession` op (`put`/`get`/`delete`/`zid`/...) is invoked while the session is `RECONNECTING` or `DEAD` |
 | `z.SubscriptionError`   | `on_message` — declaring the underlying Zenoh subscriber, or a presence feed's liveliness subscribers, failed; or an `async def` callback was given with no running event loop (fatal to that subscription) |
 | `z.SubscriberError`     | Parent for dispatch-time errors. Routed to `on_error=`; subscription continues |

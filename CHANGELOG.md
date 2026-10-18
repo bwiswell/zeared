@@ -9,6 +9,80 @@ nodes on other versions, retained state and access rules can see.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.4.2 — 2026-10-17
+
+**On seared 0.4.2, with a strict `SessionConfig` and one key matcher.** `zeared.keyexpr` answers key questions as
+Zenoh does, and retention, `TOPIC` templates and the session factories now agree with it: a `$*` query reaches
+retained values, a literal wildcard decodes, and `client()` opens a client. The rest closes edges in the slot
+checks, session lifecycles and the generated docs.
+
+### Added
+
+- **`zeared.keyexpr`**, for code that matches or shapes keys by hand: `intersects(a, b)`, `includes(a, b)`,
+  `shape(topic)` and `is_concrete(key)`, over strings. The answers are Zenoh's own, from the `zenoh.KeyExpr` the
+  mesh routes by: `**` matches any number of chunks, none included, `$*` any run within one chunk, and input is
+  canonized. `shape` writes a `TOPIC`'s slots as wildcards, a tail slot as `*/**` since it never renders empty. An
+  access check is these in combination: `includes(rule, key)`, `intersects(rule, shape(topic))`. A string that isn't
+  a key expression raises the new `z.KeyExprError`, also a `ValueError`, with a hint for `read-*` (Zenoh writes
+  `read-$*`).
+- **`--require-docs` for `python -m zeared.doc`**, from seared 0.4.1, whose CLI zeared's runs: before writing or
+  checking anything, it lists each field without a `doc=`, Message classes' included, and exits 1.
+
+### Changed
+
+- **Breaking:** `SessionConfig` refuses a key it doesn't declare. `load`, `loads` and the `from_*` readers raise one
+  `ValidationError` naming every unknown key, so `auto_reconect = true` in a `[zenoh]` table fails at load, where it
+  used to be dropped and leave reconnect off. `zenoh_overrides` paths aren't checked, `from_env` reads only the
+  variables it knows, and `load(data, unknown='ignore')` still tolerates them for one call.
+- **Breaking:** `typing.get_type_hints()` raises `NameError` on a Message class, as on any class subclassing
+  `s.Seared`: since seared 0.4.1 the base annotates an attribute with a type it imports only for type checking.
+  zeared's own annotations still resolve (`annotationlib.get_annotations(z.Message)`); the fix is seared's.
+- **Breaking:** a `*` chunk or a `$*` in a `TOPIC`'s literal text (`robot/*/status`, `fleet/r-$*/status`) makes the
+  template subscribe-only, as a trailing `**` does, and it now decodes what it receives. Such a template subscribed
+  on the right wildcard, but its match escaped the wildcard, so every sample failed to decode, and a `send()` put
+  the wildcard in its key, which Zenoh delivered to every subscriber it intersected. `send()`, `concrete_topic` and
+  the other publish paths now raise `TopicError` for it.
+- **Breaking:** a raw `zenoh_config=` opens the mode its factory names. One that sets no mode gets the factory's,
+  where it opened Zenoh's default, a peer, from `client()` or `hub()`, and one that names another mode raises
+  `ValueError` before anything opens, naming the factory that would open it. The rest of a raw config is still taken
+  as given, and a `SessionConfig`'s `zenoh_overrides` may still set the mode.
+- **Dependencies:** seared `>=0.4.2,<0.5.0`, pinned to `tag = "v0.4.2"`. seared 0.4.1 adds `unknown=`, which a
+  Message class can now take, though on the wire it costs reading a newer publisher (`docs/message/message.md`);
+  0.4.2 adds `s.field_kind` and `seared.doc.json_schema`. Neither changes what `load` or `dump` does; see its
+  changelog.
+
+### Fixed
+
+- **A retained class answers a query with `$*` in a chunk.** `Status.query(robot='r-$*')`, which `query()` documents
+  as narrowing to the keys whose chunk starts `r-`, got no retained values: the retention index looked `r-$*` up as
+  a literal chunk. Since 0.1.0.
+- **A query ending `/**` reaches the value retained at its prefix,** as Zenoh's `**` matches no chunk too: a getter
+  on `fleet/**` now gets the value at `fleet`, which a subscriber on `fleet/**` already received. The index now only
+  narrows the candidates, and `zeared.keyexpr.intersects` decides, so retention answers exactly what Zenoh routes. A
+  query with two `**` (`**/a/**`) also had some values replied to more than once; each is now replied to once. Since
+  0.1.0.
+- **The slot checks go by a field's kind,** `s.field_kind`, rather than its class's name. A subclass of `Str` binds
+  a `{name**}` slot, where it was refused (since 0.1.0), and a subclass of `Path`, or of `Bytes` in base64, is
+  refused on a single-segment slot, where it passed and could split the key (since 0.4.0).
+- **A subscription that fails to declare stops its watchdog.** With `startup_grace`, the watchdog's thread starts
+  when the subscription is built, and a declare that then failed (a Zenoh subscriber, or the presence watch) left it
+  running, so `on_quiet` fired for a subscription that was never made. Since 0.1.0.
+- **`peer(retention_ttl=…)` or `client(retention_ttl=…)` without `auto_reconnect` raises before opening.** It raised
+  the same `TypeError` after the session had opened, and the session was never closed. Since 0.1.0.
+- **A presence token declared on a `ManagedSession`'s raw session comes back after a reconnect.** One declared with
+  `session=managed.raw()` was matched against the new raw session, which nothing had declared on, so it stayed
+  offline; the reconnect now matches it against the session it replaced. A token declared on the managed session
+  itself was always restored. Since 0.4.0.
+- **Generated docs find every Message and every slot.** `is_message_class` asks whether `@zeared` built the class,
+  as seared's `is_seared_class` does: a Message with no fields gets its wire-aware page, with its topic, where it
+  got a plain one, and an undecorated subclass of a Message no longer counts. A Message page's slot table lists
+  every topic's slots, a trailing `{name**}` marked as a tail, where it listed only the canonical topic's `{name}`
+  slots, and several topics are a list, where they ran into one paragraph. `SlotDoc` gains `multi`. Since 0.2.5.
+- **Generated TypeScript declares a class with no fields.** A `Union` variant with no fields was named in the
+  union's type but never declared, so the module didn't type-check. Since 0.2.6.
+- **`python -m zeared.doc.typescript` runs without a `RuntimeWarning`.** `zeared.doc` imported the module it runs,
+  so runpy found it already loaded; the TypeScript names are now re-exported lazily. Since 0.2.6.
+
 ## 0.4.1 — 2026-10-17
 
 **A failed query reply no longer holds the query open.**

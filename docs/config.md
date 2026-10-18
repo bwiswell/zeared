@@ -125,8 +125,11 @@ sess = z.client(config=cfg, retry=False)   # disable retry just this call
 
 Use `zenoh_config: zenoh.Config` to hand the factory a whole Zenoh config to
 start from, instead of the one zeared would build. zeared applies none of
-its own settings to it (mode, timestamping, shared memory off: it is taken
-as given), and writes only the endpoint fields over it, when they are set:
+its own settings to it (timestamping, shared memory off: it is taken as
+given), and writes only the endpoint fields over it, when they are set.
+The mode is the exception (0.4.2): a config that sets none gets the
+factory's, and one that names another raises `ValueError`, since
+`client(zenoh_config=…)` should never open a peer:
 
 ```python
 raw = zenoh.Config()
@@ -141,6 +144,7 @@ zeared's factory kwargs split into two categories:
 | Category | Behavior under `zenoh_config=` |
 |----------|--------------------------------|
 | **Maps to a `zenoh.Config` field** (`timestamping`) | Silenced — you took over the Config; layer Config-level settings yourself or drop the high-level kwarg. |
+| **The mode** (the factory you call) | Filled in when the Config sets none; a Config naming another mode raises `ValueError` (0.4.2). A `SessionConfig`'s `zenoh_overrides` may still set `mode`: that isn't a raw Config. |
 | **Out-of-band** (`retry`, `initial_backoff`, `max_backoff`, `max_attempts`, `auto_reconnect`, `probe_interval`, `resync_jitter`, `resync_concurrency`, `retention_ttl`) | Layered freely on top — they don't touch the `zenoh.Config`. |
 | **Endpoints** (`router`, `connect`, `listen`, as kwargs or `SessionConfig` fields) | Written over the Config when set; when unset, the endpoints the Config already names stand. A hub with listen endpoints nowhere binds `tcp/0.0.0.0:7447`; a client with connect endpoints nowhere raises `TypeError`. |
 
@@ -251,6 +255,28 @@ empty optional fields fall back to seared defaults; missing required
 `from_yaml` uses `PyYAML` (lazy import — raises `ImportError` with an
 install hint if missing). Top-level YAML must be a mapping; values
 flow into `SessionConfig.load`.
+
+### Unknown keys are refused (0.4.2)
+
+`SessionConfig` is declared `@seared(unknown='raise')`, so `load`, `loads`
+and every `from_*` reader refuse a key it doesn't declare, naming every
+one in a single `ValidationError`:
+
+```python
+z.SessionConfig.load({'mode': 'peer', 'auto_reconect': True, 'retyr': True})
+# ValidationError: SessionConfig.auto_reconect: unknown key (1 more: retyr)
+```
+
+Until 0.4.2 a misspelt key was dropped, and its setting quietly kept its
+default: the session above opened without reconnecting. A `[zenoh]` table
+that a service loads through `SessionConfig` is checked the same way.
+
+- **`zenoh_overrides`** keys are Zenoh config paths, not fields, so they
+  aren't checked.
+- **`from_env`** reads only the variables it knows, so a misspelt variable
+  is never read rather than refused.
+- **One call can still ignore them,** with `SessionConfig.load(data,
+  unknown='ignore')`.
 
 `gc_interval=`, the presence observer's GC period, was removed in 0.4.0
 along with the observer: presence is a liveliness token now, with no

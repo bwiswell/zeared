@@ -106,6 +106,34 @@ def _apply_defaults(c: zenoh.Config, mode: str, *, timestamping: bool) -> None:
     c.insert_json5(_SHARED_MEMORY, 'false')
 
 
+#: The factory that opens each Zenoh mode, for an error that names the right one.
+_FACTORY_FOR_MODE = {'peer': 'peer', 'client': 'client', 'router': 'hub'}
+
+
+def _claim_mode(raw: zenoh.Config, mode: str, factory: str) -> None:
+    """Give a caller's raw config the factory's mode when it sets none; refuse one that names another (0.4.2).
+
+    Everything else in a raw ``zenoh_config=`` is taken as given, but its mode
+    is what the factory's name promises: a config without one used to open
+    Zenoh's default, a peer, from ``client()`` or ``hub()``. Zenoh reports an
+    unset mode as ``null``, so unset and an explicit ``peer`` are told apart.
+
+    Raises:
+        ValueError: If the config names a different mode, before anything opens.
+    """
+    current = json.loads(raw.get_json('mode'))
+    if current is None:
+        raw.insert_json5('mode', json.dumps(mode))
+        return
+    if current != mode:
+        other = _FACTORY_FOR_MODE.get(current, 'another factory')
+        msg = (
+            f'{factory}(zenoh_config=...): the config sets mode {current!r}, but {factory}() opens a {mode} '
+            f'session; drop its mode, or open it with {other}()'
+        )
+        raise ValueError(msg)
+
+
 def _open_with_retry(  # noqa: PLR0913
     open_fn: Callable[[], zenoh.Session],
     *,
@@ -336,6 +364,25 @@ def _resolve_session_knobs(
     return bool(ar), pi, float(rj), int(rc)
 
 
+def _check_retention_ttl(retention_ttl: float | None, *, auto_reconnect: bool, factory_name: str) -> None:
+    """Refuse ``retention_ttl`` without ``auto_reconnect``, before anything opens (0.4.2).
+
+    A raw Zenoh session has nowhere to keep a per-session TTL. Until 0.4.2 the
+    check ran after the session had opened, and the session leaked.
+
+    Raises:
+        TypeError: If ``retention_ttl`` is set on a session that won't be managed.
+    """
+    if retention_ttl is not None and not auto_reconnect:
+        msg = (
+            f'{factory_name}(retention_ttl=...) requires auto_reconnect=True; '
+            'raw zenoh sessions have nowhere to stash a per-session '
+            'TTL fallback. Either set auto_reconnect=True or use '
+            'class-level Cls.RETENTION_TTL.'
+        )
+        raise TypeError(msg)
+
+
 def _finalise_session(  # noqa: PLR0913
     raw: zenoh.Session,
     _open: Callable[[], zenoh.Session],
@@ -347,23 +394,15 @@ def _finalise_session(  # noqa: PLR0913
     initial_b: float,
     max_b: float,
     max_a: int | None,
-    factory_name: str,
     resync_jitter: float = 2.0,
     resync_concurrency: int = 4,
 ) -> zenoh.Session | ManagedSession:
-    """Post-open: return raw or wrap as ManagedSession; reject ``retention_ttl`` on raw sessions.
+    """Post-open: return raw or wrap as ManagedSession.
 
-    Shared by ``peer`` / ``client``.
+    Shared by ``peer`` / ``client``, which check ``retention_ttl`` against
+    ``auto_reconnect`` before opening (:func:`_check_retention_ttl`).
     """
     if not auto_reconnect:
-        if retention_ttl is not None:
-            msg = (
-                f'{factory_name}(retention_ttl=...) requires auto_reconnect=True; '
-                'raw zenoh sessions have nowhere to stash a per-session '
-                'TTL fallback. Either set auto_reconnect=True or use '
-                'class-level Cls.RETENTION_TTL.'
-            )
-            raise TypeError(msg)
         return raw
     managed = _wrap_managed(
         raw,
@@ -408,8 +447,12 @@ def peer(  # noqa: PLR0913
     ``zenoh_config=<zenoh.Config>`` replaces the config zeared would build:
     it's taken as given, with no timestamping or shared-memory default
     applied, and wins over ``config=``'s ``zenoh_config_file`` /
-    ``zenoh_overrides``. Endpoints given here are still written onto it.
+    ``zenoh_overrides``. Endpoints given here are still written onto it, and
+    so is its mode when it sets none; a config naming another mode raises
+    ``ValueError`` (0.4.2).
     """
+    if zenoh_config is not None:
+        _claim_mode(zenoh_config, 'peer', 'peer')
     base_connect = list(config.connect) or None if config is not None else None
     base_listen = list(config.listen) or None if config is not None else None
     retry_b, initial_b, max_b, max_a = _resolve_retry_knobs(
@@ -426,6 +469,7 @@ def peer(  # noqa: PLR0913
         resync_jitter,
         resync_concurrency,
     )
+    _check_retention_ttl(retention_ttl, auto_reconnect=auto_reconnect, factory_name='peer')
 
     if connect is not None:
         base_connect = connect
@@ -463,7 +507,6 @@ def peer(  # noqa: PLR0913
         initial_b=initial_b,
         max_b=max_b,
         max_a=max_a,
-        factory_name='peer',
         resync_jitter=resync_jitter,
         resync_concurrency=resync_concurrency,
     )
@@ -490,8 +533,11 @@ def client(  # noqa: PLR0913
     Pass ``config=<Config>`` for a declarative base spec, then layer any
     explicit kwargs on top — kwargs win when both are supplied.
     ``zenoh_config=`` replaces the config zeared would build, as for
-    :func:`peer`.
+    :func:`peer`: a config without a mode opens a client, and one naming
+    another mode raises ``ValueError`` (0.4.2).
     """
+    if zenoh_config is not None:
+        _claim_mode(zenoh_config, 'client', 'client')
     if config is not None:
         endpoints = list(config.connect)
         if config.router:
@@ -512,6 +558,7 @@ def client(  # noqa: PLR0913
         resync_jitter,
         resync_concurrency,
     )
+    _check_retention_ttl(retention_ttl, auto_reconnect=auto_reconnect, factory_name='client')
 
     if router is not None:
         endpoints = [router] if isinstance(router, str) else list(router)
@@ -557,7 +604,6 @@ def client(  # noqa: PLR0913
         initial_b=initial_b,
         max_b=max_b,
         max_a=max_a,
-        factory_name='client',
         resync_jitter=resync_jitter,
         resync_concurrency=resync_concurrency,
     )
@@ -600,8 +646,11 @@ def hub(  # noqa: PLR0913
     ``zenoh_config=`` (or the daemon's ``--config`` file). A raw
     ``zenoh_config=`` is taken as given, Zenoh's own defaults included — set
     ``transport/shared_memory/enabled`` false in it (the daemon does that for
-    its file).
+    its file). Its mode is the exception (0.4.2): a config without one opens
+    a router, and one naming another mode raises ``ValueError``.
     """
+    if zenoh_config is not None:
+        _claim_mode(zenoh_config, 'router', 'hub')
     base_connect = list(config.connect) or None if config is not None else None
     retry_b, initial_b, max_b, max_a = _resolve_retry_knobs(
         config,

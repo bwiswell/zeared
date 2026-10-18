@@ -9,6 +9,7 @@ from zeared.doc import (
     document,
     introspect_message,
     is_message_class,
+    main,
     render_message,
 )
 
@@ -116,3 +117,66 @@ class TestBuildDocsDispatch:
     def test_message_is_wire_aware_plain_is_not(self):
         assert '## Topic' in self.docs['Ping.md']
         assert '## Topic' not in self.docs['PingRequest.md']
+
+
+class TestRequireDocs:
+    def test_the_cli_fails_on_a_message_field_without_a_doc(self, tmp_path, capsys):
+        # seared 0.4.1's flag, which zeared's CLI runs: it checks every
+        # class, Messages included, before writing anything.
+        assert main(['doc.wire_models', '-o', str(tmp_path), '--require-docs']) == 1
+        assert '  doc.wire_models.Ping.source\n' in capsys.readouterr().err
+        assert not list(tmp_path.iterdir())
+
+
+class TestDiscovery:
+    """0.4.2: a Message is found as seared finds a class, by whether ``@zeared`` built it."""
+
+    def test_a_message_with_no_fields_is_a_message(self):
+        @z.zeared
+        class Heartbeat(z.Message):
+            TOPIC = 'disc/heartbeat'
+
+        assert is_message_class(Heartbeat)
+        assert '## Topic' in document(Heartbeat)
+
+    def test_an_undecorated_subclass_is_not(self):
+        class Undecorated(Ping):
+            pass
+
+        assert not is_message_class(Undecorated)
+
+
+class TestSlots:
+    """0.4.2: slots come from zeared's template parser, across every topic."""
+
+    def test_a_tail_slot_is_found_and_marked(self):
+        @z.zeared
+        class Log(z.Message):
+            TOPIC = 'disc/log/{service}/{rest**}'
+            service: str = z.Str(required=True)
+
+        slots = introspect_message(Log).slots
+        assert [(s.name, s.is_field, s.multi) for s in slots] == [('service', True, False), ('rest', False, True)]
+        assert '| `rest` (tail: one segment or more) | no |' in document(Log)
+
+    def test_an_extra_topics_slots_are_listed_once_each(self):
+        @z.zeared
+        class Status(z.Message):
+            TOPIC = 'disc/robot/{id}/status'
+            EXTRA_TOPICS = ('disc/site/{site}/robot/{id}/status',)
+            id: int = z.Int(required=True)
+
+        assert [s.name for s in introspect_message(Status).slots] == ['id', 'site']
+
+    def test_several_topics_are_listed_one_per_line(self):
+        @z.zeared
+        class Status(z.Message):
+            TOPIC = 'disc/robot/{id}/status'
+            EXTRA_TOPICS = ('disc/vehicle/{id}/status',)
+            id: int = z.Int(required=True)
+
+        page = document(Status)
+        assert '- `disc/robot/{id}/status`\n- `disc/vehicle/{id}/status` (extra)' in page
+
+    def test_one_topic_stays_as_it_was(self):
+        assert '## Topic\n\n`fleet/command/ping/{source}/{unit_id}`\n' in document(Ping)

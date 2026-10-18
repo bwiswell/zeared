@@ -67,7 +67,9 @@ the segment and the key would match no template:
 - **The class check** (`_message_topic.py`, at the first `_templates()`
   call) raises `TopicError` for a single-segment slot bound to `Path`, or
   to `Bytes` in its default base64 form. `Bytes(encoding='hex')` and `Str`
-  pass, and a trailing `{name**}` slot takes a path tail.
+  pass, and a trailing `{name**}` slot takes a path tail. It goes by the
+  field's kind (`s.field_kind`, 0.4.2), so a subclass is judged as its
+  base: a `Path` subclass is refused, and a `Str` subclass takes a tail.
 - **Publish renders** (`send`, `declare_presence`, `QueryContext.reply`,
   `unretain`, `concrete_topic`) raise `TopicError` for a single-segment
   value whose rendered form contains `/`. The query getters' selectors
@@ -172,6 +174,17 @@ class PeerStatus(z.Message):
   required (timestamping is auto-enabled by `z.peer()` / `z.client()`
   since 0.0.13).
 
+### Unknown keys stay tolerated
+
+A Message ignores a payload key it doesn't declare, which is what lets a
+subscriber read a publisher one version ahead that has added a field. Since
+0.4.2 a class can refuse them instead (seared's `unknown=`, which
+`@z.zeared(unknown='raise')` takes), but on the wire that costs the
+tolerance: every sample from a newer publisher fails to decode, and goes
+to `on_error` as a `DecodeError`. Leave it for a closed system that wants
+exactly that. To check one payload without refusing it, as for input from
+a person or an agent, call `s.unknown_keys(Cls, data)`.
+
 ## Multiple topics per class
 
 Declare `EXTRA_TOPICS` to subscribe to a union of templates with one
@@ -199,12 +212,13 @@ without a matching field are capture-only (see `meta.captures`).
 
 ## Subscribe-only wildcards (`**`)
 
-Any template whose trailing path segment is an *anonymous* `**` is
-**subscribe-only**: it matches one or more concrete segments on receive
-but can't be rendered for publish. `send()` on a non-publishable
-canonical — or `send(topic='robot/**')` picking a subscribe-only extra —
-raises `TopicError`. A named `{name**}` slot is publishable, and so is an
-anonymous `*` segment (see
+Any template holding an *anonymous* wildcard is **subscribe-only**: a
+trailing `**`, and since 0.4.2 a `*` chunk or a `$*` in its literal text
+(`robot/*/status`, `fleet/r-$*/status`). It matches concrete keys on
+receive, as Zenoh does, but can't be rendered for publish. `send()` on a
+non-publishable canonical, or `send(topic='robot/**')` picking a
+subscribe-only extra, raises `TopicError`. A named `{name**}` slot is
+publishable (see
 [`_template.md`](../_template/_template.md#publishability)).
 
 ```python

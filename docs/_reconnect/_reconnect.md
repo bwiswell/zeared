@@ -36,8 +36,10 @@ surface is `auto_reconnect=True` on `peer()` / `client()` (or
     Subscriber against the new raw.
   - `_restore_queryables(managed)` — re-declare each registered user
     Queryable against the new raw.
-  - `_restore_presence(managed)` — re-declare every held presence token
-    on the new raw (peers see the keys go offline, then online).
+  - `_restore_presence(managed, old_raw)` — re-declare every held presence
+    token on the new raw (peers see the keys go offline, then online):
+    those declared on the managed session, and (0.4.2) those declared on
+    the swapped-out raw session directly, which it used to leave offline.
 
 ## Detection paths
 

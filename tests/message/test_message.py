@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import annotationlib
 import typing
 
 import pytest
@@ -213,8 +214,20 @@ class TestEffectIsDocOnly:
     def test_defaults_to_undeclared(self):
         assert z.Message.EFFECT is None
 
+    def test_messages_own_annotations_resolve(self):
+        """``Effect`` is imported at runtime, so ``Message``'s own annotations evaluate (``EFFECT`` among them)."""
+        assert 'EFFECT' in annotationlib.get_annotations(z.Message, format=annotationlib.Format.VALUE)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=NameError,
+        reason=(
+            'seared 0.4.1+: the Seared base annotates __seared_load__ with Callable, imported only for '
+            "type checking, so get_type_hints fails on every subclass. seared's to fix; this passes then"
+        ),
+    )
     def test_annotation_resolves_on_subclasses(self):
-        """``Effect`` is imported at runtime, so ``get_type_hints`` keeps working on every subclass."""
+        """``get_type_hints`` works on every subclass: zeared's annotations and seared's base both resolve."""
 
         @z.zeared
         class Hinted(z.Message):

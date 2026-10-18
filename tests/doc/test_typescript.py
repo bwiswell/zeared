@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import zeared as z
 from doc.ts_models import Spectrum
 from doc.wire_models import Ping, SetMode
 from zeared.doc.typescript import emit, generate, main, render_interface, ts_type
@@ -202,3 +203,53 @@ class TestNullable:
         req = SimpleNamespace(required=True, default=None, default_factory=None, nullable=True, doc=None)
         assert _member('n', 'n', opt) == ['  n?: unknown | null;']
         assert _member('n', 'n', req) == ['  n: unknown | null;']
+
+
+class TestFieldlessClasses:
+    def test_a_union_variant_with_no_fields_is_declared(self):
+        # 0.4.2: the emitter skipped a class with no fields, so a union that
+        # named one referred to an interface it never declared.
+        @z.zeared
+        class Start(z.Zeared):
+            speed: int = z.Int(required=True)
+
+        @z.zeared
+        class Halt(z.Zeared):
+            pass
+
+        @z.zeared
+        class Command(z.Message):
+            TOPIC = 'ts/command'
+            action: object = z.Union(variants={'start': Start, 'halt': Halt})
+
+        ts = emit([Command])
+        assert '(Halt & { type: "halt" })' in ts
+        assert 'export interface Halt {' in ts
+
+
+class TestRunAsModule:
+    def test_running_the_module_warns_of_nothing(self):
+        # 0.4.2: `zeared.doc` imported `.typescript`, so runpy found it already
+        # loaded and warned that running it might be unpredictable.
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, '-W', 'error', '-m', 'zeared.doc.typescript', '--help'],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (result.returncode, result.stderr) == (0, '')
+
+    def test_importing_the_package_leaves_it_unloaded_until_used(self):
+        import subprocess
+        import sys
+
+        code = (
+            'import sys, zeared.doc as d; '
+            "assert 'zeared.doc.typescript' not in sys.modules; "
+            'd.generate_ts; '
+            "assert 'zeared.doc.typescript' in sys.modules"
+        )
+        subprocess.run([sys.executable, '-c', code], check=True)
