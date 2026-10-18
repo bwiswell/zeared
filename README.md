@@ -40,21 +40,21 @@ once, get publish, subscribe, and topic routing for free.
 ## Setup
 
 Each release is tagged `v<version>` on GitHub (the first is `v0.3.13`; the
-latest is `v0.4.1`). Install one by its tag:
+latest is `v0.4.2`). Install one by its tag:
 
 ```sh
 # uv
-uv add git+https://github.com/bwiswell/zeared --tag v0.4.1
+uv add git+https://github.com/bwiswell/zeared --tag v0.4.2
 
 # pip
-pip install git+https://github.com/bwiswell/zeared.git@v0.4.1
+pip install git+https://github.com/bwiswell/zeared.git@v0.4.2
 ```
 
 `uv add` records the tag as the dependency's source:
 
 ```toml
 [tool.uv.sources]
-zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.1" }
+zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.2" }
 ```
 
 **The tag is the pin.** uv doesn't check a version specifier such as
@@ -63,13 +63,13 @@ at, and a source without a tag points at the tip of `master`. Moving to a new
 release means moving the tag. What changed in each release, and what may
 break on the way, is in [`CHANGELOG.md`](CHANGELOG.md).
 
-**zeared pins `seared` the same way,** to `v0.4.0`. A project that declares
+**zeared pins `seared` the same way,** to `v0.4.2`. A project that declares
 no `seared` source of its own gets zeared's. One that declares its own must
 pin the same tag, or uv refuses to resolve, reporting conflicting URLs for
 `seared`:
 
 ```toml
-seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.0" }
+seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.2" }
 ```
 
 Requires Python ≥ 3.14. Pulls in
@@ -170,8 +170,8 @@ zeared's generated TypeScript writes `| null` only for `nullable=True`
 fields, and generated docs show `None` defaults: regenerate committed docs
 (`python -m zeared.doc … -o docs`) and types.
 
-**10. Pins.** Move both together: `zeared` to `tag = "v0.4.1"` and `seared` to
-`tag = "v0.4.0"`. uv reports conflicting URLs until the seared pin matches
+**10. Pins.** Move both together: `zeared` to `tag = "v0.4.2"` and `seared` to
+`tag = "v0.4.2"`. uv reports conflicting URLs until the seared pin matches
 zeared's.
 
 ## Quick start

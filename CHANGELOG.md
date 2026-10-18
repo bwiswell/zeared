@@ -9,9 +9,12 @@ nodes on other versions, retained state and access rules can see.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.4.2 — unreleased
+## 0.4.2 — 2026-10-17
 
-**On seared 0.4.2, with a strict `SessionConfig`, and one key matcher.**
+**On seared 0.4.2, with a strict `SessionConfig` and one key matcher.** `zeared.keyexpr` answers key questions as
+Zenoh does, and retention, `TOPIC` templates and the session factories now agree with it: a `$*` query reaches
+retained values, a literal wildcard decodes, and `client()` opens a client. The rest closes edges in the slot
+checks, session lifecycles and the generated docs.
 
 ### Added
 
