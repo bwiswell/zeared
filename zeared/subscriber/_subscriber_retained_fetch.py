@@ -86,7 +86,8 @@ def _collect_retained(
     Backs :meth:`Message.fetch_retained`.
 
     DELETE-kind replies (defensive — retention queryables serve PUTs) are
-    skipped. Decode failures route to ``on_error`` when supplied, else log.
+    skipped. Decode failures and error replies route to ``on_error`` when
+    supplied, else log (:func:`_route_error_reply`).
     """
     import zenoh as _zenoh
 
@@ -109,7 +110,8 @@ def _collect_retained(
         for reply in replies:
             ok = reply.ok if hasattr(reply, 'ok') else None
             if ok is None:
-                continue  # error reply; skip
+                _route_error_reply(reply, msg_cls, tpl.wildcard, on_error)
+                continue
             if ok.kind == _zenoh.SampleKind.DELETE:
                 continue  # tombstone; not part of the live set
             try:
@@ -132,3 +134,27 @@ def _collect_retained(
                 continue
             out.append(msg)
     return out
+
+
+def _route_error_reply(reply: Any, msg_cls: type[Message], wildcard: str, on_error: Callable | None) -> None:
+    """Hand ``fetch_retained`` an error reply as a ``RetainedFetchError``, through ``on_error`` or the log (0.4.4).
+
+    A server's ``reply_err``, or Zenoh's own when a queryable didn't answer in
+    time (its payload ``b'Timeout'``): either way the fetched set may be
+    partial. As ``query`` routes its error replies: the raw bytes are the
+    reply's payload, and there's no ``__cause__``.
+    """
+    err = getattr(reply, 'err', None)
+    payload = b''
+    if err is not None:
+        try:
+            payload = bytes(err.payload)
+        except Exception:  # noqa: BLE001
+            payload = b''
+    wrapped = RetainedFetchError(
+        f'{msg_cls.__name__}: error reply to retained fetch {wildcard!r}: {payload.decode("utf-8", "replace")!r}'
+    )
+    if on_error is not None:
+        on_error(wrapped, payload)
+    else:
+        _log.warning('%s', wrapped)

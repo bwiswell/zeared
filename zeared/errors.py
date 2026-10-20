@@ -68,6 +68,11 @@ class RetainedFetchError(SubscriberError):
     subscriber's subscribe-time ``session.get(wildcard)``, or from the same
     fetch re-run after a reconnect or by the re-attach walk. Original
     exception available via ``__cause__``.
+
+    ``fetch_retained`` raises it for a reply that won't decode (with a
+    ``__cause__``) and, from 0.4.4, for an error reply (with none, and the
+    reply's payload as the raw bytes, ``b'Timeout'`` when a queryable didn't
+    answer in time).
     """
 
 

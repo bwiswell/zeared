@@ -131,6 +131,16 @@ set, since `on_remove` (below) can miss a DELETE that lands while a
 subscriber is offline. Requires `RETAINED = True`; async via
 `z.afetch_retained(Cls)`.
 
+**Its error replies reach `on_error`** (0.4.4), as `query`'s do: a
+`RetainedFetchError` with no `__cause__`, the reply's payload as the raw
+bytes, or a WARNING log without an `on_error`. A reply that won't decode
+comes the same way, with its cause. One error reply is Zenoh's own,
+payload `b'Timeout'`, for a queryable that didn't answer in time. The
+returned set is then partial, so **a reconcile should skip its removals
+for a fetch whose `on_error` heard one**. Before 0.4.4 error replies were
+dropped, and a partial set looked whole. The subscribe-time replay still
+drops them: its `on_error` is the subscriber's, for samples.
+
 ## DELETE samples (tombstones)
 
 The dispatch closure detects `sample.kind == zenoh.SampleKind.DELETE` before
