@@ -4,6 +4,7 @@ class's current retained set (the durable reconcile path)."""
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 from conftest import wait
@@ -179,3 +180,55 @@ class TestErrorReplies:
         refusing.undeclare()
         assert [m.bay for m in got] == ['c']
         assert heard == [b'nope']
+
+
+@z.zeared
+class _Dock(z.Message):
+    TOPIC = 'fr/timeout/dock/{dock}'
+    EXTRA_TOPICS = ('fr/timeout/legacy/{dock}',)
+    RETAINED = True
+    dock: str = z.Str(required=True)
+
+
+class TestTimeout:
+    """``timeout=`` bounds the whole fetch (0.4.4): each template's get is issued at once, with it."""
+
+    @pytest.fixture
+    def silent_on_both_templates(self, session):
+        _Dock(dock='a').send(session=session)
+        wait(0.2)
+        # Channel queryables nobody drains: every get waits out its timeout.
+        queryables = [
+            session.declare_queryable('fr/timeout/dock/**'),
+            session.declare_queryable('fr/timeout/legacy/**'),
+        ]
+        wait(0.2)
+        yield session
+        for queryable in queryables:
+            queryable.undeclare()
+
+    def test_one_timeout_bounds_a_fetch_over_two_templates(self, silent_on_both_templates):
+        heard: list[bytes] = []
+        started = time.monotonic()
+        got = _Dock.fetch_retained(
+            session=silent_on_both_templates, timeout=0.5, on_error=lambda exc, raw: heard.append(raw)
+        )
+        elapsed = time.monotonic() - started
+        # About one timeout, not one per template (1.0 s), with slack for a loaded machine.
+        assert elapsed < 0.9
+        assert [m.dock for m in got] == ['a']
+        assert heard == [b'Timeout', b'Timeout']
+
+    def test_afetch_retained_passes_it_on(self, silent_on_both_templates):
+        heard: list[bytes] = []
+
+        async def main():
+            return await z.afetch_retained(
+                _Dock, session=silent_on_both_templates, timeout=0.5, on_error=lambda exc, raw: heard.append(raw)
+            )
+
+        started = time.monotonic()
+        got = asyncio.run(main())
+        assert time.monotonic() - started < 0.9
+        assert [m.dock for m in got] == ['a']
+        assert heard == [b'Timeout', b'Timeout']

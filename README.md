@@ -386,14 +386,20 @@ Telemetry.on_message(add_or_update, on_remove=gone)
 #    the *reliable* reconcile path. A subscriber offline during a DELETE
 #    misses the tombstone forever (the retained value is already gone, no
 #    tombstone is replayed), so poll this periodically and reconcile against
-#    the returned set.
-current = Telemetry.fetch_retained()          # list[Telemetry]
-reconcile(desired={m.id for m in current})
+#    the returned set. on_error hears whatever didn't come back as a value:
+#    an error reply (Zenoh's own 'Timeout' among them, for a queryable that
+#    didn't answer within `timeout`) or a reply that won't decode. Either way
+#    the set may be partial, so skip that round's removals.
+heard: list[bytes] = []
+current = Telemetry.fetch_retained(timeout=2.0, on_error=lambda exc, raw: heard.append(raw))
+if not heard:
+    reconcile(desired={m.id for m in current})
 ```
 
 - `on_remove` is optional and off by default — DELETEs stay silently dropped unless you register one. `async def` on_remove is supported (scheduled like an async `cb`). It survives reconnect. A raised `on_remove` routes through `on_error` as `CallbackError`.
 - `coerce_captures` runs raw string captures through the declared fields' deserializers (`{id}` bound to `z.Int` → `int`); capture-only slots pass through unchanged.
 - `fetch_retained()` requires `RETAINED = True` and returns only successfully decoded results; dedupe duplicate keys by identity at the call site. Async: `await z.afetch_retained(Cls)`.
+- `timeout=` (seconds, 0.4.4) bounds the whole fetch: every template's get is issued at once, each with it, so a queryable that doesn't answer costs one timeout, not one per template. `None` keeps Zenoh's default (10 s, unless the session's config sets another). Error replies and decode failures go to `on_error`, or the log (0.4.4; error replies were dropped before).
 - **Why both:** `on_remove` is fast but not durable (a missed DELETE is missed forever); `fetch_retained` is durable but polled. Use the incremental feed for latency and the periodic snapshot for correctness — the same honesty boundary as presence (removals are subscriber-observed, never a broker guarantee).
 
 ## Queries and queryables

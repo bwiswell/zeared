@@ -78,12 +78,18 @@ def _collect_retained(
     templates: Iterable[Any],
     msg_cls: type[_M],
     on_error: Callable | None,
+    timeout: float | None = None,
 ) -> list[_M]:
     """Collect retained values as decoded, typed instances.
 
     Issue ``session.get(wildcard)`` per declared template and return the decoded OK
     replies as typed instances — the collecting sibling of :func:`_fetch_retained`.
     Backs :meth:`Message.fetch_retained`.
+
+    Every template's get is issued before any is drained (0.4.4), so the gets
+    run at once: a fetch takes as long as its slowest get, not their sum, and
+    ``timeout``, passed to each, bounds the whole fetch. ``None`` leaves each
+    get on Zenoh's default. The result keeps template order, then arrival.
 
     DELETE-kind replies (defensive — retention queryables serve PUTs) are
     skipped. Decode failures and error replies route to ``on_error`` when
@@ -95,10 +101,11 @@ def _collect_retained(
 
     from ._subscriber_dispatch import _pick_encoding
 
-    out: list[_M] = []
+    get_kwargs: dict[str, Any] = {} if timeout is None else {'timeout': timeout}
+    pending: list[tuple[Any, Any]] = []
     for tpl in templates:
         try:
-            replies = session.get(tpl.wildcard)
+            pending.append((tpl, session.get(tpl.wildcard, **get_kwargs)))
         except Exception as exc:  # noqa: BLE001
             _log.warning(
                 '%s: fetch_retained get() on %s failed: %s',
@@ -106,7 +113,8 @@ def _collect_retained(
                 tpl.wildcard,
                 exc,
             )
-            continue
+    out: list[_M] = []
+    for tpl, replies in pending:
         for reply in replies:
             ok = reply.ok if hasattr(reply, 'ok') else None
             if ok is None:
