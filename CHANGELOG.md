@@ -9,6 +9,20 @@ nodes on other versions, retained state and access rules can see.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.4.4 — unreleased
+
+**On seared 0.4.4, with constraints on a Message's fields.**
+
+### Changed
+
+- **Dependencies:** seared `>=0.4.4,<0.5.0`, pinned to `tag = "v0.4.4"`. seared 0.4.4 adds field constraints (`ge=`,
+  `gt=`, `le=` and `lt=` on `Int` and `Float`; `min_length=`, `max_length=` and a portable `pattern=` on `Str`),
+  which a Message's fields take: `send` refuses a value that fails one, and a sample whose capture or payload fails
+  one fails to decode, while the topic render never checks, so a selector wildcard still works on a `pattern=` slot
+  (`docs/message/message.md`). Its one change to what loads: a `Union` tag that isn't a string fails to decode,
+  fallback or not. Unconstrained `Int`, `Float` and `Str` encode and decode faster on the pure-Python path. See its
+  changelog.
+
 ## 0.4.3 — 2026-10-17
 
 **On seared 0.4.3, where type hints resolve again.**

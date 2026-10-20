@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import decimal
 import enum
+import re
 import uuid
 from typing import Any
 
@@ -365,3 +366,66 @@ class TestTemplateMethodsUnchanged:
         template = Status._templates().canonical
         assert template.render({'zone': 'n'}) == 'render/tpl/n'
         assert template.render({'zone': None}) == 'render/tpl/None'
+
+
+class TestSlotConstraints:
+    """A slot field's constraints (seared 0.4.4): checked on receive and by ``dump``; the render never checks."""
+
+    @pytest.fixture
+    def robot(self):
+        @z.zeared
+        class Robot(z.Message):
+            TOPIC = 'render/constrained/{robot}/{bay}'
+            robot: str = z.Str(pattern=r'^r-[0-9]+$', required=True)
+            bay: int = z.Int(ge=1, le=12, required=True)
+            speed: float = z.Float(ge=0, default=0.0)
+
+        return Robot
+
+    def test_a_selector_wildcard_renders_on_a_pattern_slot(self, robot):
+        # A string passes the render verbatim, so a wildcard isn't held to the pattern.
+        assert _build_selector(robot, {'robot': 'r-$*'}, None) == 'render/constrained/r-$*/*'
+
+    def test_the_render_never_checks(self, robot):
+        # ``serialize`` refuses 13; the render falls back to ``str()``, as for any value it refuses.
+        assert robot.concrete_topic(robot='r-1', bay=13) == 'render/constrained/r-1/13'
+
+    @pytest.mark.parametrize(
+        ('key', 'reason'),
+        [
+            ('render/constrained/R-1/3', "must match the pattern '^r-[0-9]+$'"),
+            ('render/constrained/r-1/13', 'must be <= 12, got 13'),
+        ],
+    )
+    def test_a_capture_that_fails_its_constraint_fails_the_decode(self, robot, key, reason):
+        with pytest.raises(z.ValidationError, match=f'^{re.escape(reason)}$'):
+            robot._decode(codec.pack({}, 'msgpack'), key, 'msgpack')
+
+    def test_coerce_captures_checks_them_too(self, robot):
+        assert robot.coerce_captures({'robot': 'r-1', 'bay': '12'}) == {'robot': 'r-1', 'bay': 12}
+        with pytest.raises(z.ValidationError, match=r'^must be <= 12, got 13$'):
+            robot.coerce_captures({'robot': 'r-1', 'bay': '13'})
+
+    def test_send_refuses_an_out_of_range_slot_before_publishing(self, session, robot):
+        seen: list[str] = []
+        raw_sub = session.declare_subscriber('render/constrained/**', lambda s: seen.append(str(s.key_expr)))
+        wait()
+        with pytest.raises(z.ValidationError, match=r'^Robot\.bay: must be <= 12, got 13$'):
+            robot(robot='r-1', bay=13).send(session=session)
+        wait(0.2)
+        raw_sub.undeclare()
+        assert seen == []
+
+    def test_a_subscriber_routes_a_failed_capture_to_on_error(self, session, robot):
+        received: list[Any] = []
+        errors: list[Exception] = []
+        robot.on_message(received.append, session=session, on_error=lambda exc, raw: errors.append(exc))
+        wait()
+        # A foreign publisher's key that a zeared publisher's dump would have refused.
+        session.put('render/constrained/R-1/3', codec.pack({}, 'msgpack'))
+        wait(0.2)
+        assert received == []
+        assert len(errors) == 1
+        assert isinstance(errors[0], z.DecodeError)
+        assert isinstance(errors[0].__cause__, z.ValidationError)
+        assert "must match the pattern '^r-[0-9]+$'" in str(errors[0])
