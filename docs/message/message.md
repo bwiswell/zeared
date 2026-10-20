@@ -75,6 +75,23 @@ the segment and the key would match no template:
   value whose rendered form contains `/`. The query getters' selectors
   don't check, since they embed wildcards deliberately.
 
+**A slot field's constraints** (seared 0.4.4's `ge=`, `le=`, `pattern=` and
+the rest) are checked where values are loaded or dumped, never by the
+render:
+
+- **On receive,** a capture is loaded strictly, so one that fails its
+  slot's constraint fails the sample's decode: a subscriber's `on_error`
+  gets a `DecodeError` whose cause is seared's `ValidationError`, and
+  `coerce_captures` raises it. Either way the error names its slot, as a
+  payload's error names its key (`Robot.bay: must be <= 12, got 13`; 0.4.4,
+  for any capture its field refuses).
+- **On publish,** `send` dumps the instance first, so a strict class refuses
+  an out-of-range slot (`Robot.bay: must be <= 12, got 13`) before
+  anything is published.
+- **The render never checks.** A string passes through verbatim, so a
+  selector wildcard (`robot='r-$*'`) works on a `pattern=` slot, and a
+  value its field refuses renders as `str(value)`.
+
 `concrete_topic` is a descriptor (`_message_concrete_topic.py`), dispatching
 like `unretain`:
 
