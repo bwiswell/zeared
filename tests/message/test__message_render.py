@@ -393,8 +393,8 @@ class TestSlotConstraints:
     @pytest.mark.parametrize(
         ('key', 'reason'),
         [
-            ('render/constrained/R-1/3', "must match the pattern '^r-[0-9]+$'"),
-            ('render/constrained/r-1/13', 'must be <= 12, got 13'),
+            ('render/constrained/R-1/3', "Robot.robot: must match the pattern '^r-[0-9]+$'"),
+            ('render/constrained/r-1/13', 'Robot.bay: must be <= 12, got 13'),
         ],
     )
     def test_a_capture_that_fails_its_constraint_fails_the_decode(self, robot, key, reason):
@@ -403,8 +403,16 @@ class TestSlotConstraints:
 
     def test_coerce_captures_checks_them_too(self, robot):
         assert robot.coerce_captures({'robot': 'r-1', 'bay': '12'}) == {'robot': 'r-1', 'bay': 12}
-        with pytest.raises(z.ValidationError, match=r'^must be <= 12, got 13$'):
+        with pytest.raises(z.ValidationError, match=r'^Robot\.bay: must be <= 12, got 13$'):
             robot.coerce_captures({'robot': 'r-1', 'bay': '13'})
+
+    def test_a_capture_error_names_its_slot_whatever_the_check(self, robot):
+        # A failure that isn't a constraint is located too (it named no slot before 0.4.4).
+        with pytest.raises(z.ValidationError) as info:
+            robot.coerce_captures({'robot': 'r-1', 'bay': 'abc'})
+        assert (info.value.path, info.value.cls_name) == (('bay',), 'Robot')
+        assert str(info.value) == "Robot.bay: cannot deserialize 'abc' as int"
+        assert info.value.reason == "cannot deserialize 'abc' as int"
 
     def test_send_refuses_an_out_of_range_slot_before_publishing(self, session, robot):
         seen: list[str] = []
@@ -428,4 +436,4 @@ class TestSlotConstraints:
         assert len(errors) == 1
         assert isinstance(errors[0], z.DecodeError)
         assert isinstance(errors[0].__cause__, z.ValidationError)
-        assert "must match the pattern '^r-[0-9]+$'" in str(errors[0])
+        assert "Robot.robot: must match the pattern '^r-[0-9]+$'" in str(errors[0])

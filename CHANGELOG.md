@@ -23,6 +23,14 @@ lines as it lands, and the entry is dated when that version is released.
   fallback or not. Unconstrained `Int`, `Float` and `Str` encode and decode faster on the pure-Python path. See its
   changelog.
 
+### Fixed
+
+- **A capture its field refuses names its slot.** `coerce_captures`, and a sample's decode, raised the field's bare
+  message (`must be <= 12, got 13`, or `cannot deserialize 'abc' as int`), with no slot in it; now it's located at
+  the slot as a payload's error is at its key: `Robot.bay: must be <= 12, got 13`, with `path` and `cls_name` set.
+  The error text changes; `.reason` keeps the field's message. A subscriber's `DecodeError` already named the key.
+  Since before 0.4.0.
+
 ## 0.4.3 — 2026-10-17
 
 **On seared 0.4.3, where type hints resolve again.**
