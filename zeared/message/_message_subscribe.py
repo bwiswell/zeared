@@ -199,6 +199,10 @@ class _MessageSubscribeMixin:
 
         Decode failures and error replies route to ``on_error`` when
         supplied, else log; the returned list holds only decoded results.
+        An error reply means the set may be partial: Zenoh sends its own,
+        payload ``b'Timeout'``, for a queryable that didn't answer in time,
+        so a reconcile should skip its removals for a fetch whose
+        ``on_error`` heard one. (Before 0.4.4 error replies were dropped.)
         Duplicate keys (multiple publishers retaining the same concrete
         topic) are returned as-is — dedupe by identity at the call site.
         """

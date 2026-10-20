@@ -11,7 +11,7 @@ lines as it lands, and the entry is dated when that version is released.
 
 ## 0.4.4 — unreleased
 
-**On seared 0.4.4, with constraints on a Message's fields.**
+**On seared 0.4.4, with constraints on a Message's fields, and `fetch_retained` reporting its error replies.**
 
 ### Changed
 
@@ -22,9 +22,19 @@ lines as it lands, and the entry is dated when that version is released.
   (`docs/message/message.md`). Its one change to what loads: a `Union` tag that isn't a string fails to decode,
   fallback or not. Unconstrained `Int`, `Float` and `Str` encode and decode faster on the pure-Python path. See its
   changelog.
+- **Breaking:** `fetch_retained`'s `on_error`, and `afetch_retained`'s, hears error replies: a server's `reply_err`,
+  and Zenoh's own `Timeout` for a queryable that didn't answer in time, as a `RetainedFetchError` with no
+  `__cause__` and the reply's payload as the raw bytes, as `query`'s are. Without an `on_error`, each is logged at
+  WARNING. A handler that raised, or counted, on any call now sees calls it didn't before.
 
 ### Fixed
 
+- **`fetch_retained` no longer drops error replies,** which its docstring had always said went to `on_error`. A
+  fetch that a queryable didn't answer in time returned a partial set with no sign of it, on the path meant for
+  reconciling, where a partial set taken as whole removes values that are still retained. A reconcile should skip
+  its removals for a fetch whose `on_error` heard a `Timeout` (`docs/subscriber/subscriber.md`). The subscriber's
+  own replay at subscribe, after a reconnect and on re-attach, is unchanged. Since 0.2.1, when `fetch_retained` was
+  added.
 - **A capture its field refuses names its slot.** `coerce_captures`, and a sample's decode, raised the field's bare
   message (`must be <= 12, got 13`, or `cannot deserialize 'abc' as int`), with no slot in it; now it's located at
   the slot as a payload's error is at its key: `Robot.bay: must be <= 12, got 13`, with `path` and `cls_name` set.
