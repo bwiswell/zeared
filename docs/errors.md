@@ -40,10 +40,11 @@ The subscription continues. Four direct subclasses:
 | `DecodeError` | `Subscriber._declare` dispatch | `codec.unpack` / `Message.load` raised |
 | `SchemaMismatchError` (`< DecodeError`) | dispatch, schema check | sample's wire `schema` ≠ class's `SCHEMA`. Sample dropped; warn-once per `(sender_zid, observed_schema)` pair, the sender being the zid in the sample's HLC timestamp (0.4.0; `''` without one) |
 | `CallbackError` | dispatch | user's `cb(msg)` itself raised, or `on_remove`, `on_online` or `on_offline` did |
-| `RetainedFetchError` | `_fetch_retained` | a retained-fetch reply failed to dispatch |
+| `RetainedFetchError` | `_fetch_retained`, `Cls.fetch_retained` | a retained-fetch reply failed to dispatch or decode; or, for `fetch_retained` (0.4.4), a queryable sent an error reply, Zenoh's `b'Timeout'` among them |
 | `QueryError` | `Cls.query` / `iter_query` / `query_one` | a remote queryable sent an error reply, or a reply failed to decode; the call keeps collecting the rest |
 
-Each wraps the original exception via `__cause__`, so user code that
+Each wraps the original exception via `__cause__` (an error reply has
+none: its payload is the raw bytes `on_error` gets), so user code that
 catches generically (`except Exception` or `except SubscriberError`)
 works unchanged. Callers wanting to discriminate use `isinstance`:
 

@@ -44,6 +44,8 @@ import decimal
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from seared import ValidationError
+
 from ..errors import TopicError
 
 if TYPE_CHECKING:
@@ -214,12 +216,21 @@ def _coerce_captures(cls: type[Message], captures: Mapping[str, str]) -> dict[st
     """Coerce raw string captures through their declared fields, keyed by attribute name.
 
     Capture-only slots (no matching field) pass through as their raw string.
-    Raises whatever the field's ``deserialize`` raises on a value it can't
-    read.
+    A capture its field refuses raises the field's ``ValidationError``,
+    located at its slot as a payload's error is at its key:
+    ``Robot.bay: must be <= 12, got 13`` (0.4.4; before, it named no slot).
     """
     specs = cls._field_specs()
     out: dict[str, Any] = {}
     for name, raw in captures.items():
         spec = specs.get(name)
-        out[name] = spec.field.deserialize(raw, validate=True) if spec is not None else raw
+        if spec is None:
+            out[name] = raw
+            continue
+        try:
+            out[name] = spec.field.deserialize(raw, validate=True)
+        except ValidationError as e:
+            # Rebuilt through the public constructor, with the location a
+            # seared load adds to a payload's error.
+            raise ValidationError(e.reason, path=(name, *e.path), cls_name=cls.__name__) from None
     return out

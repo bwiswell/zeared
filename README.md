@@ -40,21 +40,21 @@ once, get publish, subscribe, and topic routing for free.
 ## Setup
 
 Each release is tagged `v<version>` on GitHub (the first is `v0.3.13`; the
-latest is `v0.4.3`). Install one by its tag:
+latest is `v0.4.4`). Install one by its tag:
 
 ```sh
 # uv
-uv add git+https://github.com/bwiswell/zeared --tag v0.4.3
+uv add git+https://github.com/bwiswell/zeared --tag v0.4.4
 
 # pip
-pip install git+https://github.com/bwiswell/zeared.git@v0.4.3
+pip install git+https://github.com/bwiswell/zeared.git@v0.4.4
 ```
 
 `uv add` records the tag as the dependency's source:
 
 ```toml
 [tool.uv.sources]
-zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.3" }
+zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.4" }
 ```
 
 **The tag is the pin.** uv doesn't check a version specifier such as
@@ -63,13 +63,13 @@ at, and a source without a tag points at the tip of `master`. Moving to a new
 release means moving the tag. What changed in each release, and what may
 break on the way, is in [`CHANGELOG.md`](CHANGELOG.md).
 
-**zeared pins `seared` the same way,** to `v0.4.3`. A project that declares
+**zeared pins `seared` the same way,** to `v0.4.4`. A project that declares
 no `seared` source of its own gets zeared's. One that declares its own must
 pin the same tag, or uv refuses to resolve, reporting conflicting URLs for
 `seared`:
 
 ```toml
-seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.3" }
+seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.4" }
 ```
 
 Requires Python ≥ 3.14. Pulls in
@@ -170,8 +170,8 @@ zeared's generated TypeScript writes `| null` only for `nullable=True`
 fields, and generated docs show `None` defaults: regenerate committed docs
 (`python -m zeared.doc … -o docs`) and types.
 
-**10. Pins.** Move both together: `zeared` to `tag = "v0.4.3"` and `seared` to
-`tag = "v0.4.3"`. uv reports conflicting URLs until the seared pin matches
+**10. Pins.** Move both together: `zeared` to `tag = "v0.4.4"` and `seared` to
+`tag = "v0.4.4"`. uv reports conflicting URLs until the seared pin matches
 zeared's.
 
 ## Quick start
@@ -386,14 +386,20 @@ Telemetry.on_message(add_or_update, on_remove=gone)
 #    the *reliable* reconcile path. A subscriber offline during a DELETE
 #    misses the tombstone forever (the retained value is already gone, no
 #    tombstone is replayed), so poll this periodically and reconcile against
-#    the returned set.
-current = Telemetry.fetch_retained()          # list[Telemetry]
-reconcile(desired={m.id for m in current})
+#    the returned set. on_error hears whatever didn't come back as a value:
+#    an error reply (Zenoh's own 'Timeout' among them, for a queryable that
+#    didn't answer within `timeout`) or a reply that won't decode. Either way
+#    the set may be partial, so skip that round's removals.
+heard: list[bytes] = []
+current = Telemetry.fetch_retained(timeout=2.0, on_error=lambda exc, raw: heard.append(raw))
+if not heard:
+    reconcile(desired={m.id for m in current})
 ```
 
 - `on_remove` is optional and off by default — DELETEs stay silently dropped unless you register one. `async def` on_remove is supported (scheduled like an async `cb`). It survives reconnect. A raised `on_remove` routes through `on_error` as `CallbackError`.
 - `coerce_captures` runs raw string captures through the declared fields' deserializers (`{id}` bound to `z.Int` → `int`); capture-only slots pass through unchanged.
 - `fetch_retained()` requires `RETAINED = True` and returns only successfully decoded results; dedupe duplicate keys by identity at the call site. Async: `await z.afetch_retained(Cls)`.
+- `timeout=` (seconds, 0.4.4) bounds the whole fetch: every template's get is issued at once, each with it, so a queryable that doesn't answer costs one timeout, not one per template. `None` keeps Zenoh's default (10 s, unless the session's config sets another). Error replies and decode failures go to `on_error`, or the log (0.4.4; error replies were dropped before).
 - **Why both:** `on_remove` is fast but not durable (a missed DELETE is missed forever); `fetch_retained` is durable but polled. Use the incremental feed for latency and the periodic snapshot for correctness — the same honesty boundary as presence (removals are subscriber-observed, never a broker guarantee).
 
 ## Queries and queryables

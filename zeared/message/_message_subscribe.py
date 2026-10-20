@@ -184,6 +184,7 @@ class _MessageSubscribeMixin:
         *,
         session: zenoh.Session | None = None,
         on_error: Callable[[Exception, bytes], None] | None = None,
+        timeout: float | None = None,
     ) -> list[_M]:
         """One-shot typed snapshot of this class's current retained set.
 
@@ -199,6 +200,16 @@ class _MessageSubscribeMixin:
 
         Decode failures and error replies route to ``on_error`` when
         supplied, else log; the returned list holds only decoded results.
+        An error reply means the set may be partial: Zenoh sends its own,
+        payload ``b'Timeout'``, for a queryable that didn't answer in time,
+        so a reconcile should skip its removals for a fetch whose
+        ``on_error`` heard one. (Before 0.4.4 error replies were dropped.)
+
+        ``timeout`` (seconds, 0.4.4) bounds the whole fetch: every template's
+        get is issued before any is read, each with the timeout, so a
+        queryable that doesn't answer costs one timeout, not one per
+        template. ``None`` leaves Zenoh's default query timeout (10 s,
+        unless the session's config sets another).
         Duplicate keys (multiple publishers retaining the same concrete
         topic) are returned as-is — dedupe by identity at the call site.
         """
@@ -212,4 +223,4 @@ class _MessageSubscribeMixin:
         from ..subscriber._subscriber_retained_fetch import _collect_retained
 
         sess = z.session.resolve(session)
-        return _collect_retained(sess, cls._templates().all, cls, on_error)
+        return _collect_retained(sess, cls._templates().all, cls, on_error, timeout)

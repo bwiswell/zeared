@@ -9,6 +9,50 @@ nodes on other versions, retained state and access rules can see.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.4.4 — 2026-10-19
+
+**On seared 0.4.4, and a `fetch_retained` that reports its error replies and takes a timeout.** A Message's fields
+take seared's constraints, checked when a capture or payload loads and by `send`, never by the topic render, and a
+capture's error names its slot. A fetch that a queryable didn't answer in time now says so, and one timeout bounds
+it.
+
+### Added
+
+- **`timeout=` on `fetch_retained` and `afetch_retained`,** in seconds, bounding the whole fetch, as `query`'s
+  bounds a query. `None` keeps Zenoh's default query timeout (10 s, unless the session's config sets another). A
+  queryable that doesn't answer in time sends Zenoh's `Timeout` error reply, which `on_error` hears.
+
+### Changed
+
+- **Dependencies:** seared `>=0.4.4,<0.5.0`, pinned to `tag = "v0.4.4"`. seared 0.4.4 adds field constraints (`ge=`,
+  `gt=`, `le=` and `lt=` on `Int` and `Float`; `min_length=`, `max_length=` and a portable `pattern=` on `Str`),
+  which a Message's fields take: `send` refuses a value that fails one, and a sample whose capture or payload fails
+  one fails to decode, while the topic render never checks, so a selector wildcard still works on a `pattern=` slot
+  (`docs/message/message.md`). Its one change to what loads: a `Union` tag that isn't a string fails to decode,
+  fallback or not. Unconstrained `Int`, `Float` and `Str` encode and decode faster on the pure-Python path. See its
+  changelog.
+- **Breaking:** `fetch_retained`'s `on_error`, and `afetch_retained`'s, hears error replies: a server's `reply_err`,
+  and Zenoh's own `Timeout` for a queryable that didn't answer in time, as a `RetainedFetchError` with no
+  `__cause__` and the reply's payload as the raw bytes, as `query`'s are. Without an `on_error`, each is logged at
+  WARNING. A handler that raised, or counted, on any call now sees calls it didn't before.
+- **`fetch_retained` issues every template's get before reading any,** so a class with `EXTRA_TOPICS` fetches in the
+  time of its slowest get rather than their sum, timeout or not, and one timeout bounds the fetch rather than one
+  per template. The result keeps its order: template, then arrival.
+
+### Fixed
+
+- **`fetch_retained` no longer drops error replies,** which its docstring had always said went to `on_error`. A
+  fetch that a queryable didn't answer in time returned a partial set with no sign of it, on the path meant for
+  reconciling, where a partial set taken as whole removes values that are still retained. A reconcile should skip
+  its removals for a fetch whose `on_error` heard a `Timeout` (`docs/subscriber/subscriber.md`). The subscriber's
+  own replay at subscribe, after a reconnect and on re-attach, is unchanged. Since 0.2.1, when `fetch_retained` was
+  added.
+- **A capture its field refuses names its slot.** `coerce_captures`, and a sample's decode, raised the field's bare
+  message (`must be <= 12, got 13`, or `cannot deserialize 'abc' as int`), with no slot in it; now it's located at
+  the slot as a payload's error is at its key: `Robot.bay: must be <= 12, got 13`, with `path` and `cls_name` set.
+  The error text changes; `.reason` keeps the field's message. A subscriber's `DecodeError` already named the key.
+  Since before 0.4.0.
+
 ## 0.4.3 — 2026-10-17
 
 **On seared 0.4.3, where type hints resolve again.**

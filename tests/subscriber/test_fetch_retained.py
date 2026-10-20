@@ -4,6 +4,7 @@ class's current retained set (the durable reconcile path)."""
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 from conftest import wait
@@ -107,3 +108,127 @@ def test_afetch_retained(connected_pair):
 
     got = asyncio.run(main())
     assert {m.unit_id for m in got} == {9}
+
+
+def _peer_session(*, default_timeout_ms: int | None = None):
+    """A peer session; ``default_timeout_ms`` lowers Zenoh's default query timeout (10 s)."""
+    import zenoh
+
+    c = zenoh.Config()
+    c.insert_json5('mode', '"peer"')
+    c.insert_json5('scouting/multicast/enabled', 'false')
+    if default_timeout_ms is not None:
+        c.insert_json5('queries_default_timeout', str(default_timeout_ms))
+    return zenoh.open(c)
+
+
+@z.zeared
+class _Bay(z.Message):
+    TOPIC = 'fr/err/{bay}'
+    RETAINED = True
+    bay: str = z.Str(required=True)
+    level: int = z.Int(default=0)
+
+
+class TestErrorReplies:
+    """``on_error`` hears error replies, as the docstring always said (0.4.4); the set comes back as far as it got."""
+
+    def test_a_servers_error_reply(self, session):
+        _Bay(bay='a', level=1).send(session=session)
+        wait(0.2)
+        refusing = session.declare_queryable('fr/err/**', lambda query: query.reply_err(b'nope'))
+        wait(0.2)
+        heard: list[tuple[Exception, bytes]] = []
+        got = _Bay.fetch_retained(session=session, on_error=lambda exc, raw: heard.append((exc, raw)))
+        refusing.undeclare()
+        assert [(m.bay, m.level) for m in got] == [('a', 1)]
+        assert len(heard) == 1
+        exc, raw = heard[0]
+        assert isinstance(exc, z.RetainedFetchError)
+        assert exc.__cause__ is None
+        assert raw == b'nope'
+        assert str(exc) == "_Bay: error reply to retained fetch 'fr/err/*': 'nope'"
+
+    def test_a_queryable_that_doesnt_answer_in_time(self):
+        # Zenoh's own error reply, payload b'Timeout'. Before 0.4.4 it was dropped,
+        # and this partial set looked complete.
+        session = _peer_session(default_timeout_ms=300)
+        try:
+            _Bay(bay='b', level=2).send(session=session)
+            wait(0.2)
+            silent = session.declare_queryable('fr/err/**')  # a channel nobody drains
+            wait(0.2)
+            heard: list[bytes] = []
+            got = _Bay.fetch_retained(session=session, on_error=lambda exc, raw: heard.append(raw))
+            silent.undeclare()
+        finally:
+            session.close()
+        assert [(m.bay, m.level) for m in got] == [('b', 2)]
+        assert heard == [b'Timeout']
+
+    def test_afetch_retained_routes_them_too(self, session):
+        _Bay(bay='c').send(session=session)
+        wait(0.2)
+        refusing = session.declare_queryable('fr/err/**', lambda query: query.reply_err(b'nope'))
+        wait(0.2)
+        heard: list[bytes] = []
+
+        async def main():
+            return await z.afetch_retained(_Bay, session=session, on_error=lambda exc, raw: heard.append(raw))
+
+        got = asyncio.run(main())
+        refusing.undeclare()
+        assert [m.bay for m in got] == ['c']
+        assert heard == [b'nope']
+
+
+@z.zeared
+class _Dock(z.Message):
+    TOPIC = 'fr/timeout/dock/{dock}'
+    EXTRA_TOPICS = ('fr/timeout/legacy/{dock}',)
+    RETAINED = True
+    dock: str = z.Str(required=True)
+
+
+class TestTimeout:
+    """``timeout=`` bounds the whole fetch (0.4.4): each template's get is issued at once, with it."""
+
+    @pytest.fixture
+    def silent_on_both_templates(self, session):
+        _Dock(dock='a').send(session=session)
+        wait(0.2)
+        # Channel queryables nobody drains: every get waits out its timeout.
+        queryables = [
+            session.declare_queryable('fr/timeout/dock/**'),
+            session.declare_queryable('fr/timeout/legacy/**'),
+        ]
+        wait(0.2)
+        yield session
+        for queryable in queryables:
+            queryable.undeclare()
+
+    def test_one_timeout_bounds_a_fetch_over_two_templates(self, silent_on_both_templates):
+        heard: list[bytes] = []
+        started = time.monotonic()
+        got = _Dock.fetch_retained(
+            session=silent_on_both_templates, timeout=0.5, on_error=lambda exc, raw: heard.append(raw)
+        )
+        elapsed = time.monotonic() - started
+        # About one timeout, not one per template (1.0 s), with slack for a loaded machine.
+        assert elapsed < 0.9
+        assert [m.dock for m in got] == ['a']
+        assert heard == [b'Timeout', b'Timeout']
+
+    def test_afetch_retained_passes_it_on(self, silent_on_both_templates):
+        heard: list[bytes] = []
+
+        async def main():
+            return await z.afetch_retained(
+                _Dock, session=silent_on_both_templates, timeout=0.5, on_error=lambda exc, raw: heard.append(raw)
+            )
+
+        started = time.monotonic()
+        got = asyncio.run(main())
+        assert time.monotonic() - started < 0.9
+        assert [m.dock for m in got] == ['a']
+        assert heard == [b'Timeout', b'Timeout']
