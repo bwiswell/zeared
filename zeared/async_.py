@@ -264,6 +264,8 @@ async def afetch_retained[M: Message](
     *,
     session: zenoh.Session | None = None,
     on_error: Callable[[Exception, bytes], None] | None = None,
+    # Mirrors the sync `Cls.fetch_retained(timeout=...)` public API, as `aquery` does.
+    timeout: float | None = None,  # noqa: ASYNC109
 ) -> list[M]:
     """Async variant of ``Cls.fetch_retained(...)``. Runs the sync fetch on a thread (Zenoh's ``get`` is blocking)."""
     # Called through a lambda rather than passed as a bound method: a
@@ -271,7 +273,7 @@ async def afetch_retained[M: Message](
     # ``fetch_retained``'s own type parameter and this one. Same shape as
     # ``aquery`` below, for the same reason.
     return await asyncio.to_thread(
-        lambda: cls.fetch_retained(session=session, on_error=on_error),
+        lambda: cls.fetch_retained(session=session, on_error=on_error, timeout=timeout),
     )
 
 

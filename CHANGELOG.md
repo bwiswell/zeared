@@ -11,7 +11,14 @@ lines as it lands, and the entry is dated when that version is released.
 
 ## 0.4.4 — unreleased
 
-**On seared 0.4.4, with constraints on a Message's fields, and `fetch_retained` reporting its error replies.**
+**On seared 0.4.4, with constraints on a Message's fields, and a `fetch_retained` that reports its error replies and
+takes a timeout.**
+
+### Added
+
+- **`timeout=` on `fetch_retained` and `afetch_retained`,** in seconds, bounding the whole fetch, as `query`'s
+  bounds a query. `None` keeps Zenoh's default query timeout (10 s, unless the session's config sets another). A
+  queryable that doesn't answer in time sends Zenoh's `Timeout` error reply, which `on_error` hears.
 
 ### Changed
 
@@ -26,6 +33,9 @@ lines as it lands, and the entry is dated when that version is released.
   and Zenoh's own `Timeout` for a queryable that didn't answer in time, as a `RetainedFetchError` with no
   `__cause__` and the reply's payload as the raw bytes, as `query`'s are. Without an `on_error`, each is logged at
   WARNING. A handler that raised, or counted, on any call now sees calls it didn't before.
+- **`fetch_retained` issues every template's get before reading any,** so a class with `EXTRA_TOPICS` fetches in the
+  time of its slowest get rather than their sum, timeout or not, and one timeout bounds the fetch rather than one
+  per template. The result keeps its order: template, then arrival.
 
 ### Fixed
 

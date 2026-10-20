@@ -117,3 +117,63 @@ class TestErrorReplyRouting:
             lambda exc, raw: heard.append(raw),
         )
         assert heard == [b'one', b'two']
+
+
+class _RecordingReplies:
+    """An empty reply stream that notes when it's drained."""
+
+    def __init__(self, log, wildcard):
+        self._log = log
+        self._wildcard = wildcard
+
+    def __iter__(self):
+        self._log.append(('drain', self._wildcard))
+        return iter(())
+
+
+class _RecordingSession:
+    """Notes each ``get`` with its keyword arguments; ``fail`` names a wildcard whose get raises."""
+
+    def __init__(self, fail=None):
+        self.log: list[tuple] = []
+        self._fail = fail
+
+    def get(self, wildcard, **kwargs):
+        if wildcard == self._fail:
+            msg = 'no route'
+            raise RuntimeError(msg)
+        self.log.append(('get', wildcard, kwargs))
+        return _RecordingReplies(self.log, wildcard)
+
+
+class _Wildcard:
+    def __init__(self, wildcard):
+        self.wildcard = wildcard
+
+
+class TestGetsIssuedTogether:
+    """``fetch_retained`` issues every template's get before draining any (0.4.4), so one timeout bounds the fetch."""
+
+    TEMPLATES = (_Wildcard('a/*'), _Wildcard('b/*'))
+
+    def test_every_get_is_issued_before_any_is_drained_each_with_the_timeout(self):
+        session = _RecordingSession()
+        _collect_retained(session, self.TEMPLATES, type('Unit', (), {}), None, 0.5)
+        assert session.log == [
+            ('get', 'a/*', {'timeout': 0.5}),
+            ('get', 'b/*', {'timeout': 0.5}),
+            ('drain', 'a/*'),
+            ('drain', 'b/*'),
+        ]
+
+    def test_no_timeout_leaves_zenohs_default(self):
+        session = _RecordingSession()
+        _collect_retained(session, self.TEMPLATES, type('Unit', (), {}), None)
+        assert [entry for entry in session.log if entry[0] == 'get'] == [('get', 'a/*', {}), ('get', 'b/*', {})]
+
+    def test_a_get_that_fails_to_issue_is_logged_and_skipped(self, caplog):
+        session = _RecordingSession(fail='a/*')
+        with caplog.at_level(logging.WARNING, logger='zeared.subscriber'):
+            _collect_retained(session, self.TEMPLATES, type('Unit', (), {}), None, 0.5)
+        assert session.log == [('get', 'b/*', {'timeout': 0.5}), ('drain', 'b/*')]
+        assert 'Unit: fetch_retained get() on a/* failed: no route' in caplog.text

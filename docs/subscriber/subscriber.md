@@ -131,6 +131,14 @@ set, since `on_remove` (below) can miss a DELETE that lands while a
 subscriber is offline. Requires `RETAINED = True`; async via
 `z.afetch_retained(Cls)`.
 
+**`timeout=`** (seconds, 0.4.4) bounds the whole fetch. Every template's
+get is issued before any is read, each with the timeout, so a class with
+`EXTRA_TOPICS` fetches in the time of its slowest get rather than their
+sum, and a queryable that doesn't answer costs one timeout, not one per
+template. `None` keeps Zenoh's default query timeout (10 s, unless the
+session's config sets another). The result keeps template order, then
+arrival.
+
 **Its error replies reach `on_error`** (0.4.4), as `query`'s do: a
 `RetainedFetchError` with no `__cause__`, the reply's payload as the raw
 bytes, or a WARNING log without an `on_error`. A reply that won't decode
