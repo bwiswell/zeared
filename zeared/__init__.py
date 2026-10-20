@@ -103,7 +103,7 @@ from .retention import clear_retention_cache
 from .stream import Stream
 from .subscriber import Subscriber
 
-__version__ = '0.4.3'
+__version__ = '0.4.4'
 
 # Module-level defaults.
 # ``session`` is a dual-role handle (see ``_SessionHandle`` docstring) — the

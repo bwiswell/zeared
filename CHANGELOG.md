@@ -9,10 +9,12 @@ nodes on other versions, retained state and access rules can see.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.4.4 — unreleased
+## 0.4.4 — 2026-10-19
 
-**On seared 0.4.4, with constraints on a Message's fields, and a `fetch_retained` that reports its error replies and
-takes a timeout.**
+**On seared 0.4.4, and a `fetch_retained` that reports its error replies and takes a timeout.** A Message's fields
+take seared's constraints, checked when a capture or payload loads and by `send`, never by the topic render, and a
+capture's error names its slot. A fetch that a queryable didn't answer in time now says so, and one timeout bounds
+it.
 
 ### Added
 
